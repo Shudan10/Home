@@ -700,6 +700,39 @@ export async function nextcloudVersion(docker) {
 }
 
 /**
+ * Tells Nextcloud the address the outside reaches it on.
+ *
+ * Nextcloud builds absolute URLs -- redirects, asset links, the address it
+ * prints for clients -- and it works them out from the request unless told
+ * otherwise. Behind a proxy that is enough only when the proxy is on the
+ * default port. On anything else it drops the port and downgrades to http, so
+ * signing in redirects to `http://name/login`: no TLS, no port, and on a
+ * network where something else holds 443, a different machine entirely.
+ *
+ * `origin` null means the name was taken away again, and the overwrites go with
+ * it -- leaving them behind would send a locally-reached Nextcloud out to a
+ * domain that no longer points at it.
+ */
+export async function syncNextcloudUrls(docker, origin, onLine = () => {}) {
+    if (!origin) {
+        for (const key of ['overwriteprotocol', 'overwritehost']) {
+            await docker(occArgs(['config:system:delete', key])).catch(() => {});
+        }
+        await docker(occArgs(['config:system:set', 'overwrite.cli.url', '--value', 'http://localhost']));
+        onLine('Nextcloud is no longer published, so its public address was cleared.');
+        return;
+    }
+
+    const { protocol, host } = new URL(origin);
+    await docker(occArgs(['config:system:set', 'overwriteprotocol', '--value', protocol.replace(':', '')]));
+    // Host and port together: this is what Nextcloud puts in front of every
+    // path it generates, so the port has to be part of it.
+    await docker(occArgs(['config:system:set', 'overwritehost', '--value', host]));
+    await docker(occArgs(['config:system:set', 'overwrite.cli.url', '--value', origin]));
+    onLine(`Nextcloud will build its links from ${origin}.`);
+}
+
+/**
  * Waits until Nextcloud can actually answer `occ`.
  *
  * A running container is not the same as a usable Nextcloud. The first boot
