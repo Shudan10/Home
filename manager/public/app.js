@@ -1905,7 +1905,9 @@ let setupState = { key: null, step: 1, plan: null, mode: 'new', domain: null };
 
 async function openSetup(key) {
     const service = publishState.services.find((s) => s.key === key);
-    setupState = { key, step: 1, plan: null, mode: 'new', domain: null };
+    // account is reset with the rest: a leftover one from a previous run would
+    // silently attach the new name to the wrong DuckDNS registration.
+    setupState = { key, step: 1, plan: null, mode: 'new', domain: null, account: null };
 
     $('setup-title').textContent = `Publish ${service?.label ?? key}`;
     $('setup-error').hidden = true;
@@ -1984,6 +1986,24 @@ function renderDomainChoices() {
         })
         .join('')
         .concat(
+            // Reusing an account is not the same as reusing a name, and it is
+            // usually the better answer: DuckDNS answers for every label under
+            // a name it holds, so a second service can have an address of its
+            // own without a second registration, a second token, or sharing a
+            // hostname it then has to be told about. Offered per account rather
+            // than per name, since two subdomains of one account are one thing
+            // to keep pointed here.
+            duckdnsAccounts()
+                .map(
+                    (account) => `<label class="domain-choice">
+        <input type="radio" name="setup-domain" value="sub:${escapeHtml(account)}">
+        <span>
+          <strong>A subdomain of ${escapeHtml(account)}.duckdns.org</strong>
+          <small>like media.${escapeHtml(account)}.duckdns.org — no new name or token needed</small>
+        </span>
+      </label>`,
+                )
+                .join(''),
             `<label class="domain-choice">
         <input type="radio" name="setup-domain" value="" checked>
         <span><strong>Create another DuckDNS name</strong><small>free, and kept pointed here for you</small></span>
@@ -2006,16 +2026,36 @@ $('setup-domain-list').addEventListener('click', async (event) => {
 });
 
 /** The name this run will publish on, whichever way it was chosen. */
+/** What was typed, plus whatever the chosen mode puts after it. */
+const setupSuffix = () =>
+    setupState.mode === 'subdomain' ? `.${setupState.account}.duckdns.org` : '.duckdns.org';
+
 const setupDomain = () =>
     setupState.mode === 'existing'
         ? setupState.domain
-        : `${$('setup-subdomain').value.trim().toLowerCase()}.duckdns.org`;
+        : `${$('setup-subdomain').value.trim().toLowerCase()}${setupSuffix()}`;
+
+/** The DuckDNS accounts already on this panel, deduplicated. */
+function duckdnsAccounts() {
+    const accounts = new Map();
+    for (const d of publishState.domains ?? []) {
+        const name = String(d.domain || '').toLowerCase();
+        if (!name.endsWith('.duckdns.org')) continue;
+        const account = name.slice(0, -'.duckdns.org'.length).split('.').filter(Boolean).pop();
+        if (account && !accounts.has(account)) accounts.set(account, `${account}.duckdns.org`);
+    }
+    return [...accounts.keys()];
+}
 
 function renderSetupStep() {
     const { step, plan } = setupState;
     for (const section of document.querySelectorAll('#setup-form .setup-step')) {
         section.hidden = Number(section.dataset.step) !== step;
     }
+    // The suffix says what is being added to, so the box only ever asks for the
+    // part that is actually missing.
+    $('setup-suffix').textContent = setupSuffix();
+    $('setup-subdomain').placeholder = setupState.mode === 'subdomain' ? 'media' : 'myhome';
     $('setup-back').hidden = step === (publishState.domains.length ? 0 : 1);
     $('setup-next').hidden = step === 3;
     $('setup-run').hidden = step !== 3;
@@ -2058,7 +2098,22 @@ $('setup-next').addEventListener('click', () => {
 
     if (step === 0) {
         const chosen = document.querySelector('input[name="setup-domain"]:checked')?.value ?? '';
+
+        if (chosen.startsWith('sub:')) {
+            // The account is already here, so its token is already saved and
+            // its record is already being kept pointed at this machine. All
+            // that is missing is the label to put in front.
+            setupState.mode = 'subdomain';
+            setupState.account = chosen.slice(4);
+            setupState.domain = null;
+            $('setup-subdomain').value = '';
+            setupState.step = 1;
+            renderSetupStep();
+            return;
+        }
+
         setupState.mode = chosen ? 'existing' : 'new';
+        setupState.account = null;
         setupState.domain = chosen || null;
         // A name already here needs nothing else: no token to save, and the
         // certificate is issued without a contact address.
@@ -2071,11 +2126,25 @@ $('setup-next').addEventListener('click', () => {
         const name = $('setup-subdomain').value.trim().toLowerCase()
             .replace(/\.duckdns\.org\.?$/, '')
             .replace(/^\.+|\.+$/g, '');
-        // A subdomain in front of the registered name is allowed, because
-        // DuckDNS answers for those too: cloud.yourname and media.yourname both
-        // reach you with nothing extra to set up, which is how two apps share
-        // one DuckDNS account without sharing a hostname.
         const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+
+        if (setupState.mode === 'subdomain') {
+            // Only the part in front is being asked for here; the rest is
+            // already decided and shown as the suffix beside the box.
+            if (!new RegExp(`^${LABEL}$`).test(name)) {
+                return toast(`Enter one word to put in front of ${setupState.account}.duckdns.org, like media.`, 'bad');
+            }
+            $('setup-subdomain').value = name;
+            // Nothing to ask about the token: this account is already saved and
+            // already being kept pointed here, which is why it was offered.
+            setupState.step = 3;
+            renderSetupStep();
+            return;
+        }
+
+        // A subdomain in front of the registered name is allowed here too,
+        // because DuckDNS answers for those: typing cloud.yourname works
+        // whether or not the account was already on this panel.
         if (!new RegExp(`^${LABEL}(?:\\.${LABEL}){0,2}$`).test(name)) {
             return toast('Enter the name you created at duckdns.org, optionally with a subdomain in front, as cloud.yourname.', 'bad');
         }
@@ -2098,7 +2167,14 @@ $('setup-back').addEventListener('click', () => {
     const { step, mode } = setupState;
     // Coming back from the plan on an existing name lands on the list it was
     // chosen from, not on the DuckDNS steps it never saw.
-    setupState.step = step === 3 && mode === 'existing' ? 0 : Math.max(publishState.domains.length ? 0 : 1, step - 1);
+    // Both of the shortcuts into the plan came from the list, so both come back
+    // to it rather than into DuckDNS steps they skipped.
+    setupState.step =
+        step === 3 && (mode === 'existing' || mode === 'subdomain')
+            ? mode === 'subdomain'
+                ? 1
+                : 0
+            : Math.max(publishState.domains.length ? 0 : 1, step - 1);
     renderSetupStep();
 });
 
@@ -2107,10 +2183,13 @@ $('setup-auth').addEventListener('change', (event) => {
 });
 
 $('setup-run').addEventListener('click', async () => {
-    const { key, mode, domain } = setupState;
+    const { key, mode, domain, account } = setupState;
+    const typed = $('setup-subdomain').value.trim().toLowerCase();
     const body = {
         domain: mode === 'existing' ? domain : undefined,
-        subdomain: mode === 'existing' ? undefined : $('setup-subdomain').value.trim(),
+        // The server wants the whole name minus the suffix, so a subdomain
+        // choice has its account put back on the end of what was typed.
+        subdomain: mode === 'existing' ? undefined : mode === 'subdomain' ? `${typed}.${account}` : typed,
         token: $('setup-token').value.trim(),
         auth: $('setup-auth').checked
             ? { enabled: true, user: $('setup-auth-user').value.trim(), password: $('setup-auth-pass').value }
@@ -2119,7 +2198,7 @@ $('setup-run').addEventListener('click', async () => {
     };
 
     const service = publishState.services.find((s) => s.key === key);
-    const name = mode === 'existing' ? domain : `${$('setup-subdomain').value.trim()}.duckdns.org`;
+    const name = setupDomain();
 
     // Everything this does happens somewhere else -- DuckDNS, a container, an
     // authority on the internet -- and none of it is instant. Reporting it as a
