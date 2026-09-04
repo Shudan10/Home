@@ -899,14 +899,25 @@ async function loadApps() {
     renderAppState('nextcloud', r.apps.nextcloud);
     loadNextcloudAdmin();
 
+    // --- Jellyfin ---
+    $('jellyfin-pub-web').checked = c.jellyfin?.publish?.web !== false;
+    $('jellyfin-port').value = c.jellyfin?.hostPort ?? 8096;
+    $('jellyfin-hwaccel').checked = Boolean(c.jellyfin?.hardwareAcceleration);
+    // Held in a variable rather than read back off the DOM: the list is rows of
+    // text with a remove button each, and rebuilding it from the config on
+    // every render is what keeps the two from drifting.
+    mediaPaths = [...(c.jellyfin?.mediaPaths ?? [])];
+    renderMediaPaths();
+    renderAppState('jellyfin', r.apps.jellyfin);
+
     for (const app of APP_KEYS) {
         const running = Boolean(r.apps[app]?.container?.running);
         setNavHealth(app, !c[app]?.enabled ? 'off' : running ? 'ok' : 'bad');
     }
 }
 
-/** Every app with a tab of its own. One today; the loops below take more. */
-const APP_KEYS = ['nextcloud'];
+/** Every app with a tab of its own. The loops below are driven by this. */
+const APP_KEYS = ['nextcloud', 'jellyfin'];
 
 /**
  * The message for an app that is switched on but has no container. Saying
@@ -1008,9 +1019,141 @@ function renderAppState(name, state) {
         }
         build.textContent = parts.length ? `${parts.join(', ')}.` : 'Not built yet.';
     }
+
+    if (name === 'jellyfin') {
+        const link = $('jellyfin-link');
+        const cfg = appsState.config.jellyfin ?? {};
+        link.hidden = false;
+        if (running && cfg.publish?.web) {
+            // location.hostname rather than localhost: the panel is often open
+            // from another machine on the network, and localhost would send
+            // that browser to itself.
+            const url = `http://${location.hostname}:${cfg.hostPort}`;
+            link.className = 'verdict ok';
+            link.innerHTML = `<a href="${url}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>`;
+        } else if (running) {
+            link.className = 'verdict';
+            link.textContent =
+                'Running, but not published on the host. Reach it through a domain on the proxy, or tick "Publish on the host" under Settings.';
+        } else {
+            const note = appStatusNote(state, {
+                absent: 'Not installed yet. Installing downloads the image and leaves it switched off.',
+                stopped: 'Not running. Its switch in the sidebar starts it.',
+            });
+            link.className = note.bad ? 'verdict bad' : 'verdict';
+            link.textContent = note.text;
+        }
+
+        // No media folders is not an error, but it is the reason an otherwise
+        // working Jellyfin shows an empty library, so it is said out loud.
+        const notice = $('jellyfin-notice');
+        if (!state.blockers?.length && !(cfg.mediaPaths ?? []).length) {
+            notice.hidden = false;
+            notice.className = 'verdict';
+            notice.textContent =
+                'No media folders yet, so Jellyfin has nothing to show. Add them under Settings and it will find them.';
+        }
+
+        const build = $('jellyfin-build');
+        build.textContent = state.build?.builtAt
+            ? `Image downloaded ${new Date(state.build.builtAt).toLocaleString()}.`
+            : 'Not installed yet.';
+
+        // Said before the checkbox is ticked rather than after: a machine with
+        // no render device cannot do this, and finding that out from a
+        // container that will not start is a bad way to learn it.
+        const gpu = $('jellyfin-hwaccel-note');
+        const box = $('jellyfin-hwaccel');
+        if (state.gpuAvailable === false) {
+            gpu.hidden = false;
+            gpu.className = 'verdict';
+            gpu.textContent =
+                'No /dev/dri on this machine, so there is no GPU to hand over. Jellyfin will transcode on the processor, which works and is only slower.';
+            box.disabled = true;
+            box.checked = false;
+        } else if (state.gpuAvailable === true) {
+            gpu.hidden = false;
+            gpu.className = 'verdict ok';
+            gpu.textContent = 'This machine has a render device, so hardware transcoding is available.';
+            box.disabled = false;
+        } else {
+            gpu.hidden = true;
+            box.disabled = false;
+        }
+    }
 }
 
+// --- jellyfin media folders ---
+
+/**
+ * The media folder list, held here rather than read back out of the DOM.
+ *
+ * Each row is a path and a button that removes it, so the list is the state and
+ * the rows are a picture of it. Rebuilding the rows from this on every change
+ * is what stops the two from disagreeing.
+ */
+let mediaPaths = [];
+
+function renderMediaPaths() {
+    const list = $('jellyfin-media-list');
+    if (!list) return;
+
+    if (!mediaPaths.length) {
+        list.innerHTML = '<p class="muted">No folders yet.</p>';
+        return;
+    }
+    list.innerHTML = mediaPaths
+        .map(
+            (path, i) => `<div class="media-row">
+                <code>${escapeHtml(path)}</code>
+                <button type="button" class="ghost mini" data-media-remove="${i}" title="Remove this folder">Remove</button>
+            </div>`,
+        )
+        .join('');
+}
+
+function addMediaPath() {
+    const box = $('jellyfin-media-new');
+    // Trailing slashes are stripped so /srv/Films and /srv/Films/ cannot both
+    // be added as though they were two different folders.
+    const path = box.value.trim().replace(/\/+$/, '');
+    if (!path) return;
+    if (!path.startsWith('/')) return toast('Give the full path, starting with a /.', 'bad');
+    if (mediaPaths.includes(path)) return toast('That folder is already on the list.', 'bad');
+
+    mediaPaths.push(path);
+    box.value = '';
+    renderMediaPaths();
+    // Nothing is saved until Apply, so say so rather than let the row imply it.
+    toast('Added. Press Apply settings to mount it.');
+}
+
+$('jellyfin-media-add').addEventListener('click', addMediaPath);
+$('jellyfin-media-new').addEventListener('keydown', (event) => {
+    // Enter in a lone text box would submit nothing and look like it did.
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        addMediaPath();
+    }
+});
+
+$('jellyfin-media-list').addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-media-remove]');
+    if (!button) return;
+    mediaPaths.splice(Number(button.dataset.mediaRemove), 1);
+    renderMediaPaths();
+});
+
 function collectAppConfig(name) {
+    if (name === 'jellyfin') {
+        return {
+            enabled: Boolean(appsState?.config?.jellyfin?.enabled),
+            publish: { web: $('jellyfin-pub-web').checked },
+            hostPort: Number($('jellyfin-port').value),
+            mediaPaths: [...mediaPaths],
+            hardwareAcceleration: $('jellyfin-hwaccel').checked,
+        };
+    }
     if (name !== 'nextcloud') return {};
     return {
         enabled: Boolean(appsState?.config?.nextcloud?.enabled),

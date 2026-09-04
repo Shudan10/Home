@@ -106,6 +106,36 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ---- Jellyfin -------------------------------------------------------------
+  #
+  # Behind the "jellyfin" profile. Pulled rather than built: upstream publishes
+  # an official image and building a media server from source is a large job
+  # nobody does, so there is no ref to track here.
+  #
+  # Its media folders are not listed here. They are host directories only the
+  # person installing this knows the paths of, so the panel writes them into
+  # conf/apps-ports.yml alongside the published port -- same arrangement, and
+  # for the same reason: neither is knowable when this file is written.
+  jellyfin:
+    image: jellyfin/jellyfin:${JELLYFIN_VERSION:-latest}
+    container_name: quickstart-home-jellyfin
+    hostname: jellyfin
+    profiles: ["jellyfin"]
+    restart: unless-stopped
+    environment:
+      # Jellyfin builds absolute URLs from this when it is behind a proxy on a
+      # path rather than at a root. Empty means "I am at the root", which is the
+      # usual case; the panel sets it when it publishes Jellyfin under a prefix.
+      JELLYFIN_PublishedServerUrl: ${JELLYFIN_PUBLISHED_URL:-}
+    volumes:
+      - jellyfin-config:/config
+      - jellyfin-cache:/cache
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ---- The panel ------------------------------------------------------------
   manager:
     image: quickstart-home/manager:1
@@ -169,3 +199,9 @@ volumes:
     name: quickstart-home-nextcloud-db-data
   nextcloud-data:
     name: quickstart-home-nextcloud-data
+  # Jellyfin's own state: the library database, artwork and settings. The media
+  # itself stays where it is on the host and is only ever mounted read-only.
+  jellyfin-config:
+    name: quickstart-home-jellyfin-config
+  jellyfin-cache:
+    name: quickstart-home-jellyfin-cache

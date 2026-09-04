@@ -10,8 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/Shudan10/Home/main/install.sh | bas
 It installs Docker if it is missing, sets up the control panel, prints a
 password, and stops. Nothing else is installed until you ask for it.
 
-Today it carries **Nextcloud** and a **reverse proxy** with free HTTPS. More
-apps will be added.
+Today it carries **Nextcloud**, **Jellyfin**, and a **reverse proxy** with free
+HTTPS. More apps will be added.
 
 ---
 
@@ -24,6 +24,14 @@ password-protected and that is not optional.
 **Nextcloud** — your own cloud for files, photos, calendars and contacts, with
 its own database, Redis cache and preview generator. Video thumbnails and iPhone
 HEIC previews work out of the box.
+
+**Jellyfin** — your own media server for films, TV and music, streamed to
+phones, browsers, smart TVs, Roku, Fire TV and Kodi. You give the panel the
+folders your media is in and it mounts them **read-only**, so nothing here can
+alter or delete your library. It checks each folder exists before saving —
+Docker's own response to a path that is not there is to create an empty one and
+mount that, which turns a typo into an empty library and a stray root-owned
+directory. If the machine has a GPU, one checkbox hands it over for transcoding.
 
 **Proxy and domains** — nginx in front of everything, with a guided setup that
 does the whole job end to end: a free DuckDNS name, the DNS record, the vhost,
@@ -76,11 +84,15 @@ If you would rather it were reachable only from the machine itself, install with
 
 ## First run
 
-Only the panel is installed. Open it and press **Install** on Nextcloud: it
-builds the image and creates the containers, then leaves them **stopped**. The
-switch in the sidebar is what starts things, and stopping keeps everything —
-the container, the data, and the image that took a while to build. Throwing
-something away is its own tab, and it says what it will delete.
+Only the panel is installed. Open it and press **Install** on an app: it fetches
+or builds the image and creates the containers, then leaves them **stopped**.
+The switch in the sidebar is what starts things, and stopping keeps everything —
+the container, the data, and the image. Throwing something away is its own tab,
+and it says what it will delete.
+
+For Jellyfin, add your media folders under Settings before starting it, or it
+will come up with an empty library. Give the paths as *this* machine sees them
+(`/srv/media/Films`), not as another computer sees them over the network.
 
 To put Nextcloud on a real web address, go to **Proxy & domains**, switch the
 proxy on, and press **Set up** next to it. You will need ports 80 and 443
@@ -96,13 +108,19 @@ docker-compose.yml     the stack
 manager/               the control panel (Node, no dependencies)
 nextcloud/             the Nextcloud image build
 proxy/                 nginx config, certificates, ACME webroot
-conf/                  generated state: settings, port overrides, build records
+conf/                  generated state: settings, port and mount overrides,
+                       build records
 .env                   generated secrets and the panel password hash
 ```
 
-App data lives in Docker volumes (`quickstart-home-nextcloud-data` and
-friends), not in that directory, so removing the directory does not remove your
-files. `uninstall.sh` removes both.
+App data lives in Docker volumes (`quickstart-home-nextcloud-data` and friends),
+not in that directory, so removing the directory does not remove your files.
+`uninstall.sh` removes both.
+
+Your **Jellyfin media is neither**: it stays wherever it already lives on your
+disk and is only ever mounted into the container read-only. Nothing in this
+project — not uninstalling Jellyfin, not `uninstall.sh`, not Remove everything —
+can touch it.
 
 ## Removing it
 
@@ -117,18 +135,23 @@ it. The panel has the same thing under Global settings → Remove everything.
 ## Adding another app
 
 Apps are wired in explicitly rather than generated, so adding one means editing
-six places. In rough order:
+six places. Nextcloud and Jellyfin are worth reading as a pair first: Nextcloud
+is built here from a Dockerfile, Jellyfin is pulled as a published image
+(`tracksRepo: false`), and between them they show both shapes. In rough order:
 
 1. **`docker-compose.yml`** — the services, behind a `profiles:` of their own so
    they do not exist until installed. Remember the two rules at the top of that
    file: `volumes:` take `${STACK_DIR}` host paths, `build.context:` stays
    relative. Publish no ports here; the panel writes those into
-   `conf/apps-ports.yml`.
+   `conf/apps-ports.yml`, along with any host folders and devices.
 2. **`manager/lib/apps.js`** — an entry in `APPS` (services, container name,
    what nginx should proxy to) and one in `DEFAULT_APPS_CONFIG`, plus a branch
-   in `validateAppsConfig`.
+   in `validateAppsConfig`. If it needs host folders or a device, add them to
+   `renderAppsPortsOverride` too — compose merges `volumes` by target path, so
+   the base file's own volumes survive.
 3. **`manager/lib/lifecycle.js`** — a `UNITS` entry naming its containers,
-   volumes and images. Volume names are the real Docker ones, because getting
+   volumes and images, with `buildable` or `pullable` depending on where the
+   image comes from. Volume names are the real Docker ones, because getting
    them wrong deletes something else's data.
 4. **`manager/lib/nginx.js`** — a `TARGET_KINDS` entry and a case in
    `upstreamFor`.

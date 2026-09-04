@@ -34,6 +34,7 @@ export const newId = () => crypto.randomBytes(6).toString('hex');
 export const TARGET_KINDS = {
     manager: { label: 'This control panel', websocket: false },
     nextcloud: { label: 'Nextcloud', websocket: false },
+    jellyfin: { label: 'Jellyfin', websocket: true },
     custom: { label: 'Custom host:port', websocket: false },
 };
 
@@ -124,7 +125,8 @@ export function upstreamFor(proxy) {
         // The apps, each reached by the hostname compose gives it on the
         // internal network, so proxying one never depends on its port being
         // published to the host as well.
-        case 'nextcloud': {
+        case 'nextcloud':
+        case 'jellyfin': {
             const app = APPS[proxy.target.kind];
             return {
                 scheme: 'http',
