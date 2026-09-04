@@ -144,6 +144,28 @@ class JobRunner extends EventEmitter {
         const { id, name, status, startedAt, finishedAt, error, lines } = this.current;
         return { id, name, status, startedAt, finishedAt, error, lines: lines.slice(-400), pending: this.pending };
     }
+
+    /**
+     * One job by id, whether it is running now or finished recently.
+     *
+     * The UI learns that a job ended from a single event on the job stream, and
+     * an event is only delivered once. If that stream drops and reconnects
+     * across the moment a job finishes, the ending is gone -- `snapshot` only
+     * replays a job that is still running, so a client that reconnects to an
+     * idle queue is told nothing at all, and its overlay spins over work that
+     * is long done. This lets it ask instead of waiting to be told.
+     *
+     * Bounded by the same ten-job history, so an id old enough to have fallen
+     * out is null rather than an error: by then the answer is "not running",
+     * which is all the caller needs.
+     */
+    find(id) {
+        if (this.current?.id === id) {
+            const { name, status, startedAt, finishedAt, error, lines } = this.current;
+            return { id, name, status, startedAt, finishedAt, error, lines: lines.slice(-400) };
+        }
+        return this.history.find((job) => job.id === id) ?? null;
+    }
 }
 
 export const jobs = new JobRunner();

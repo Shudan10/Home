@@ -661,6 +661,22 @@ route('GET', /^\/api\/jobs\/stream$/, async (req, res) => {
 
 route('GET', /^\/api\/jobs\/current$/, async (req, res) => sendJson(res, 200, { job: jobs.snapshot(), busy: jobs.busy }));
 
+/*
+ * How a job went, asked for rather than waited for. The overlay watches the job
+ * stream, but a dropped connection loses the one event that says a job ended,
+ * and there is no second delivery -- so the overlay also asks here on a timer.
+ *
+ * Registered after /stream and /current on purpose: this pattern matches both of
+ * those names, and the first matching route wins.
+ */
+route('GET', /^\/api\/jobs\/([a-z0-9-]+)$/, async (req, res, match) => {
+    const job = jobs.find(match[1]);
+    // Old enough to have fallen out of the history. Not an error: it is not
+    // running, which is the only thing the caller is really asking.
+    if (!job) return sendJson(res, 200, { job: null, gone: true });
+    sendJson(res, 200, { job });
+});
+
 /**
  * Stop a job. What it had already done stays done -- the overlay says so before
  * it asks -- and the next job in the queue starts as soon as this one lets go.
@@ -1809,6 +1825,14 @@ route('GET', /^\/api\/system\/panel-latest$/, async (req, res, match, url) => {
         fail(res, 400, err.message);
     }
 });
+
+/*
+ * How the running update is getting on. Polled by the overlay, because the
+ * updater replaces this process and so cannot report through the job queue.
+ * Deliberately cheap and unauthenticated-shaped: it reads one small file.
+ */
+route('GET', /^\/api\/system\/panel-update\/status$/, async (req, res) =>
+    sendJson(res, 200, selfservice.updateProgress()));
 
 route('POST', /^\/api\/system\/panel-update$/, async (req, res) => {
     const body = await readBody(req);

@@ -376,7 +376,7 @@ function tickElapsed() {
 }
 
 function openAction({ key, title, note }) {
-    const action = { key, title, jobId: null, finished: false, resolve: null, progress: 0, startedAt: Date.now() };
+    const action = { key, title, jobId: null, finished: false, resolve: null, progress: 0, startedAt: Date.now(), lineCount: 0 };
     action.done = new Promise((resolve) => {
         action.resolve = resolve;
     });
@@ -412,10 +412,21 @@ function actionAppend(line) {
     if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
+/*
+ * A line of the job's own output, as opposed to the overlay's furniture -- the
+ * title it opens with and the verdict it closes with. Only these are counted,
+ * because the count is an index into the server's copy of the job's lines, and
+ * the furniture is not in that list.
+ */
+function appendJobLine(line) {
+    if (pendingAction) pendingAction.lineCount += 1;
+    actionAppend(line);
+}
+
 /** Ours, somebody else's, or too early to tell. */
 function actionLine(jobId, line) {
     if (!pendingAction || pendingAction.finished) return;
-    if (pendingAction.jobId === jobId) return actionAppend(line);
+    if (pendingAction.jobId === jobId) return appendJobLine(line);
     if (pendingAction.jobId === null) {
         const held = earlyLines.get(jobId) ?? [];
         held.push(line);
@@ -423,14 +434,86 @@ function actionLine(jobId, line) {
     }
 }
 
+/*
+ * The overlay's second opinion.
+ *
+ * Everything on screen while an action runs comes from one event on the job
+ * stream, and an event is delivered once. If that connection drops and comes
+ * back across the moment the job finishes -- which the browser does on its own,
+ * on a sleeping laptop or a flaky link -- the `end` event is simply gone, and
+ * `snapshot` on reconnect only replays a job that is still running. Nothing
+ * else ever tells the overlay, so it sat there spinning over a container that
+ * had already stopped, with Cancel as the only way out.
+ *
+ * So it asks as well as listens. The stream stays the fast path; this is the
+ * floor under it, and it also collects any log lines that arrived while the
+ * stream was away, so the overlay ends up showing the whole run either way.
+ */
+let actionWatchdog = null;
+
+function stopActionWatchdog() {
+    clearInterval(actionWatchdog);
+    actionWatchdog = null;
+}
+
+function startActionWatchdog() {
+    stopActionWatchdog();
+    actionWatchdog = setInterval(checkActionJob, 4000);
+}
+
+async function checkActionJob() {
+    const action = pendingAction;
+    if (!action?.jobId || action.finished) return stopActionWatchdog();
+
+    let payload;
+    try {
+        payload = await api(`/api/jobs/${action.jobId}`);
+    } catch {
+        // The panel is unreachable this instant. That is what the update
+        // overlay expects to happen to it, so it is never a reason to give up
+        // on the job -- the next tick asks again.
+        return;
+    }
+    // Re-checked because the await above is a gap: the stream may have finished
+    // this overlay, or the user may have closed it and started another.
+    if (pendingAction !== action || action.finished) return stopActionWatchdog();
+
+    const job = payload?.job;
+    if (!job) {
+        // Fell out of the server's history, so it ended a while ago and we
+        // missed it. There is no status left to report beyond that it is over.
+        if (payload?.gone) finishAction({ id: action.jobId, status: 'succeeded' });
+        return;
+    }
+    if (job.status === 'queued' || job.status === 'running') {
+        // Still going, but catch up on anything the stream did not deliver.
+        appendMissedLines(action, job.lines);
+        return;
+    }
+    appendMissedLines(action, job.lines);
+    finishAction(job);
+}
+
+/**
+ * Lines the overlay never received. Counted rather than compared, because the
+ * same line repeats often here -- three containers all saying "Started" is
+ * normal -- so matching on content would drop the duplicates.
+ */
+function appendMissedLines(action, lines) {
+    if (!Array.isArray(lines)) return;
+    for (const line of lines.slice(action.lineCount)) actionAppend(line);
+    action.lineCount = Math.max(action.lineCount, lines.length);
+}
+
 /** Takes ownership of a job id, and of anything it printed before we had it. */
 function adoptActionJob(jobId) {
     if (!pendingAction) return;
     pendingAction.jobId = jobId;
+    startActionWatchdog();
     // Nothing can be cancelled until there is something to name, and some
     // things are not cancellable at all.
     $('action-cancel').hidden = pendingAction.cancellable === false;
-    for (const line of earlyLines.get(jobId) ?? []) actionAppend(line);
+    for (const line of earlyLines.get(jobId) ?? []) appendJobLine(line);
     earlyLines.clear();
     const ended = earlyEnds.get(jobId);
     earlyEnds.clear();
@@ -451,6 +534,7 @@ function finishAction(job) {
     );
 
     pendingAction.finished = true;
+    stopActionWatchdog();
     $('action-spinner').hidden = true;
     $('action-cancel').hidden = true;
     $('action-title').textContent = `${pendingAction.title} — ${cancelled ? 'cancelled' : ok ? 'done' : 'failed'}`;
@@ -3060,41 +3144,75 @@ $('global-update-btn').addEventListener('click', async () => {
     button.disabled = true;
     try {
         await api('/api/system/panel-update', { method: 'POST', body: { repo, ref } });
-        kResult('global-update-result', 'Rebuilding. This page will drop out and come back on its own.');
-        waitForPanel();
     } catch (e) {
         kResult('global-update-result', e.message, true);
         button.disabled = false;
+        return;
     }
+
+    // Same overlay as every other action, driven by polling rather than by the
+    // job stream. The updater cannot use the queue -- it replaces the process
+    // that would be reporting -- so before this, an update that failed at its
+    // first step said "Rebuilding, this page will come back on its own" and
+    // then waited forever for a restart that was never coming.
+    openAction({
+        key: 'panel-update',
+        title: `Updating the panel from ${repo}@${ref}`,
+        note: 'It rebuilds in its own container, so this keeps running even if this page reloads. The panel drops out near the end and comes back on its own.',
+    });
+    pendingAction.cancellable = false;
+    followPanelUpdate();
 });
 
 /**
- * Polls until the panel answers again. The rebuild takes it away mid-request,
- * so failures here are expected and are not worth showing until it has been
- * gone long enough to mean something.
+ * Follows the detached updater by reading the file it writes a step at a time.
+ *
+ * Every failure mode here ends in a visible verdict: a step that reports an
+ * error, or the panel never coming back. The one thing it must not do is treat
+ * the panel going away as a fault -- that is the update working.
  */
-function waitForPanel() {
-    const deadline = Date.now() + 10 * 60_000;
+function followPanelUpdate() {
+    const deadline = Date.now() + 15 * 60_000;
+    let shown = 0;
     let wasDown = false;
+    let rebuilt = false;
 
     const tick = async () => {
+        if (!pendingAction || pendingAction.finished) return;
+
+        let status = null;
         try {
-            const res = await fetch('/healthz', { cache: 'no-store' });
-            if (res.ok) {
-                if (wasDown) return location.reload();
-                // Still the old panel: it has not gone down yet.
-            }
+            status = await api('/api/system/panel-update/status');
+            if (wasDown) return location.reload();
         } catch {
+            // Expected: this is the panel being replaced under us.
             wasDown = true;
         }
-        if (Date.now() > deadline) {
-            kResult('global-update-result', 'The panel has not come back after ten minutes. Check `docker logs quickstart-home-panel-update`.', true);
-            $('global-update-btn').disabled = false;
-            return;
+
+        if (status) {
+            for (const step of status.steps.slice(shown)) actionAppend(step);
+            shown = Math.max(shown, status.steps.length);
+
+            if (status.result === 'fail') {
+                return finishAction({ status: 'failed', error: status.error ?? 'the update did not finish' });
+            }
+            // result=ok is written just before the restart, so from here the
+            // panel disappearing is the expected next thing.
+            if (status.result === 'ok' && !rebuilt) {
+                rebuilt = true;
+                actionAppend('Rebuilt. Waiting for the panel to come back…');
+            }
         }
-        setTimeout(tick, 3000);
+
+        if (Date.now() > deadline) {
+            return finishAction({
+                status: 'failed',
+                error: 'the panel did not come back within fifteen minutes. Run: docker logs quickstart-home-panel-update',
+            });
+        }
+        setTimeout(tick, 2000);
     };
-    setTimeout(tick, 4000);
+    setTimeout(tick, 1000);
 }
 
 // Nothing else in the panel is guarded like this, because nothing else deletes
