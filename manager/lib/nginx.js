@@ -235,7 +235,13 @@ function locationBlock(up, proxy, indent = '        ', { strip = null } = {}) {
     const lines = [];
     lines.push(...passTo(up, proxy, i, strip));
     lines.push(`${i}proxy_http_version 1.1;`);
-    lines.push(`${i}proxy_set_header Host $host;`);
+    // $http_host, not $host. They differ in exactly one way that matters here:
+    // $host discards the port. An app behind this proxy on anything other than
+    // 443 then believes it is on 443, and every absolute URL it builds --
+    // every redirect, every asset link -- comes out pointing at a port it does
+    // not live on. On a network where another machine holds 443, those land on
+    // that machine instead, which is a confusing way to find out.
+    lines.push(`${i}proxy_set_header Host $http_host;`);
     lines.push(`${i}proxy_set_header X-Real-IP $remote_addr;`);
     lines.push(`${i}proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`);
     lines.push(`${i}proxy_set_header X-Forwarded-Proto $scheme;`);

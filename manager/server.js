@@ -253,6 +253,25 @@ async function recordBuild(name, settings, onLine = () => {}) {
  * Nothing here is worth failing a job over. Nextcloud is up either way, and a
  * setting that did not stick is fixed by the next start.
  */
+/**
+ * The address the outside reaches an app on, or null if it is not published.
+ *
+ * Assembled from the proxy host that points at it and the port a router puts
+ * in front of this machine, because neither alone is the answer: the vhost
+ * knows the name, and only the panel knows what the internet dials.
+ */
+function publicOriginFor(kind) {
+    const proxy = loadProxies().find((p) => p.target?.kind === kind && p.enabled !== false);
+    if (!proxy) return null;
+
+    const mgr = loadManagerConfig().proxy;
+    const https = proxy.ssl?.mode === 'letsencrypt';
+    const port = Number(https ? (mgr.publicHttpsPort ?? 443) : (mgr.publicHttpPort ?? 80));
+    const bare = https ? 443 : 80;
+    const path = (proxy.path ?? '/') === '/' ? '' : proxy.path;
+    return `${https ? 'https' : 'http'}://${proxy.domain}${port === bare ? '' : `:${port}`}${path}`;
+}
+
 async function reconcileNextcloud(onLine = () => {}) {
     const cfg = apps.loadAppsConfig();
 
@@ -277,6 +296,14 @@ async function reconcileNextcloud(onLine = () => {}) {
         await apps.syncPreviewSettings(dockerctl.docker, onLine);
     } catch (err) {
         onLine(`Could not switch the preview providers on: ${err.message}`);
+    }
+    // Reapplied on every start rather than only when the name is assigned: the
+    // public port can change without the name changing, and a stale origin
+    // sends every redirect somewhere wrong.
+    try {
+        await apps.syncNextcloudUrls(dockerctl.docker, publicOriginFor('nextcloud'), onLine);
+    } catch (err) {
+        onLine(`Could not set the public address: ${err.message}`);
     }
 }
 
@@ -367,29 +394,38 @@ async function waitForDomain(domain, expectedIp, onLine, { timeoutMs = 3 * 60_00
  * being left as a thing to discover.
  */
 async function notifyPublished(key, domain, onLine = () => {}) {
+    // The full address including the port, because that is what an app has to
+    // put in front of every link it builds. A name on its own is only right
+    // when the proxy happens to be on the default port.
+    const origin = publicOriginFor(key);
+
     if (key === 'jellyfin') {
         // Read at startup, so this takes effect when the container is next
         // recreated -- which switching it off and on does.
-        updateEnvFile({ JELLYFIN_PUBLISHED_URL: `https://${domain}` });
-        onLine(`Jellyfin will tell clients it lives at https://${domain}.`);
+        updateEnvFile({ JELLYFIN_PUBLISHED_URL: origin ?? '' });
+        onLine(`Jellyfin will tell clients it lives at ${origin ?? 'nowhere in particular'}.`);
         return;
     }
     if (key !== 'nextcloud') return;
+
     const cfg = apps.loadAppsConfig();
     const names = new Set(String(cfg.nextcloud.trustedDomains || '').split(/[\s,]+/).filter(Boolean));
-    if (names.has(domain)) return;
+    if (!names.has(domain)) {
+        names.add(domain);
+        cfg.nextcloud.trustedDomains = [...names].join(' ');
+        apps.saveAppsConfig(cfg);
+        apps.writeAppsEnv(cfg);
+        onLine(`Adding ${domain} to Nextcloud's trusted domains.`);
+    }
 
-    names.add(domain);
-    cfg.nextcloud.trustedDomains = [...names].join(' ');
-    apps.saveAppsConfig(cfg);
-    apps.writeAppsEnv(cfg);
-    onLine(`Adding ${domain} to Nextcloud's trusted domains.`);
-
-    // Only meaningful against a running container; a stopped one picks the
-    // setting up the next time applyAppConfig runs.
+    // Only meaningful against a running container; a stopped one picks both of
+    // these up the next time it starts, via reconcileNextcloud.
     if ((await dockerctl.containerState(apps.APPS.nextcloud.container)).running) {
         await apps.syncTrustedDomains(dockerctl.docker, cfg, onLine).catch((err) => {
             onLine(`Could not update the trusted domains: ${err.message}`);
+        });
+        await apps.syncNextcloudUrls(dockerctl.docker, origin, onLine).catch((err) => {
+            onLine(`Could not set the public address: ${err.message}`);
         });
     }
 }
