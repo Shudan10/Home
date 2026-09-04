@@ -437,6 +437,10 @@ main {
 .verdict.ok { color: var(--ok); }
 .verdict.bad { color: var(--warn); }
 
+/* Same trap as .switch: a class with a display beats the hidden attribute, so
+   the custom host:port fields and the wizard's password fields showed up in
+   dialogs that had hidden them. */
+.row[hidden] { display: none; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-top: 12px; }
 .row.end { justify-content: flex-end; }
 
@@ -459,6 +463,7 @@ button.ghost { background: transparent; }
 button.danger, button.ghost.danger { color: var(--danger); }
 
 label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+label.inline[hidden] { display: none; }
 label.inline { display: flex; align-items: center; gap: 8px; }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
 label.check input { margin: 0; }
@@ -943,6 +948,67 @@ button.big { font-size: 15px; padding: 11px 22px; }
 }
 .toggle-row .toggle-text strong { font-size: 15px; }
 .toggle-row .toggle-text .muted { font-size: 13px; }
+/* ---------------------------------------------------------------- switches */
+
+/* `display` on a class beats the hidden attribute's UA rule, so a switch told
+   to hide stayed on screen and sat beside the Install button it was supposed to
+   have replaced. Every element in this file that carries a display and can be
+   hidden needs this. */
+.switch[hidden] { display: none; }
+
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex: 0 0 40px;
+    vertical-align: middle;
+}
+/* The native checkbox is kept for its behaviour and its accessibility, and
+   made invisible: the thing on screen is the track below it. Without this rule
+   it renders as a plain square sitting on top of the toggle. */
+.switch input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    cursor: pointer;
+    z-index: 1;
+}
+.switch .track {
+    position: absolute;
+    inset: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.switch .track::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch input:checked + .track {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    border-color: var(--accent-dim);
+}
+.switch input:checked + .track::before {
+    transform: translate(18px, -50%);
+    background: var(--accent);
+}
+/* A switch mid-request is waiting, not broken. */
+.switch input:disabled { cursor: wait; }
+.switch input:disabled + .track { opacity: 0.5; }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .toggle-row .switch { width: 46px; height: 25px; flex-basis: 46px; }
 .toggle-row .switch .track::before { width: 17px; height: 17px; }
 .toggle-row .switch input:checked + .track::before { transform: translate(20px, -50%); }
