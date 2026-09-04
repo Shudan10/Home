@@ -400,10 +400,37 @@ async function notifyPublished(key, domain, onLine = () => {}) {
     const origin = publicOriginFor(key);
 
     if (key === 'jellyfin') {
-        // Read at startup, so this takes effect when the container is next
-        // recreated -- which switching it off and on does.
-        updateEnvFile({ JELLYFIN_PUBLISHED_URL: origin ?? '' });
-        onLine(`Jellyfin will tell clients it lives at ${origin ?? 'nowhere in particular'}.`);
+        const next = origin ?? '';
+        if ((readEnvFile().JELLYFIN_PUBLISHED_URL ?? '') === next) return;
+        updateEnvFile({ JELLYFIN_PUBLISHED_URL: next });
+        onLine(next ? `Jellyfin will tell clients it lives at ${next}.` : 'Jellyfin no longer has a public address.');
+
+        /*
+         * And then replace the container, because otherwise none of that is
+         * true yet.
+         *
+         * Jellyfin reads this at startup, and a container's environment is
+         * fixed when it is created -- so `restart` would faithfully bring back
+         * a container still holding the old value. It has to be recreated.
+         *
+         * Two cases are deliberately left alone. A stopped Jellyfin, because
+         * recreating it would start it, and publishing a name is not a request
+         * to run something -- it picks the value up whenever it is next
+         * started, which goes through `up -d` as well. And unpublishing, where
+         * the address merely becomes stale: interrupting whatever somebody is
+         * watching, to stop advertising an address that no longer resolves, is
+         * a poor trade. That one is written now and applied at the next start.
+         */
+        if (!next) return;
+        const state = await dockerctl.containerState(apps.APPS.jellyfin.container);
+        if (!state.running) return;
+
+        onLine('Recreating Jellyfin so it picks the address up. Playback in progress will drop.');
+        await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...apps.APPS.jellyfin.services], {
+            onLine,
+            profile: apps.APPS.jellyfin.profile,
+            timeoutMs: 5 * 60_000,
+        });
         return;
     }
     if (key !== 'nextcloud') return;
