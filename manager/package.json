@@ -1,0 +1,14 @@
+{
+  "name": "quickstart-home-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web control panel for a personal home server: apps, reverse proxy, domains, HTTPS and DuckDNS.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
