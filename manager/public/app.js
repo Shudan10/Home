@@ -2963,29 +2963,70 @@ async function loadGlobal() {
  * on a timer is a surprise, and the answer is only interesting at the moment
  * somebody is thinking about updating.
  */
+/**
+ * The result of the update check, as a state rather than a sentence.
+ *
+ * All four answers used to be the same muted grey line, so "there is a new
+ * version waiting" looked exactly like "nothing to report" and got skimmed
+ * past. The state drives the colour and the glow; see .status-line in the
+ * stylesheet.
+ *
+ * Built out of nodes and textContent rather than a template string: `head` and
+ * `detail` carry a commit subject straight from GitHub, and that is somebody
+ * else's text going into our page.
+ */
+function setUpdateStatus(state, head, detail) {
+    const el = $('global-check-status');
+    el.className = state ? `status-line is-${state}` : 'status-line';
+    el.replaceChildren();
+
+    const dot = document.createElement('span');
+    dot.className = 'status-dot';
+
+    const body = document.createElement('span');
+    body.className = 'status-body';
+
+    const h = document.createElement('span');
+    h.className = 'status-head';
+    h.textContent = head;
+    body.append(h);
+
+    if (detail) {
+        const d = document.createElement('span');
+        d.className = 'status-detail';
+        d.textContent = detail;
+        body.append(d);
+    }
+    el.append(dot, body);
+}
+
 $('global-check-btn').addEventListener('click', async () => {
     const button = $('global-check-btn');
     const repo = $('global-repo').value.trim();
     const ref = $('global-ref').value.trim();
     button.disabled = true;
-    $('global-check-status').textContent = 'Checking…';
+    setUpdateStatus('checking', 'Checking…');
     try {
         const q = new URLSearchParams({ repo, ref });
         const r = await api(`/api/system/panel-latest?${q}`);
         const when = r.latest.date ? new Date(r.latest.date).toLocaleString() : 'unknown date';
         if (r.upToDate === true) {
-            $('global-check-status').textContent = `Up to date. ${ref} is at ${r.latest.shortSha}, ${when}.`;
+            setUpdateStatus('current', 'Up to date', `${ref} · ${r.latest.shortSha} · ${when}`);
         } else if (r.upToDate === false) {
-            const behind = r.compare?.behind ? `, ${r.compare.behind} commit${r.compare.behind === 1 ? '' : 's'} ahead of yours` : '';
-            $('global-check-status').textContent = `Update available: ${r.latest.shortSha}${behind}. ${r.latest.message}`;
+            const n = r.compare?.behind;
+            const ahead = n ? ` · ${n} commit${n === 1 ? '' : 's'} ahead of yours` : '';
+            // The headline is the same three words every time, so it is
+            // recognisable at a glance; the sha and subject go underneath.
+            setUpdateStatus('update', 'Update available',
+                `${r.latest.shortSha}${ahead}\n${r.latest.message}`);
         } else {
             // No recorded sha, which is every install that has not used this
             // button yet. Saying "up to date" here would be a guess.
-            $('global-check-status').textContent =
-                `${ref} is at ${r.latest.shortSha} (${when}). This install has no recorded commit, so there is nothing to compare it against yet.`;
+            setUpdateStatus(null, `${ref} is at ${r.latest.shortSha} (${when}).`,
+                'This install has no recorded commit, so there is nothing to compare it against yet.');
         }
     } catch (e) {
-        $('global-check-status').textContent = e.message;
+        setUpdateStatus('error', 'Could not check', e.message);
     } finally {
         button.disabled = false;
     }
