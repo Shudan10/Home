@@ -269,6 +269,19 @@ const earlyEnds = new Map();
  * clock beside it is the other real number on offer.
  */
 const ACTION_MARKS = [
+    // Publishing a name, which is its own sequence and mostly spent waiting on
+    // other people's servers. Without these the bar sat at nothing through the
+    // longest part of the job, which reads as stuck rather than patient.
+    [/telling DuckDNS where this machine is/i, 0.06],
+    [/does not resolve yet|Waiting for DNS to catch up/i, 0.12],
+    [/currently points at .* Waiting for it to change/i, 0.12],
+    [/^\S+ resolves to /i, 0.4],
+    [/is a subdomain of /i, 0.1],
+    [/^Publishing /i, 0.62],
+    [/Asking Let's Encrypt for a certificate/i, 0.72],
+    [/already has a certificate/i, 0.9],
+    [/^Done\. https:\/\//i, 0.98],
+
     // Our own phase lines, from lifecycle.js and the routes.
     [/^Building /i, 0.04],
     [/^Removing the .* containers/i, 0.2],
@@ -2017,19 +2030,35 @@ $('setup-run').addEventListener('click', async () => {
         allowlist: $('setup-allowlist').value,
     };
 
+    const service = publishState.services.find((s) => s.key === key);
+    const name = mode === 'existing' ? domain : `${$('setup-subdomain').value.trim()}.duckdns.org`;
+
+    // Everything this does happens somewhere else -- DuckDNS, a container, an
+    // authority on the internet -- and none of it is instant. Reporting it as a
+    // toast at the end meant pressing the button and watching nothing happen
+    // for two minutes, with no way to tell working from stuck. It takes over
+    // the screen instead, and stays until the name is actually answering.
     $('setup-run').disabled = true;
-    try {
-        const r = await api(`/api/setup/${key}`, { method: 'POST', body });
-        $('setup-dialog').close();
-        // The job console is where every long job in this panel reports, and
-        // this one has more to say than a toast can hold.
-    } catch (e) {
-        const box = $('setup-error');
-        box.textContent = e.message;
-        box.hidden = false;
-    } finally {
-        $('setup-run').disabled = false;
-    }
+    $('setup-error').hidden = true;
+    $('setup-dialog').close();
+
+    const job = await runAction({
+        key,
+        title: `Publishing ${service?.label ?? key} on ${name}`,
+        note:
+            'Points the name at this connection, waits for DNS to agree, starts what is needed, ' +
+            'then asks for the certificate. The DNS step is the slow one and is usually under a minute.',
+        request: () => api(`/api/setup/${key}`, { method: 'POST', body }),
+    });
+
+    $('setup-run').disabled = false;
+    // Deliberately not reopening the wizard on failure. `done` resolves when
+    // the job ends, not when the overlay is dismissed, so reopening here put a
+    // dialog underneath an overlay that was still up -- and openSetup clears
+    // the fields anyway, so it offered a blank form on top of the explanation
+    // of what went wrong. The overlay says it; pressing Set up again is one
+    // click and starts from a clean state on purpose.
+    if (job?.ok) loadPublish().catch(() => {});
 });
 
 
