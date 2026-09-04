@@ -1354,6 +1354,11 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
             version: name === 'nextcloud' && container.running ? await apps.nextcloudVersion(dockerctl.docker) : null,
             // Whether the GPU setting is even offerable on this machine.
             gpuAvailable: name === 'jellyfin' ? await apps.hasRenderDevice(dockerctl.docker) : null,
+            // The address the outside reaches it on, when it has one. The
+            // local address the panel works out for itself, from whichever
+            // address the browser used to reach the panel -- which is the only
+            // one that is certain to work from wherever it is being read.
+            publicUrl: publicOriginFor(name),
             blockers: apps.appBlockers(name, cfg),
             lastRun: apps.readLastRun(name),
         };

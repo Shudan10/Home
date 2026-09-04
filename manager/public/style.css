@@ -1425,3 +1425,9 @@ select { font-family: var(--mono); font-size: 13.5px; }
     max-width: 640px;
     margin: 0 auto;
 }
+
+/* Two ways in to an app, listed rather than run together: the public address
+   and the one on this network are not interchangeable, and the label after each
+   is what says which is which. */
+.app-link + .app-link { margin-top: 4px; }
+.app-link a { overflow-wrap: anywhere; }

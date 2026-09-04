@@ -86,7 +86,13 @@ export const DEFAULT_APPS_CONFIG = {
         publish: { web: true },
         hostPort: 8080,
         adminUser: 'admin',
-        trustedDomains: 'localhost',
+        // Nextcloud refuses any Host it was not told about, so a default of
+        // just "localhost" means it works on the machine itself and answers
+        // 400 to every other device on the network -- including the phone the
+        // panel's own link was opened from. The private ranges are wildcarded
+        // so a LAN address works wherever it is reached from; a public name is
+        // added to this list when one is attached.
+        trustedDomains: 'localhost 192.168.*.* 10.*.*.* 172.16.*.*',
     },
     jellyfin: {
         enabled: false,
@@ -153,7 +159,10 @@ export const saveAppsConfig = (cfg) => writeJson(APPS_STATE_FILE, cfg);
 // Git ref names: no "..", which is also what the panel's "something else"
 // placeholder contains, so a placeholder can never be saved as a branch.
 const REF_RE = /^(?!.*\.\.)[A-Za-z0-9._\/-]{1,100}$/;
-const DOMAIN_LIST_RE = /^[A-Za-z0-9.\-, ]{0,300}$/;
+// Asterisks allowed: Nextcloud's trusted-domain matching takes wildcards, and
+// a home server needs them to accept its own address on a network whose
+// numbering it does not control.
+const DOMAIN_LIST_RE = /^[A-Za-z0-9.*\-, ]{0,300}$/;
 
 // A media folder is a host path, so it has to be absolute and it has to be safe
 // to paste into the generated compose override. Spaces are allowed -- "My
@@ -714,22 +723,26 @@ export async function nextcloudVersion(docker) {
  * domain that no longer points at it.
  */
 export async function syncNextcloudUrls(docker, origin, onLine = () => {}) {
-    if (!origin) {
-        for (const key of ['overwriteprotocol', 'overwritehost']) {
-            await docker(occArgs(['config:system:delete', key])).catch(() => {});
-        }
-        await docker(occArgs(['config:system:set', 'overwrite.cli.url', '--value', 'http://localhost']));
-        onLine('Nextcloud is no longer published, so its public address was cleared.');
-        return;
+    // Deliberately not overwritehost or overwriteprotocol.
+    //
+    // Those force one origin onto every request, which is right for the proxy
+    // and wrong for everything else: with them set, opening Nextcloud on the
+    // machine's own address redirects straight back out to the public name, so
+    // the local address stops working the moment a domain is attached. They
+    // are also not needed -- the proxy forwards the real host and port, and
+    // Nextcloud honours the forwarded protocol, so each way in generates links
+    // for the way it came in. Removed here as well as unset, because an
+    // earlier version of this panel did set them.
+    for (const key of ['overwriteprotocol', 'overwritehost']) {
+        await docker(occArgs(['config:system:delete', key])).catch(() => {});
     }
 
-    const { protocol, host } = new URL(origin);
-    await docker(occArgs(['config:system:set', 'overwriteprotocol', '--value', protocol.replace(':', '')]));
-    // Host and port together: this is what Nextcloud puts in front of every
-    // path it generates, so the port has to be part of it.
-    await docker(occArgs(['config:system:set', 'overwritehost', '--value', host]));
-    await docker(occArgs(['config:system:set', 'overwrite.cli.url', '--value', origin]));
-    onLine(`Nextcloud will build its links from ${origin}.`);
+    // This one has no request to read an origin from -- it is what background
+    // jobs put in links they send by e-mail -- so it does want the public
+    // address, and falls back to the local one when there is not one.
+    const cli = origin ?? 'http://localhost';
+    await docker(occArgs(['config:system:set', 'overwrite.cli.url', '--value', cli]));
+    onLine(`Links sent by e-mail will point at ${cli}.`);
 }
 
 /**

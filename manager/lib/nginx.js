@@ -242,7 +242,19 @@ function locationBlock(up, proxy, indent = '        ', { strip = null } = {}) {
     // not live on. On a network where another machine holds 443, those land on
     // that machine instead, which is a confusing way to find out.
     lines.push(`${i}proxy_set_header Host $http_host;`);
-    lines.push(`${i}proxy_set_header X-Real-IP $remote_addr;`);
+    // X-Forwarded-For only, deliberately no X-Real-IP.
+    //
+    // Both carry the same fact, and the second one breaks Nextcloud. Its image
+    // runs mod_remoteip configured to trust X-Real-IP, so Apache rewrites
+    // REMOTE_ADDR to the visitor's address before PHP sees it -- at which point
+    // Nextcloud's own trusted-proxy check compares that visitor against the
+    // proxy ranges, fails, and discards X-Forwarded-Proto. The result is an app
+    // that believes every request arrived over plain http and redirects
+    // accordingly.
+    //
+    // Without it, REMOTE_ADDR stays the proxy, the check passes, the protocol
+    // is honoured, and Nextcloud reads the real client out of X-Forwarded-For
+    // itself. Nothing is lost that this header was carrying.
     lines.push(`${i}proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`);
     lines.push(`${i}proxy_set_header X-Forwarded-Proto $scheme;`);
     // An app that stores files wants no limit of its own here; the default 1m
