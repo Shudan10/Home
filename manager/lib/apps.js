@@ -699,6 +699,110 @@ export async function nextcloudVersion(docker) {
     }
 }
 
+/**
+ * Waits until Nextcloud can actually answer `occ`.
+ *
+ * A running container is not the same as a usable Nextcloud. The first boot
+ * installs the database and upgrades the schema, and until that finishes every
+ * `occ` call fails -- so anything applied the moment the container starts is
+ * applied to nothing. Polling `occ status` is the honest readiness signal,
+ * because it is the same command the settings below have to use.
+ */
+export async function waitForNextcloud(docker, { timeoutMs = 5 * 60_000, onWaiting = () => {} } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    let announced = false;
+
+    while (Date.now() < deadline) {
+        try {
+            const { stdout } = await docker(occArgs(['status', '--output=json']), { timeoutMs: 30_000 });
+            if (JSON.parse(stdout.trim()).installed === true) return true;
+        } catch {
+            /* not up yet */
+        }
+        if (!announced) {
+            announced = true;
+            onWaiting();
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+    }
+    return false;
+}
+
+/**
+ * Turns on the previews the stack is already carrying the machinery for.
+ *
+ * Nextcloud ships a conservative default -- PNG, JPEG, GIF, BMP, XBitmap,
+ * WebP, Krita, MarkDown, TXT, OpenDocument -- and nothing outside it is
+ * generated. So installing ffmpeg in the image and running an Imaginary
+ * container beside it, which is what this stack does, achieves precisely
+ * nothing on its own: videos still show a generic icon, an iPhone's HEIC
+ * photos show a generic icon, and Imaginary sits there answering 401 to
+ * nobody. The provider list is the switch, and this is it being thrown.
+ *
+ * Imaginary goes first because it covers the whole image set in one process,
+ * HEIC and HEIF included, which is the thing the default cannot do. The native
+ * image providers are kept after it rather than dropped: Nextcloud tries
+ * matching providers in order and moves on when one returns nothing, so they
+ * are a fallback for a day when Imaginary is unhealthy, and cost nothing on
+ * every other day.
+ *
+ * Applied with `occ` for the same reason the trusted domains are: these live
+ * in config.php, the image only writes that during first-time install, and a
+ * container that is already installed will never run that branch again.
+ */
+const PREVIEW_PROVIDERS = [
+    // Everything image-shaped, including the formats the default list cannot
+    // touch: heic, heif, tiff, svg+xml, illustrator.
+    'OC\\Preview\\Imaginary',
+    'OC\\Preview\\ImaginaryPDF',
+    // Video thumbnails. This is the one that needs the ffmpeg baked into our
+    // image; without the binary the provider is registered and silently
+    // produces nothing.
+    'OC\\Preview\\Movie',
+    // Fallbacks, in case Imaginary is not answering.
+    'OC\\Preview\\PNG',
+    'OC\\Preview\\JPEG',
+    'OC\\Preview\\GIF',
+    'OC\\Preview\\BMP',
+    'OC\\Preview\\XBitmap',
+    'OC\\Preview\\WebP',
+    // Non-image things worth a thumbnail, carried over from the default list so
+    // enabling this does not quietly take them away.
+    'OC\\Preview\\MP3',
+    'OC\\Preview\\TXT',
+    'OC\\Preview\\MarkDown',
+    'OC\\Preview\\OpenDocument',
+    'OC\\Preview\\Krita',
+];
+
+export async function syncPreviewSettings(docker, onLine = () => {}) {
+    const env = readEnvFile();
+
+    for (const [i, provider] of PREVIEW_PROVIDERS.entries()) {
+        await docker(occArgs(['config:system:set', 'enabledPreviewProviders', String(i), '--value', provider]));
+    }
+    // Indices are positional, so a list that used to be longer would keep its
+    // tail. `occ` exits non-zero once there is nothing at an index, which is
+    // the signal to stop rather than an error.
+    for (let i = PREVIEW_PROVIDERS.length; i < PREVIEW_PROVIDERS.length + 10; i++) {
+        try {
+            await docker(occArgs(['config:system:delete', 'enabledPreviewProviders', String(i)]));
+        } catch {
+            break;
+        }
+    }
+
+    // Where Imaginary is, and the shared secret it refuses requests without.
+    // The hostname is the one compose gives it on the internal network, so this
+    // never depends on a published port.
+    await docker(occArgs(['config:system:set', 'preview_imaginary_url', '--value', 'http://nextcloud-imaginary:9000/']));
+    if (env.NEXTCLOUD_IMAGINARY_SECRET) {
+        await docker(occArgs(['config:system:set', 'preview_imaginary_key', '--value', env.NEXTCLOUD_IMAGINARY_SECRET]));
+    }
+
+    onLine('Previews: images and iPhone HEIC via Imaginary, video thumbnails via ffmpeg.');
+}
+
 /** The admin account's name and password, as the panel needs to show them. */
 export function nextcloudAdmin() {
     const env = readEnvFile();

@@ -22,8 +22,11 @@ running, and a switch for each thing. It holds the Docker socket, so it is
 password-protected and that is not optional.
 
 **Nextcloud** — your own cloud for files, photos, calendars and contacts, with
-its own database, Redis cache and preview generator. Video thumbnails and iPhone
-HEIC previews work out of the box.
+its own database, Redis cache and preview generator. The panel switches the
+preview providers on for you every time Nextcloud starts, so video thumbnails
+(via ffmpeg) and the whole image set including iPhone HEIC and HEIF (via
+Imaginary) work without touching a config file. Nextcloud's own default covers
+only PNG, JPEG, GIF, BMP and WebP.
 
 **Jellyfin** — your own media server for films, TV and music, streamed to
 phones, browsers, smart TVs, Roku, Fire TV and Kodi. You give the panel the
