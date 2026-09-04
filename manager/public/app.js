@@ -655,15 +655,27 @@ const ACTION_VERBS = { start: 'Starting', stop: 'Stopping', restart: 'Restarting
  * one careless click from gone. Installing and removing are their own actions
  * now, with their own buttons.
  */
-const start = (key) => (on) => api(`/api/services/${key}/${on ? 'start' : 'stop'}`, { method: 'POST' });
+/*
+ * Every switch does the same thing to a different key, so the key drives the
+ * request directly. There used to be a SERVICE_ACTIONS map here holding one
+ * `start(key)` per service, which meant a switch in the markup and an entry in
+ * a map had to be kept in step by hand -- and Jellyfin's switch shipped without
+ * its entry, so toggling it off died on "SERVICE_ACTIONS[service] is not a
+ * function" instead of stopping the container.
+ *
+ * The server route is already generic (it validates the key against the
+ * lifecycle units and 404s on anything it does not know), so the map was
+ * duplicating a list that is authoritative elsewhere. Now a new switch works
+ * the moment its markup exists.
+ */
+const setRunning = (key, on) =>
+    api(`/api/services/${key}/${on ? 'start' : 'stop'}`, { method: 'POST' });
 
-const SERVICE_ACTIONS = {
-    nextcloud: start('nextcloud'),
-    proxy: start('proxy'),
-};
-
+/* Display names only. A missing entry falls back to the key, which reads badly
+   but still works -- unlike the map above, this one cannot break anything. */
 const SERVICE_NAMES = {
     nextcloud: 'Nextcloud',
+    jellyfin: 'Jellyfin',
     proxy: 'the reverse proxy',
 };
 
@@ -684,7 +696,7 @@ for (const input of document.querySelectorAll('[data-service]')) {
             note: wanted
                 ? 'Starting a container that already exists is quick. Nothing is rebuilt.'
                 : 'The container stops and keeps everything: its data, its image, and the container itself.',
-            request: () => SERVICE_ACTIONS[service](wanted),
+            request: () => setRunning(service, wanted),
         });
 
         // Setting .checked does not fire change, so putting the switch back is
@@ -1708,10 +1720,17 @@ $('ports-check').addEventListener('click', async () => {
  */
 let serviceState = {};
 
+/* What "and its data" actually means for each service, in plain words, for the
+   confirmation dialog. Jellyfin's media folders are bind-mounted read-only from
+   elsewhere on the disk, so uninstalling it cannot touch the films themselves --
+   only what Jellyfin built from them. Worth saying, since that is the thing
+   somebody would be afraid of losing here. */
 const UNINSTALL_COPY = {
     nextcloud: 'every file, photo and calendar stored in it',
+    jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
     proxy: 'nothing. Your domains and certificates live in the stack directory and are kept',
 };
+const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';
 
 async function loadServices() {
     try {
@@ -1834,7 +1853,7 @@ function renderUninstallCards() {
         keeps it, and this is the only place that does not.
       </p>
       <div class="notice">
-        <p><strong>What goes:</strong> ${escapeHtml(UNINSTALL_COPY[key] ?? 'its data')}.</p>
+        <p><strong>What goes:</strong> ${escapeHtml(uninstallCopy(key))}.</p>
         <p class="muted">Installing it again afterwards starts from nothing, and rebuilds.</p>
       </div>
       <label class="check">
@@ -1871,7 +1890,7 @@ document.addEventListener('click', async (event) => {
 
     const state = serviceState[key];
     const keepData = document.querySelector(`[data-keepdata="${key}"]`)?.checked === true;
-    const what = keepData ? 'its containers and images' : `its containers, images and ${UNINSTALL_COPY[key]}`;
+    const what = keepData ? 'its containers and images' : `its containers, images and ${uninstallCopy(key)}`;
 
     // Typed rather than clicked. This is the one action in the panel that
     // deletes something a person cannot get back.
