@@ -31,8 +31,8 @@ export const STACK_REPO = process.env.STACK_REPO || 'Shudan10/Home';
 const STATUS_LOCAL = path.join(STACK_LOCAL, 'conf', 'last-update.txt');
 const STATUS_HOST = `${STACK_HOST}/conf/last-update.txt`;
 
-/** Reads back what the detached updater recorded, once the panel is up again. */
-export function lastUpdate() {
+/** The status file as it stands, finished or not. */
+function readStatus() {
     let raw;
     try {
         raw = fs.readFileSync(STATUS_LOCAL, 'utf8');
@@ -48,8 +48,37 @@ export function lastUpdate() {
         if (key === 'step') out.steps.push(value);
         else out[key] = value;
     }
-    if (!out.result) return null;
+    return out;
+}
+
+/** Reads back what the detached updater recorded, once the panel is up again. */
+export function lastUpdate() {
+    const out = readStatus();
+    if (!out?.result) return null;
     return { ...out, ok: out.result === 'ok' };
+}
+
+/**
+ * The same file while the update is still running, for the overlay to follow.
+ *
+ * The updater cannot report through the job queue: it replaces the very panel
+ * that would be serving the events, so it runs detached in its own container and
+ * writes each step to this file instead. Watching it is the only way to see the
+ * run as it happens -- and without that, a failure here was completely silent.
+ * The panel said "Rebuilding. This page will drop out and come back on its own",
+ * the update died at the first step, and the page waited for a restart that was
+ * never coming.
+ */
+export function updateProgress() {
+    const out = readStatus();
+    if (!out) return { running: false, steps: [] };
+    const done = Boolean(out.result);
+    return {
+        ...out,
+        steps: out.steps,
+        running: !done,
+        ok: out.result === 'ok',
+    };
 }
 
 /**
@@ -225,8 +254,24 @@ fail() { echo "error=$1" >> "$S"; echo "result=fail" >> "$S"; exit 1; }
 
 step "Downloading ${repo}@${ref}"
 tmp=$(mktemp -d) || fail "Could not create a temporary directory."
-curl -fsSL "https://codeload.github.com/${repo}/tar.gz/${download}" | tar -xz -C "$tmp" --strip-components=1 \\
-  || fail "Could not download ${repo}@${ref}. Check the branch or tag name."
+# Retried, because this is the one step that fails for reasons that pass on
+# their own. The commit was resolved through the API a moment ago; codeload
+# builds the tarball separately and can 404 for a few seconds on a commit that
+# was only just pushed, which is exactly when somebody presses this button.
+# The old single attempt turned that into "Check the branch or tag name" -- a
+# message accusing the one thing that had already been proven right.
+n=0
+until curl -fsSL "https://codeload.github.com/${repo}/tar.gz/${download}" | tar -xz -C "$tmp" --strip-components=1; do
+  n=$((n + 1))
+  [ "$n" -ge 5 ] && fail "Could not download ${download} from ${repo} after 5 tries. GitHub may be unreachable from this machine."
+  echo "  download attempt $n failed, retrying in 5s"
+  sleep 5
+  # A fresh directory rather than emptying this one. Shell braces are JS
+  # template syntax in this file, so "\${tmp:?}" cannot be written here, and a
+  # bare "rm -rf $tmp/*" with tmp somehow unset is not a risk worth carrying.
+  rm -rf "$tmp"
+  tmp=$(mktemp -d) || fail "Could not create a temporary directory."
+done
 [ -f "$tmp/docker-compose.yml" ] || fail "That archive does not look like the stack."
 
 step "Replacing the panel files"
