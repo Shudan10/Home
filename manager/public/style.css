@@ -1396,3 +1396,13 @@ select { font-family: var(--mono); font-size: 13.5px; }
     /* Long paths wrap rather than stretching the card sideways. */
     overflow-wrap: anywhere;
 }
+
+/* ------------------------------------------------------------------ proxy */
+
+/* The proxy page while it is off: one card and nothing else, so it is narrowed
+   and centred rather than stretched across a screen it has no content for.
+   `.alone` is set by loadProxies; without this rule that toggle did nothing. */
+#tab-proxy.alone .proxy-intro {
+    max-width: 640px;
+    margin: 0 auto;
+}
