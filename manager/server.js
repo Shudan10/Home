@@ -278,13 +278,24 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
 }
 
 /**
- * Adds a domain to an app's trusted list, because Nextcloud refuses to answer
- * on a name it was not told about and the refusal is a blank error page.
+ * Tells an app the public name it now answers on.
  *
- * Publishing a name is the moment that becomes true, so it is done there rather
- * than left as a thing to discover.
+ * Some apps need to be told, and each refuses differently when it has not been:
+ * Nextcloud turns away a name that is not in its trusted list, with a blank
+ * error page. Jellyfin serves fine but hands clients an address from its own
+ * point of view, which is wrong the moment there is a proxy in front of it.
+ *
+ * Publishing is the moment either becomes true, so it happens there rather than
+ * being left as a thing to discover.
  */
-async function trustDomain(key, domain, onLine = () => {}) {
+async function notifyPublished(key, domain, onLine = () => {}) {
+    if (key === 'jellyfin') {
+        // Read at startup, so this takes effect when the container is next
+        // recreated -- which switching it off and on does.
+        updateEnvFile({ JELLYFIN_PUBLISHED_URL: `https://${domain}` });
+        onLine(`Jellyfin will tell clients it lives at https://${domain}.`);
+        return;
+    }
     if (key !== 'nextcloud') return;
     const cfg = apps.loadAppsConfig();
     const names = new Set(String(cfg.nextcloud.trustedDomains || '').split(/[\s,]+/).filter(Boolean));
@@ -904,7 +915,7 @@ route('POST', /^\/api\/publish\/([a-z]+)$/, async (req, res, match) => {
     const ssl = { mode: record.ssl?.mode ?? 'none', email: record.ssl?.email ?? '' };
     try {
         const proxy = await attachDomain(service, wanted, ssl);
-        await trustDomain(service.key, wanted);
+        await notifyPublished(service.key, wanted);
         sendJson(res, 200, { ok: true, domain: wanted, proxyId: proxy.id });
     } catch (err) {
         fail(res, 400, err.message, err.details ? { details: err.details } : undefined);
@@ -1110,7 +1121,7 @@ route('POST', /^\/api\/setup\/([a-z]+)$/, async (req, res, match) => {
         await attachDomain(plan.service, domain, ssl, extras);
         // Nextcloud answers a name it was not told about with a blank refusal,
         // so being published and being trusted have to happen together.
-        await trustDomain(key, domain, onLine);
+        await notifyPublished(key, domain, onLine);
 
         // --- https ----------------------------------------------------------
         if (nginx.hasCertificate(domain)) {
@@ -1193,6 +1204,8 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
             // What is actually running, which only the app itself knows. Null
             // while it is stopped; the build date covers that case.
             version: name === 'nextcloud' && container.running ? await apps.nextcloudVersion(dockerctl.docker) : null,
+            // Whether the GPU setting is even offerable on this machine.
+            gpuAvailable: name === 'jellyfin' ? await apps.hasRenderDevice(dockerctl.docker) : null,
             blockers: apps.appBlockers(name, cfg),
             lastRun: apps.readLastRun(name),
         };
@@ -1200,7 +1213,7 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
     sendJson(res, 200, { config: cfg, apps: state });
 });
 
-route('PUT', /^\/api\/apps\/(nextcloud)$/, async (req, res, match) => {
+route('PUT', /^\/api\/apps\/(nextcloud|jellyfin)$/, async (req, res, match) => {
     const name = match[1];
     const body = await readBody(req);
 
@@ -1213,6 +1226,36 @@ route('PUT', /^\/api\/apps\/(nextcloud)$/, async (req, res, match) => {
 
     const blockers = apps.appBlockers(name, cfg);
     if (blockers.length) return fail(res, 409, `${apps.APPS[name].label} cannot start yet.`, { details: blockers });
+
+    // A media folder that is not there is refused rather than mounted. Docker
+    // would not complain -- it creates the missing directory as root and mounts
+    // that -- so the only sign of a typo would be an empty library and a
+    // directory nobody meant to make. Checked here rather than in the validator
+    // because it has to ask the host, which takes a container.
+    if (name === 'jellyfin' && cfg.jellyfin.mediaPaths.length) {
+        const checked = await apps.verifyHostPaths(dockerctl.docker, cfg.jellyfin.mediaPaths);
+        const missing = checked.filter((c) => c.exists === false).map((c) => c.path);
+        if (missing.length) {
+            return fail(res, 400, 'Some of those media folders do not exist on this machine.', {
+                details: [
+                    ...missing.map((p) => `${p} was not found.`),
+                    'Check the spelling, and give the path as this machine sees it rather than as another device sees it over the network.',
+                ],
+            });
+        }
+    }
+
+    // Asking for a GPU that is not there is not a setting, it is a container
+    // that refuses to start -- and the refusal names a device rather than a
+    // choice somebody made on this page.
+    if (name === 'jellyfin' && cfg.jellyfin.hardwareAcceleration && !(await apps.hasRenderDevice(dockerctl.docker))) {
+        return fail(res, 400, 'This machine has no /dev/dri, so there is no GPU to give Jellyfin.', {
+            details: [
+                'That is normal on a server with no graphics chip, or where the driver is not loaded.',
+                'Leave hardware transcoding off: Jellyfin will use the processor instead, which works and is only slower.',
+            ],
+        });
+    }
 
     apps.saveAppsConfig(cfg);
     const job = jobs.start(`${cfg[name].enabled ? 'Start' : 'Stop'} ${apps.APPS[name].label}`, async (onLine) => {
@@ -1248,7 +1291,7 @@ route('PUT', /^\/api\/apps\/(nextcloud)$/, async (req, res, match) => {
     sendJson(res, 202, { ok: true, jobId: job.id, config: cfg });
 });
 
-route('GET', /^\/api\/apps\/(nextcloud)\/refs$/, async (req, res, match, url) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin)\/refs$/, async (req, res, match, url) => {
     try {
         sendJson(res, 200, await apps.listRefs(match[1], { force: url.searchParams.get('force') === '1' }));
     } catch (err) {
@@ -1282,7 +1325,7 @@ route('POST', /^\/api\/apps\/nextcloud\/admin\/password$/, async (req, res) => {
     }
 });
 
-route('GET', /^\/api\/apps\/(nextcloud)\/check$/, async (req, res, match) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin)\/check$/, async (req, res, match) => {
     const name = match[1];
     try {
         const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());
@@ -1301,22 +1344,35 @@ route('GET', /^\/api\/apps\/(nextcloud)\/check$/, async (req, res, match) => {
     }
 });
 
-route('POST', /^\/api\/apps\/(nextcloud)\/update$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin)\/update$/, async (req, res, match) => {
     const name = match[1];
     const cfg = apps.loadAppsConfig();
     if (!cfg[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
 
     const app = apps.APPS[name];
+    const buildable = app.services.filter((sv) => BUILDABLE_SERVICES.has(sv));
     const job = jobs.start(`Update ${app.label}`, async (onLine) => {
-        onLine(`Rebuilding ${app.label}...`);
-        // --pull so a rebuild actually picks up a newer base image; --no-cache
-        // because the layers above it would otherwise be reused unchanged.
-        await dockerctl.compose(
-            ['build', '--pull', '--no-cache', ...app.services.filter((sv) => BUILDABLE_SERVICES.has(sv))],
-            { onLine, profile: app.profile, timeoutMs: 120 * 60_000 },
-        );
-        // The new image is built either way; what was stopped stays stopped and
-        // comes up on the new image whenever somebody starts it.
+        if (buildable.length) {
+            onLine(`Rebuilding ${app.label}...`);
+            // --pull so a rebuild actually picks up a newer base image;
+            // --no-cache because the layers above it would otherwise be reused
+            // unchanged.
+            await dockerctl.compose(['build', '--pull', '--no-cache', ...buildable], {
+                onLine,
+                profile: app.profile,
+                timeoutMs: 120 * 60_000,
+            });
+        } else {
+            // Nothing is built here, so updating is fetching a newer image.
+            onLine(`Downloading the newest ${app.label} image...`);
+            await dockerctl.compose(['pull', ...app.services], {
+                onLine,
+                profile: app.profile,
+                timeoutMs: 60 * 60_000,
+            });
+        }
+        // The new image is in place either way; what was stopped stays stopped
+        // and comes up on it whenever somebody starts it.
         if ((await lifecycle.status(name))?.running) {
             await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...app.services], {
                 onLine,
@@ -1324,18 +1380,14 @@ route('POST', /^\/api\/apps\/(nextcloud)\/update$/, async (req, res, match) => {
                 timeoutMs: 20 * 60_000,
             });
         } else {
-            onLine(`${app.label} is stopped, so it stays stopped. It runs the new build when you start it.`);
+            onLine(`${app.label} is stopped, so it stays stopped. It runs the new image when you start it.`);
         }
-        const upstream = await apps.checkUpstream(name, cfg).catch(() => null);
-        if (upstream) {
-            apps.writeBuildRecord(name, { sha: upstream.latestSha, ref: cfg[name].ref, builtAt: new Date().toISOString() });
-            onLine(`${app.label} is now running ${upstream.shortSha}.`);
-        }
+        await recordBuild(name, cfg[name], onLine);
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
-route('POST', /^\/api\/apps\/(nextcloud)\/(start|stop|restart)$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin)\/(start|stop|restart)$/, async (req, res, match) => {
     const [, name, action] = match;
     const app = apps.APPS[name];
     const job = jobs.start(`${action} ${app.label}`, async (onLine) => {

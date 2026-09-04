@@ -52,6 +52,31 @@ export const APPS = {
             web: { port: 80, label: 'Nextcloud web', hostPort: 8080 },
         },
     },
+
+    jellyfin: {
+        label: 'Jellyfin',
+        // Pulled, not built: upstream publishes an official image and nobody
+        // builds a media server from source, so there is no ref behind this.
+        tracksRepo: false,
+        repo: null,
+        profile: 'jellyfin',
+        services: ['jellyfin'],
+        container: 'quickstart-home-jellyfin',
+        publish: {
+            hostname: 'jellyfin',
+            port: 8096,
+            // Its web client talks to the server over a websocket for playback
+            // state and remote control, so a proxy that drops upgrades leaves a
+            // UI that loads and then never updates itself.
+            websocket: true,
+            // Streaming a film is one long response and uploading artwork is a
+            // large request; neither should meet a limit invented here.
+            maxBodySize: '0',
+        },
+        ports: {
+            web: { port: 8096, label: 'Jellyfin web', hostPort: 8096 },
+        },
+    },
 };
 
 export const DEFAULT_APPS_CONFIG = {
@@ -62,6 +87,21 @@ export const DEFAULT_APPS_CONFIG = {
         hostPort: 8080,
         adminUser: 'admin',
         trustedDomains: 'localhost',
+    },
+    jellyfin: {
+        enabled: false,
+        ref: 'main',
+        publish: { web: true },
+        hostPort: 8096,
+        // Host directories holding films, music and photos. Mounted read-only:
+        // Jellyfin only ever reads a library, and a media server with write
+        // access to somebody's only copy of their photographs is a bad trade
+        // for a feature nobody asked for.
+        mediaPaths: [],
+        // Passes /dev/dri through so transcoding uses the GPU rather than the
+        // CPU. Off by default: the device does not exist on every machine, and
+        // a container asking for one that is not there refuses to start.
+        hardwareAcceleration: false,
     },
 };
 
@@ -115,6 +155,112 @@ export const saveAppsConfig = (cfg) => writeJson(APPS_STATE_FILE, cfg);
 const REF_RE = /^(?!.*\.\.)[A-Za-z0-9._\/-]{1,100}$/;
 const DOMAIN_LIST_RE = /^[A-Za-z0-9.\-, ]{0,300}$/;
 
+// A media folder is a host path, so it has to be absolute and it has to be safe
+// to paste into the generated compose override. Spaces are allowed -- "My
+// Movies" is an ordinary directory name -- but quotes, colons, newlines and
+// control characters are not: the override writes each mount as a quoted
+// "source:target:ro" string, and any of those would break out of it.
+const MEDIA_PATH_RE = /^\/[^\0-\x1f"':]*$/;
+const MAX_MEDIA_PATHS = 24;
+
+/** '/srv/Media/Films/' and '/srv/Media/Films' are the same folder. */
+const normalizeMediaPath = (value) => {
+    const raw = String(value ?? '').trim();
+    if (raw === '/') return '/';
+    return raw.replace(/\/+$/, '');
+};
+
+/**
+ * Where a host folder appears inside the container.
+ *
+ * Named after the folder rather than numbered, because this is what shows up in
+ * Jellyfin's own "add a library" file picker, and /media/Films is answerable
+ * where /media/1 is not. Duplicates are suffixed, since two different paths can
+ * easily end in the same word.
+ */
+export function mediaMounts(paths) {
+    const used = new Set();
+    return paths.map((path) => {
+        const base = (path.split('/').filter(Boolean).pop() || 'media').replace(/[^A-Za-z0-9._-]+/g, '-');
+        let name = base;
+        for (let i = 2; used.has(name); i += 1) name = `${base}-${i}`;
+        used.add(name);
+        return { path, target: `/media/${name}`, name };
+    });
+}
+
+function validateMediaPaths(input, errors) {
+    const seen = new Set();
+    const out = [];
+
+    for (const entry of Array.isArray(input) ? input : []) {
+        const path = normalizeMediaPath(entry);
+        if (!path) continue;
+        if (out.length >= MAX_MEDIA_PATHS) {
+            errors.push(`That is more than ${MAX_MEDIA_PATHS} media folders, which is more than this is meant for.`);
+            break;
+        }
+        if (!path.startsWith('/')) {
+            errors.push(`"${path}" is not a full path. It has to start with a / and be the path on this machine.`);
+        } else if (!MEDIA_PATH_RE.test(path)) {
+            errors.push(`"${path}" contains a character that cannot be used in a folder path here (quotes and colons).`);
+        } else if (path.split('/').includes('..')) {
+            errors.push(`"${path}" contains "..", so write the real path instead.`);
+        } else if (path === '/') {
+            errors.push('Mounting the whole filesystem into Jellyfin is not something this will do. Pick the folder your media is actually in.');
+        } else if (seen.has(path)) {
+            errors.push(`"${path}" is listed twice.`);
+        } else {
+            seen.add(path);
+            out.push(path);
+        }
+    }
+    return out;
+}
+
+/**
+ * Whether these folders actually exist on the host.
+ *
+ * Worth its own check because of how Docker fails here: a bind mount whose
+ * source is missing is not an error, it is a *creation* -- the daemon makes an
+ * empty root-owned directory at that path and mounts that. So a typo does not
+ * produce a complaint, it produces a Jellyfin with an empty library, a
+ * directory nobody meant to make, and no clue connecting the two.
+ *
+ * The probe mounts the host root read-only into a throwaway container, which
+ * cannot create anything, and asks about each path. It grants no access the
+ * manager does not already have -- it holds the Docker socket, which is root on
+ * this machine -- and it is the only way to see the host filesystem from in
+ * here.
+ */
+export async function verifyHostPaths(docker, paths) {
+    if (!paths.length) return [];
+    try {
+        const { stdout } = await docker(
+            [
+                'run',
+                '--rm',
+                '-v',
+                '/:/host:ro',
+                'alpine:3.21',
+                'sh',
+                '-c',
+                // NUL-separated in, one verdict per line out, so a path with a
+                // space or a newline in it cannot be split into two arguments.
+                paths.map((p) => `[ -d "/host${p.replace(/"/g, '')}" ] && echo yes || echo no`).join('; '),
+            ],
+            { timeoutMs: 60_000 },
+        );
+        const verdicts = stdout.trim().split('\n');
+        return paths.map((path, i) => ({ path, exists: verdicts[i] === 'yes' }));
+    } catch {
+        // Could not check. Treated as "no opinion" rather than "missing": a
+        // failure to run the probe is not evidence about somebody's disk, and
+        // refusing the save on it would make a broken docker into a broken form.
+        return paths.map((path) => ({ path, exists: null }));
+    }
+}
+
 export function validateAppsConfig(input) {
     const errors = [];
     const cfg = structuredClone(DEFAULT_APPS_CONFIG);
@@ -156,7 +302,50 @@ export function validateAppsConfig(input) {
         cfg.nextcloud.trustedDomains = domains.split(/[\s,]+/).filter(Boolean).join(' ') || 'localhost';
     }
 
+    // --- Jellyfin ---
+    const j = input.jellyfin ?? {};
+    cfg.jellyfin.enabled = Boolean(j.enabled);
+    cfg.jellyfin.publish = { web: j.publish?.web !== false };
+    cfg.jellyfin.hardwareAcceleration = Boolean(j.hardwareAcceleration);
+
+    const jport = Number(j.hostPort ?? DEFAULT_APPS_CONFIG.jellyfin.hostPort);
+    const jtaken = reservedHostPorts().get(jport);
+    if (!Number.isInteger(jport) || jport < 1024 || jport > 65535) {
+        errors.push('Jellyfin port must be between 1024 and 65535.');
+    } else if (jport === Number(cfg.nextcloud.hostPort) && cfg.jellyfin.publish.web && cfg.nextcloud.publish.web) {
+        errors.push(`Port ${jport} is where Nextcloud is published, so Jellyfin cannot take it too.`);
+    } else if (jtaken && cfg.jellyfin.publish.web) {
+        errors.push(
+            `Port ${jport} is already used by ${jtaken}, so Jellyfin cannot start on it. Pick another one, ` +
+                `for example ${jport + 1}.`,
+        );
+    } else {
+        cfg.jellyfin.hostPort = jport;
+    }
+
+    cfg.jellyfin.mediaPaths = validateMediaPaths(j.mediaPaths, errors);
+
     return { cfg, errors };
+}
+
+/**
+ * Whether this machine has a GPU to hand to a container.
+ *
+ * `/dev/dri` is what the kernel exposes for render devices, and a `devices:`
+ * entry naming a path that is not there stops the container from starting --
+ * so this is checked before the setting is accepted rather than discovered as
+ * a Jellyfin that will not come up. Same read-only probe as the media folders,
+ * for the same reason: the manager cannot see the host filesystem otherwise.
+ */
+export async function hasRenderDevice(docker) {
+    try {
+        await docker(['run', '--rm', '-v', '/:/host:ro', 'alpine:3.21', 'test', '-d', '/host/dev/dri'], {
+            timeoutMs: 60_000,
+        });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -229,10 +418,13 @@ function composeDefines(service) {
 export function renderAppsPortsOverride(cfg) {
     const header = [
         '# Generated by the Quick Start Home panel - edits here are overwritten.',
-        '# Published ports for the optional applications.',
+        '#',
+        '# Everything about the optional applications that is only knowable once',
+        '# somebody has said so: which ports are published, which host folders are',
+        '# mounted, and whether a GPU is passed through.',
     ];
     const blocks = [];
-    const published = { nextcloud: [] };
+    const published = { nextcloud: [], jellyfin: [] };
 
     if (composeDefines('nextcloud')) {
         blocks.push('  nextcloud:');
@@ -242,6 +434,36 @@ export function renderAppsPortsOverride(cfg) {
             published.nextcloud = [cfg.nextcloud.hostPort];
         } else {
             blocks.push('      []');
+        }
+    }
+
+    if (composeDefines('jellyfin')) {
+        blocks.push('  jellyfin:');
+        blocks.push('    ports:');
+        if (cfg.jellyfin.publish.web) {
+            blocks.push(`      - "0.0.0.0:${cfg.jellyfin.hostPort}:8096/tcp"`);
+            published.jellyfin = [cfg.jellyfin.hostPort];
+        } else {
+            blocks.push('      []');
+        }
+
+        // Compose merges volumes by their target path rather than replacing the
+        // list, so naming only the media here keeps the config and cache
+        // volumes the base file declares.
+        const mounts = mediaMounts(cfg.jellyfin.mediaPaths ?? []);
+        if (mounts.length) {
+            blocks.push('    volumes:');
+            // `ro` is not a default worth leaving to chance: this is somebody's
+            // media library, and Jellyfin never needs to write to it.
+            for (const m of mounts) blocks.push(`      - "${m.path}:${m.target}:ro"`);
+        }
+
+        // Only written when asked for. A `devices:` entry naming a device that
+        // does not exist stops the container from starting at all, which is a
+        // worse outcome than software transcoding.
+        if (cfg.jellyfin.hardwareAcceleration) {
+            blocks.push('    devices:');
+            blocks.push('      - "/dev/dri:/dev/dri"');
         }
     }
 

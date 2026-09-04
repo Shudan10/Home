@@ -66,6 +66,17 @@
           <span class="track"></span>
         </label>
       </div>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="jellyfin" title="Jellyfin">
+          <span class="nav-dot" data-health="jellyfin"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M10 8.5l5 2.9-5 2.9z"/><path d="M8 20.5h8"/></svg>
+          <span class="label">Jellyfin</span>
+        </button>
+        <label class="switch mini" title="Start or stop Jellyfin">
+          <input type="checkbox" data-service="jellyfin" aria-label="Start or stop Jellyfin">
+          <span class="track"></span>
+        </label>
+      </div>
 
       <p class="nav-group-title">Network</p>
       <div class="nav-row">
@@ -313,6 +324,149 @@
       <div id="sub-nextcloud-uninstall" class="subtab">
         <div class="grid">
           <article class="card span2 uninstall-card" data-uninstall="nextcloud"></article>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- -------------------------------------------------------- jellyfin -->
+    <section id="tab-jellyfin" class="tab">
+      <nav class="subnav" aria-label="Jellyfin">
+        <button class="subtab-btn active" data-subtab="jellyfin-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="jellyfin-settings">Settings</button>
+        <button class="subtab-btn" data-subtab="jellyfin-updates">Updates</button>
+        <button class="subtab-btn" data-subtab="jellyfin-uninstall">Uninstall</button>
+      </nav>
+
+      <div id="sub-jellyfin-overview" class="subtab active">
+        <div class="grid">
+          <article class="card">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <strong>Run Jellyfin</strong>
+                <span class="muted">Streams your films, TV and music to anything with a screen.</span>
+              </div>
+              <span id="jellyfin-state" class="tag">off</span>
+            </div>
+            <div id="jellyfin-notice" class="verdict" hidden></div>
+            <p class="error" id="jellyfin-error" hidden></p>
+
+            <div class="node-section">
+              <h3>Open it</h3>
+              <div id="jellyfin-link" class="verdict" hidden></div>
+              <p class="hint">
+                The first time you open it, Jellyfin walks you through making an
+                account and adding your libraries. Your media folders appear in
+                its file picker under <code>/media</code>.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Jellyfin</h3>
+            <p class="muted">
+              Your own media server: point it at folders of films, TV, music and
+              photos and it fetches artwork and descriptions, remembers where you
+              got to, and streams to phones, tablets, browsers, smart TVs, Roku,
+              Fire TV and Kodi.
+            </p>
+            <p class="hint">
+              Free and entirely self-hosted, with no account and nothing phoning
+              home. Your media stays where it is on your disk and is only ever
+              mounted read-only, so nothing here can alter or delete it.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-jellyfin-settings" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Media folders</h3>
+            <p class="muted">
+              The folders on this machine that hold your media, as full paths.
+              Each appears inside Jellyfin under <code>/media</code>, named after
+              the folder, and each is mounted read-only.
+            </p>
+            <div id="jellyfin-media-list" class="media-list"></div>
+            <div class="row">
+              <input id="jellyfin-media-new" size="40" placeholder="/srv/media/Films" autocomplete="off">
+              <button type="button" id="jellyfin-media-add" class="ghost">Add folder</button>
+            </div>
+            <p class="hint">
+              This is the path as <strong>this machine</strong> sees it, not as
+              another computer sees it over the network. The panel checks each
+              folder exists before saving, because Docker's own response to a
+              path that is not there is to create an empty one and mount that.
+            </p>
+          </article>
+
+          <div class="col">
+            <article class="card">
+              <h3>Access</h3>
+              <label class="check"><input type="checkbox" id="jellyfin-pub-web"> Publish on the host</label>
+              <label class="inline">Port <input type="number" id="jellyfin-port" min="1024" max="65535"></label>
+              <p class="hint">
+                Publishing puts Jellyfin on this machine's address so anything on
+                your network can reach it. Leave it off if you would rather it
+                were only reachable through a domain on the proxy.
+              </p>
+            </article>
+
+            <article class="card">
+              <h3>Apply</h3>
+              <p class="muted">Changes here recreate the Jellyfin container. Your libraries and watch history are kept.</p>
+              <div class="row">
+                <button type="button" id="jellyfin-save" class="primary">Apply settings</button>
+                <button type="button" class="ghost" data-app-action="jellyfin/restart">Restart</button>
+              </div>
+            </article>
+          </div>
+
+          <article class="card">
+            <h3>Hardware transcoding</h3>
+            <p class="muted">
+              When a device cannot play a file as it is, Jellyfin converts it on
+              the fly. That is expensive on the processor, and a graphics chip
+              does it far better.
+            </p>
+            <label class="check"><input type="checkbox" id="jellyfin-hwaccel"> Give Jellyfin access to this machine's GPU</label>
+            <div id="jellyfin-hwaccel-note" class="verdict" hidden></div>
+            <p class="hint">
+              This passes <code>/dev/dri</code> through to the container. It has
+              to exist on this machine, so the panel checks before saving. You
+              still have to switch the method on inside Jellyfin, under
+              Dashboard → Playback → Transcoding.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-jellyfin-updates" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Updates</h3>
+            <p class="muted">
+              Jellyfin is the official <code>jellyfin/jellyfin</code> image rather
+              than something built here, so updating means fetching a newer one.
+              Your libraries, accounts and watch history live on their own volume
+              and are kept.
+            </p>
+            <div id="jellyfin-build" class="verdict"></div>
+            <div class="row">
+              <button type="button" id="jellyfin-update" class="primary">Update Jellyfin</button>
+            </div>
+            <p class="hint">
+              Jellyfin migrates its own database on the first start after an
+              update, so give it a minute before expecting the web page to load.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-jellyfin-uninstall" class="subtab">
+        <div class="grid">
+          <article class="card span2 uninstall-card" data-uninstall="jellyfin"></article>
         </div>
       </div>
 

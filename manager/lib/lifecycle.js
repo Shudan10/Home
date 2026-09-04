@@ -44,6 +44,24 @@ export const UNITS = {
         buildable: ['nextcloud'],
         data: 'every file, photo and calendar stored in it',
     },
+    jellyfin: {
+        label: 'Jellyfin',
+        profile: 'jellyfin',
+        services: ['jellyfin'],
+        containers: ['quickstart-home-jellyfin'],
+        primary: 'quickstart-home-jellyfin',
+        // Its own state only. The media is a read-only bind mount of a host
+        // directory, so it is not a volume and nothing here can remove it --
+        // which is the point: uninstalling a media server must not be a way to
+        // delete somebody's films.
+        volumes: ['quickstart-home-jellyfin-config', 'quickstart-home-jellyfin-cache'],
+        // Pulled, not built here, and the tag is shared with anyone else
+        // running Jellyfin on this machine. Never removed.
+        images: [],
+        buildable: [],
+        pullable: ['jellyfin'],
+        data: 'its library database, artwork and settings. Your media files are untouched: they live on your disk and are only ever mounted read-only',
+    },
     proxy: {
         label: 'Reverse proxy',
         profile: 'proxy',
@@ -107,6 +125,13 @@ export async function install(key, onLine = () => {}) {
     if (unit.buildable.length) {
         onLine(`Building ${unit.label}. The first time can take a while.`);
         await compose(['build', ...unit.buildable], { onLine, profile: unit.profile, timeoutMs: 120 * 60_000 });
+    }
+    // An image that is pulled rather than built. `create` would fetch it anyway,
+    // but silently and with no progress -- and a several-hundred-megabyte
+    // download with nothing on screen reads as a panel that has stopped.
+    if (unit.pullable?.length) {
+        onLine(`Downloading ${unit.label}. This is a few hundred megabytes the first time.`);
+        await compose(['pull', ...unit.pullable], { onLine, profile: unit.profile, timeoutMs: 60 * 60_000 });
     }
     onLine(`Creating the ${unit.label} container.`);
     await compose(['create', ...unit.services], { onLine, profile: unit.profile, timeoutMs: 20 * 60_000 });

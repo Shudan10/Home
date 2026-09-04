@@ -26,6 +26,22 @@ export const SERVICES = [
             'Nextcloud is at https://{domain}. The panel adds the name to its trusted domains for you, so it is ready to sign in to.',
     },
     {
+        key: 'jellyfin',
+        kind: 'jellyfin',
+        // Its web client asks for absolute paths (/web/, /System/Info, the
+        // playback websocket), so a prefix that this proxy strips would be
+        // missing from every URL the page then builds for itself: it would
+        // load and immediately start requesting things at the domain root.
+        // Jellyfin can live under a prefix, but only by being told its own base
+        // URL in its dashboard, which is not something this panel can do from
+        // outside. So it takes a name of its own, and says so.
+        rootOnly: true,
+        label: 'Jellyfin',
+        detail: 'Films, TV and music, streamed to anything.',
+        afterNote:
+            'Jellyfin is at https://{domain}. Sign in with the account you made when you first opened it — the panel does not hold Jellyfin\'s own credentials.',
+    },
+    {
         key: 'panel',
         kind: 'manager',
         sharedPath: '/panel',
