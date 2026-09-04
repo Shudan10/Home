@@ -34,15 +34,25 @@ export function killJob(jobId) {
 const MANAGER_CONTAINER = process.env.MANAGER_CONTAINER || 'quickstart-home-manager';
 const PROXY_CONTAINER = process.env.PROXY_CONTAINER || 'quickstart-home-proxy';
 const NEXTCLOUD_CONTAINER = process.env.NEXTCLOUD_CONTAINER || 'quickstart-home-nextcloud';
+const JELLYFIN_CONTAINER = process.env.JELLYFIN_CONTAINER || 'quickstart-home-jellyfin';
 
-export { MANAGER_CONTAINER, PROXY_CONTAINER, NEXTCLOUD_CONTAINER };
+export { MANAGER_CONTAINER, PROXY_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER };
 
-/** Every container this stack can run, in the order worth reading them. */
+/**
+ * Every container this stack can run, in the order worth reading them.
+ *
+ * This one list is both the Overview roll-call and the set of tiles on the Logs
+ * page, so a container missing from here is a container with nowhere to read
+ * its output -- which is exactly what happened to Jellyfin: it was added to the
+ * compose file and the lifecycle units but not to this list, so it ran without
+ * ever appearing on either page.
+ */
 export const STACK_CONTAINERS = [
     { key: 'nextcloud', label: 'nextcloud', name: NEXTCLOUD_CONTAINER },
     { key: 'nextcloud-db', label: 'nextcloud mariadb', name: 'quickstart-home-nextcloud-db' },
     { key: 'nextcloud-redis', label: 'nextcloud redis', name: 'quickstart-home-nextcloud-redis' },
     { key: 'nextcloud-imaginary', label: 'nextcloud previews', name: 'quickstart-home-nextcloud-imaginary' },
+    { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
     { key: 'proxy', label: 'nginx proxy', name: PROXY_CONTAINER },
     { key: 'manager', label: 'control panel', name: MANAGER_CONTAINER },
 ];
