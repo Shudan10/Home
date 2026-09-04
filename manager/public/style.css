@@ -1,54 +1,81 @@
 /*
- * A near-black with a cyan cast for the background, deep teal surfaces and a
- * mint accent sitting around hue 172. Chosen as a set rather than picked one at
- * a time: the relationships between them are what make the panel read as one
- * thing, so a new colour should be derived from these rather than added.
+ * Taken from the banner: a light neutral grey field, white as the surface that
+ * type sits on, and the muted blue out of the photograph as the one colour that
+ * is not a grey.
+ *
+ * The banner sets white type directly on the grey. That works there because it
+ * is display type at sixty pixels; at fourteen it is unreadable, and a panel is
+ * mostly fourteen. So the relationship is kept and the roles are swapped: the
+ * grey stays the field, white becomes the card that content sits on, and text
+ * is near-black. It reads as the same palette without asking anyone to squint.
+ *
+ * Chosen as a set rather than one at a time -- the relationships are what make
+ * this read as one thing, so a new colour should be derived from these rather
+ * than added beside them.
  */
 :root {
-    --bg: #050b0d;
-    --panel: #0a1417;
-    --panel-2: #102025;
-    --line: #1a3238;
-    --text: #e6f4f2;
-    --muted: #7d9b9c;
-    --accent: #7dd8ca;
-    --accent-dim: #2e6f68;
-    /* The brighter mint of the glow ring, for things that should look lit. */
-    --accent-glow: #4fe3ce;
+    --bg: #e8e8e8;
+    --panel: #ffffff;
+    --panel-2: #f1f1f3;
+    --line: #d3d3d7;
+    --text: #1b1b1f;
+    --muted: #62626b;
+    /* The shirt blue, darkened until it carries body text on white. The banner
+       value itself is far too pale to read at this size. */
+    --accent: #2c6a8c;
+    --accent-dim: #b7cfdd;
+    --accent-glow: #4a8cb2;
+    /* What goes on top of an accent fill. Never --text: dark on this blue is
+       the one combination in here that fails outright. */
+    --on-accent: #ffffff;
 
-    /* Status colours are pulled away from the accent hue on purpose. A mint
-       accent and a green "ok" next to each other are hard to tell apart, so ok
-       is warmer and danger is pushed towards coral. */
-    --danger: #ff6b62;
-    --warn: #e3a93c;
-    --ok: #46ce86;
+    /* Status colours are pulled away from the accent hue on purpose. A blue
+       accent and a blue-green "ok" next to each other are hard to tell apart,
+       so ok is warmer and danger is pushed towards red. */
+    --danger: #b3372c;
+    --warn: #8a6300;
+    --ok: #2c7a4b;
 
     --radius: 10px;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
-    /* The banner's light comes from one neon ring. These are that effect, kept
-       in two strengths so it stays a highlight rather than a wash. */
-    --glow-soft: 0 0 26px -10px rgba(125, 216, 202, 0.55);
-    --glow-hard: 0 0 0 1px rgba(125, 216, 202, 0.28), 0 0 20px -6px rgba(125, 216, 202, 0.6);
+    /* Depth comes from shadow rather than glow. The banner has no light source
+       in it -- it is flat grey and flat white -- so a neon ring would be the
+       one invented thing on the page. */
+    --scrim: rgb(0 0 0 / 0.35);
+    --shadow-1: 0 1px 2px rgb(20 20 25 / 0.08);
+    --shadow-2: 0 10px 30px rgb(20 20 25 / 0.13);
+    --shadow-3: 0 24px 70px rgb(20 20 25 / 0.24);
+    --glow-soft: var(--shadow-1);
+    --glow-hard: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-@media (prefers-color-scheme: light) {
+/*
+ * The same palette after dark, for anyone whose machine asks for it. Same blue,
+ * same neutral greys, read off the other end: the grey field becomes the
+ * darkest surface and white becomes the lightest text.
+ */
+@media (prefers-color-scheme: dark) {
     :root {
-        --bg: #eef3f3;
-        --panel: #ffffff;
-        --panel-2: #e7efee;
-        --line: #cadbd9;
-        --text: #0c1a1c;
-        --muted: #55706f;
-        /* Darkened well past the banner mint: #7DD8CA on white is unreadable. */
-        --accent: #0f7d71;
-        --accent-dim: #9ad4cc;
-        --accent-glow: #0f7d71;
-        --danger: #c2372f;
-        --warn: #9a6a05;
-        --ok: #1a7f4b;
-        --glow-soft: 0 1px 3px rgba(12, 26, 28, 0.09);
-        --glow-hard: 0 0 0 1px rgba(15, 125, 113, 0.3);
+        --bg: #141518;
+        --panel: #1d1f23;
+        --panel-2: #26282d;
+        --line: #34373d;
+        --text: #ececef;
+        --muted: #9698a1;
+        /* Lightened as far as the light theme's was darkened, and for the same
+           reason in reverse. */
+        --accent: #7fb3d5;
+        --accent-dim: #35566b;
+        --accent-glow: #a5cee6;
+        --on-accent: #0e1519;
+        --danger: #ff6b62;
+        --warn: #e3a93c;
+        --ok: #46ce86;
+        --scrim: rgb(0 0 0 / 0.6);
+        --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+        --shadow-2: 0 10px 30px rgb(0 0 0 / 0.45);
+        --shadow-3: 0 24px 70px rgb(0 0 0 / 0.6);
     }
 }
 
@@ -316,7 +343,7 @@ body {
 .sidebar-scrim {
     position: fixed;
     inset: 0;
-    background: rgb(0 0 0 / 0.5);
+    background: var(--scrim);
     z-index: 25;
 }
 
@@ -329,7 +356,7 @@ body {
         top: 0;
         transform: translateX(-100%);
         transition: transform 0.2s ease;
-        box-shadow: 0 0 40px rgb(0 0 0 / 0.4);
+        box-shadow: var(--shadow-2);
     }
     .sidebar.open { transform: translateX(0); }
     /* The drawer is always full width; collapsing is a wide-screen idea. */
@@ -458,7 +485,7 @@ button {
 button:hover:not(:disabled) { border-color: var(--accent-dim); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
-button.primary { background: var(--accent); border-color: var(--accent); color: #04120f; font-weight: 600; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 button.ghost { background: transparent; }
 button.danger, button.ghost.danger { color: var(--danger); }
 
@@ -561,7 +588,7 @@ dialog {
     max-height: 90vh;
 }
 dialog.wide { width: min(680px, calc(100vw - 32px)); }
-dialog::backdrop { background: rgb(0 0 0 / 0.6); }
+dialog::backdrop { background: var(--scrim); }
 dialog h3 { margin-top: 0; }
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .dialog-head h3 { margin-bottom: 12px; }
@@ -592,7 +619,7 @@ dialog .row label { flex: 1; min-width: 110px; }
     padding: 10px 20px;
     z-index: 60;
     font-size: 14px;
-    box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+    box-shadow: var(--shadow-2);
 }
 .toast.bad { border-color: var(--danger); color: var(--danger); }
 .toast.good { border-color: var(--accent-dim); }
@@ -725,7 +752,7 @@ dialog .row label { flex: 1; min-width: 110px; }
     padding: 26px 30px;
     text-align: center;
     max-width: 30rem;
-    box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+    box-shadow: var(--shadow-3);
 }
 .install-gate-card h3 { margin-top: 0; }
 .install-gate-card p { margin-bottom: 18px; }
@@ -746,7 +773,7 @@ dialog .row label { flex: 1; min-width: 110px; }
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgb(0 0 0 / 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(7px);
 }
 /* display:flex would otherwise beat the hidden attribute. */
@@ -762,7 +789,7 @@ dialog .row label { flex: 1; min-width: 110px; }
     border: 1px solid var(--line);
     border-radius: var(--radius);
     padding: 22px 24px;
-    box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
+    box-shadow: var(--shadow-3);
 }
 .action-card p { margin: 0; }
 .action-head { display: flex; align-items: center; gap: 10px; }
@@ -869,7 +896,7 @@ button.big { font-size: 15px; padding: 11px 22px; }
     inset: 6%;
     height: auto;
     z-index: 60;
-    box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
+    box-shadow: var(--shadow-3);
 }
 /* The grid still owns a slot for it, which would otherwise collapse and shuffle
    every other tile around behind the overlay. */
@@ -882,7 +909,7 @@ button.big { font-size: 15px; padding: 11px 22px; }
     position: fixed;
     inset: 0;
     z-index: 55;
-    background: rgb(0 0 0 / 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(2px);
 }
 /* .log-tile sets display:flex, which would otherwise beat the hidden attribute. */
@@ -1096,7 +1123,7 @@ button.big { font-size: 15px; padding: 11px 22px; }
 /* The sidebar reads as the console frame, so it sits deeper than the content
    it is framing rather than level with it. */
 .sidebar {
-    background: linear-gradient(180deg, rgba(16, 32, 37, 0.55), rgba(5, 11, 13, 0.85));
+    background: var(--panel);
     border-right-color: var(--line);
 }
 
@@ -1107,7 +1134,7 @@ button.big { font-size: 15px; padding: 11px 22px; }
    the banner wordmark. */
 .nav-row.active {
     position: relative;
-    background: linear-gradient(90deg, rgba(125, 216, 202, 0.13), transparent 78%);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
     /* Clears the flat inset bar from the base rule, which would otherwise sit
        full height behind the lit one below and read as two bars. */
     box-shadow: none;
@@ -1121,7 +1148,7 @@ button.big { font-size: 15px; padding: 11px 22px; }
     background: var(--accent);
     box-shadow: 0 0 10px -1px var(--accent-glow);
 }
-.nav-row.active .nav-item svg { filter: drop-shadow(0 0 6px rgba(125, 216, 202, 0.55)); }
+.nav-row.active .nav-item svg { filter: none; }
 
 /* --- surfaces ------------------------------------------------------------- */
 
@@ -1129,16 +1156,8 @@ button.big { font-size: 15px; padding: 11px 22px; }
    light source above the page, and it keeps cards from reading as flat blocks. */
 .card {
     position: relative;
-    background:
-        linear-gradient(180deg, rgba(125, 216, 202, 0.035), transparent 120px),
-        var(--panel);
-    box-shadow: 0 1px 0 rgba(125, 216, 202, 0.06) inset, 0 2px 14px -10px rgba(0, 0, 0, 0.9);
-}
-
-@media (prefers-color-scheme: light) {
-    .card { background: var(--panel); box-shadow: 0 1px 2px rgba(12, 26, 28, 0.06); }
-    .sidebar { background: var(--panel); }
-    .nav-row.active { background: rgba(15, 125, 113, 0.09); }
+    background: var(--panel);
+    box-shadow: var(--shadow-1);
 }
 
 /* Card titles are labels on an instrument, so they get the mono treatment the
@@ -1170,12 +1189,12 @@ button.big { font-size: 15px; padding: 11px 22px; }
 .bigstat span {
     font-family: var(--mono);
     letter-spacing: -0.01em;
-    text-shadow: 0 0 22px rgba(125, 216, 202, 0.35);
+    text-shadow: none;
 }
 
 /* The sync bar is the one thing on the page that is genuinely alive, so it is
    the one thing that gets to glow properly. */
-.bar { background: rgba(26, 50, 56, 0.7); }
+.bar { background: var(--panel-2); }
 .bar div {
     background: linear-gradient(90deg, var(--accent-dim), var(--accent-glow));
     box-shadow: 0 0 12px -2px var(--accent-glow);
@@ -1184,9 +1203,9 @@ button.big { font-size: 15px; padding: 11px 22px; }
 /* --- controls ------------------------------------------------------------- */
 
 button.primary {
-    background: linear-gradient(180deg, var(--accent), #5ec3b4);
+    background: linear-gradient(180deg, var(--accent-glow), var(--accent));
     border-color: var(--accent);
-    color: #03130f;
+    color: var(--on-accent);
     box-shadow: var(--glow-soft);
 }
 button.primary:hover:not(:disabled) {
@@ -1245,9 +1264,9 @@ select { font-family: var(--mono); font-size: 13.5px; }
 /* The health dots carry real meaning at a glance, so they are lit rather than
    painted. The colours are already far apart in hue; the glow makes them
    readable at the edge of vision too. */
-.dot.ok { box-shadow: 0 0 0 3px rgba(70, 206, 134, 0.18), 0 0 10px -1px var(--ok); }
-.dot.warn { box-shadow: 0 0 0 3px rgba(227, 169, 60, 0.18), 0 0 10px -1px var(--warn); }
-.dot.bad { box-shadow: 0 0 0 3px rgba(255, 107, 98, 0.18), 0 0 10px -1px var(--danger); }
+.dot.ok { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.dot.warn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.dot.bad { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
 
 /* --- scrollbars ----------------------------------------------------------- */
 

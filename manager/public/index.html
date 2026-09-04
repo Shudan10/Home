@@ -46,7 +46,11 @@
     </div>
 
     <nav class="nav" aria-label="Sections">
-      <div class="nav-row">
+      <!-- The row carries the highlight, the button carries the label state, and
+           selectTab sets both. On first paint nothing has navigated yet, so the
+           starting row has to say so itself or the panel opens with no entry
+           lit. -->
+      <div class="nav-row active">
         <button class="nav-item active" data-tab="overview" title="Overview">
           <span class="nav-dot" data-health="overview"></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
