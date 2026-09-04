@@ -39,13 +39,38 @@
     --radius: 10px;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
-    /* Depth comes from shadow rather than glow. The banner has no light source
-       in it -- it is flat grey and flat white -- so a neon ring would be the
-       one invented thing on the page. */
     --scrim: rgb(0 0 0 / 0.35);
     --shadow-1: 0 1px 2px rgb(20 20 25 / 0.08);
     --shadow-2: 0 10px 30px rgb(20 20 25 / 0.13);
     --shadow-3: 0 24px 70px rgb(20 20 25 / 0.24);
+
+    /*
+     * Glow. This is emitted light rather than cast shadow, so it only ever
+     * comes off something that is meant to look live: the active row, the
+     * focused field, the primary button, a status that wants reading.
+     *
+     * Two intensities, so that "this is on" and "this needs you" are not the
+     * same brightness. Everything else on the page stays flat -- glow that is
+     * everywhere is just a lighter background, and then nothing stands out,
+     * which is the opposite of the point.
+     *
+     * The light theme keeps these deliberately weak. A halo on a near-white
+     * field has almost no contrast to work with and reads as a smudge or a
+     * rendering fault rather than as light, so up there glow mostly firms into
+     * a tinted ring and lets the shadows do the depth.
+     */
+    --glow-1: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+              0 2px 10px color-mix(in srgb, var(--accent) 16%, transparent);
+    --glow-2: 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent),
+              0 3px 18px color-mix(in srgb, var(--accent) 26%, transparent);
+    /* Glow in a named colour, for status that is not the accent. */
+    --glow-of: 0 0 10px;
+    /* Type that emits rather than reflects. Off in light for the reason above. */
+    --glow-text: none;
+    /* The faint circuit grid over the page field. */
+    --grid-line: color-mix(in srgb, var(--accent) 7%, transparent);
+    --grid-size: 34px;
+
     --glow-soft: var(--shadow-1);
     --glow-hard: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -76,6 +101,18 @@
         --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
         --shadow-2: 0 10px 30px rgb(0 0 0 / 0.45);
         --shadow-3: 0 24px 70px rgb(0 0 0 / 0.6);
+
+        /* Where the glow actually lives. On a near-black field a halo has room
+           to fall off through several stops before it hits the background, so
+           it reads as light coming off the element rather than as a blurred
+           edge. These are roughly double the light theme's. */
+        --glow-1: 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent),
+                  0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+        --glow-2: 0 0 0 1px color-mix(in srgb, var(--accent) 65%, transparent),
+                  0 0 22px color-mix(in srgb, var(--accent) 40%, transparent),
+                  0 0 44px color-mix(in srgb, var(--accent) 18%, transparent);
+        --glow-text: 0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+        --grid-line: color-mix(in srgb, var(--accent) 9%, transparent);
     }
 }
 
@@ -87,6 +124,32 @@ body {
     color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
+
+/*
+ * A faint grid across the page field, and one soft pool of accent light behind
+ * the top left where the brand sits. Both are on a fixed layer underneath
+ * everything, so they stay put while the page scrolls and never land on top of
+ * anything you have to read -- every card, dialog and table draws over an
+ * opaque --panel, so this is only ever visible in the gutters between them.
+ *
+ * pointer-events is the important line. A full-viewport fixed element with a
+ * z-index will happily swallow every click on the page.
+ */
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(60ch 40ch at 12% -6%,
+            color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
+        linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 100% var(--grid-size),
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / var(--grid-size) 100%;
+}
+/* Everything real sits above that layer. Without this the grid is painted over
+   the sidebar and main column rather than behind them. */
+#app, .login { position: relative; z-index: 1; }
 
 .hidden { display: none !important; }
 
@@ -483,7 +546,9 @@ button {
     color: var(--text);
 }
 button:hover:not(:disabled) { border-color: var(--accent-dim); }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
+/* A disabled control must not look lit. Opacity alone does not do it: the halo
+   is cast outside the box, so it survives its own element being faded. */
+button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 button.ghost { background: transparent; }
@@ -505,6 +570,7 @@ input, select, textarea {
     padding: 7px 9px;
     width: 100%;
     margin-top: 4px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 label.inline input, label.inline select { margin-top: 0; width: auto; flex: 1; min-width: 60px; }
 input[type="checkbox"] { width: auto; accent-color: var(--accent); }
@@ -1128,6 +1194,8 @@ button.big { font-size: 15px; padding: 11px 22px; }
 }
 
 .brand { letter-spacing: 0.01em; }
+.brand .dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent),
+                          var(--glow-of) color-mix(in srgb, var(--accent) 70%, transparent); }
 
 /* The active row gets the light. A bar down the leading edge does more for
    "you are here" than a background wash, and it echoes the rules that bracket
@@ -1146,9 +1214,15 @@ button.big { font-size: 15px; padding: 11px 22px; }
     width: 2px;
     border-radius: 0 2px 2px 0;
     background: var(--accent);
-    box-shadow: 0 0 10px -1px var(--accent-glow);
+    box-shadow: 0 0 10px -1px var(--accent-glow),
+                0 0 20px -2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.nav-row.active .nav-item svg { filter: none; }
+/* The icon on the selected row emits too. drop-shadow rather than box-shadow:
+   these are SVG glyphs, so a box shadow would trace the square around them
+   instead of the shape. */
+.nav-row.active .nav-item svg {
+    filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 75%, transparent));
+}
 
 /* --- surfaces ------------------------------------------------------------- */
 
@@ -1158,7 +1232,27 @@ button.big { font-size: 15px; padding: 11px 22px; }
     position: relative;
     background: var(--panel);
     box-shadow: var(--shadow-1);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
+/* A hairline of accent along the top edge, brightest in the middle. Cards are
+   the repeating unit here, so this is the one piece of glow that is allowed to
+   be everywhere -- it is a seam rather than a highlight, and it gives the whole
+   page the lit-panel look without competing with anything that means something. */
+.card::after {
+    content: "";
+    position: absolute;
+    inset: -1px 0 auto 0;
+    height: 1px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: linear-gradient(90deg,
+        transparent,
+        color-mix(in srgb, var(--accent) 55%, transparent) 20%,
+        color-mix(in srgb, var(--accent-glow) 80%, transparent) 50%,
+        color-mix(in srgb, var(--accent) 55%, transparent) 80%,
+        transparent);
+    pointer-events: none;
+}
+.card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 
 /* Card titles are labels on an instrument, so they get the mono treatment the
    banner uses for its small type. */
@@ -1168,6 +1262,13 @@ button.big { font-size: 15px; padding: 11px 22px; }
     letter-spacing: 0.1em;
     color: var(--accent);
     opacity: 0.85;
+    text-shadow: var(--glow-text);
+}
+.danger-zone::after {
+    background: linear-gradient(90deg,
+        transparent,
+        color-mix(in srgb, var(--danger) 60%, transparent) 50%,
+        transparent);
 }
 
 .danger-zone h3 { color: var(--danger); opacity: 1; }
@@ -1202,18 +1303,35 @@ button.big { font-size: 15px; padding: 11px 22px; }
 
 /* --- controls ------------------------------------------------------------- */
 
+/* The one button on any card that does the thing is the one that is lit. */
 button.primary {
     background: linear-gradient(180deg, var(--accent-glow), var(--accent));
     border-color: var(--accent);
     color: var(--on-accent);
-    box-shadow: var(--glow-soft);
+    box-shadow: var(--glow-1);
+    transition: box-shadow 0.2s ease, filter 0.2s ease;
 }
 button.primary:hover:not(:disabled) {
     background: linear-gradient(180deg, var(--accent-glow), var(--accent));
-    box-shadow: 0 0 22px -6px var(--accent-glow);
+    box-shadow: var(--glow-2);
 }
+/* Pressing something should look like pressing it, and a halo that does not
+   move under the finger is the tell that nothing happened. */
+button.primary:active:not(:disabled) { box-shadow: var(--glow-1); filter: brightness(0.94); }
+/* Disabled overrides the lit state. Without this the primary button keeps its
+   halo while it is busy and unclickable, which reads as still being live. */
+button.primary:disabled { box-shadow: none; }
 
-button:hover:not(:disabled) { border-color: var(--accent-dim); }
+button:hover:not(:disabled) {
+    border-color: var(--accent-dim);
+    box-shadow: 0 0 12px -6px var(--accent-glow);
+}
+/* Danger glows in its own colour. Ringing the teardown button in the same blue
+   as Save is the one place a familiar highlight would be actively unhelpful. */
+button.danger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+    box-shadow: 0 0 12px -6px var(--danger);
+}
 
 /* One visible focus treatment for everything that takes focus. Keyboard users
    should never have to hunt for the cursor on a page this dense. */
@@ -1226,13 +1344,14 @@ summary:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
     border-radius: 6px;
+    box-shadow: var(--glow-2);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
     border-color: var(--accent-dim);
-    box-shadow: var(--glow-hard);
+    box-shadow: var(--glow-1);
     outline: none;
 }
 
@@ -1249,8 +1368,10 @@ select { font-family: var(--mono); font-size: 13.5px; }
     letter-spacing: 0.04em;
 }
 .subtab-btn.active {
+    color: var(--text);
     border-bottom-color: var(--accent);
-    box-shadow: 0 1px 0 var(--accent), 0 6px 14px -10px var(--accent-glow);
+    box-shadow: 0 1px 0 var(--accent), 0 4px 16px -6px var(--accent-glow);
+    text-shadow: var(--glow-text);
 }
 
 /* --- status --------------------------------------------------------------- */
@@ -1264,9 +1385,124 @@ select { font-family: var(--mono); font-size: 13.5px; }
 /* The health dots carry real meaning at a glance, so they are lit rather than
    painted. The colours are already far apart in hue; the glow makes them
    readable at the edge of vision too. */
-.dot.ok { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
-.dot.warn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
-.dot.bad { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
+.dot.ok { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent),
+                      var(--glow-of) color-mix(in srgb, var(--ok) 65%, transparent); }
+.dot.warn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent),
+                        var(--glow-of) color-mix(in srgb, var(--warn) 65%, transparent); }
+.dot.bad { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent),
+                       var(--glow-of) color-mix(in srgb, var(--danger) 65%, transparent); }
+
+/* The sidebar's per-service dots are 7px, so they get a tighter halo -- the
+   10px one used above swamps a dot this size into a fuzzy blob. A hollow dot
+   means deliberately off and stays unlit, which is the whole point of it. */
+.nav-dot.ok { box-shadow: 0 0 7px color-mix(in srgb, var(--ok) 75%, transparent); }
+.nav-dot.warn { box-shadow: 0 0 7px color-mix(in srgb, var(--warn) 75%, transparent); }
+.nav-dot.bad { box-shadow: 0 0 7px color-mix(in srgb, var(--danger) 75%, transparent); }
+
+/* An engaged toggle is a live circuit. */
+.switch input:checked + .track {
+    box-shadow: 0 0 12px -3px var(--accent-glow),
+                inset 0 0 6px -2px color-mix(in srgb, var(--accent-glow) 60%, transparent);
+}
+
+/*
+ * The panel's own update check.
+ *
+ * This was one muted grey line that read the same whether it said "nothing to
+ * report" or "there is a new version waiting", which is why the interesting
+ * answer disappeared into the card. It has four states now, and only the two
+ * that want acting on are lit: an available update, and a failed check.
+ *
+ * Resting state stays quiet on purpose. Something that glows before you have
+ * asked it anything teaches you to ignore the glow.
+ */
+.status-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin: 12px 0 0;
+    padding: 9px 11px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    transition: color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.status-line .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 7px;
+    /* Sits on the first line of text rather than the top of the box, so it
+       stays put when the message wraps to two lines. */
+    margin-top: 6px;
+    background: var(--muted);
+}
+.status-line .status-body { min-width: 0; }
+.status-line .status-head { display: block; }
+.status-line .status-detail {
+    display: block;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    /* Commit subjects and shas have no spaces to break on. */
+    overflow-wrap: anywhere;
+    /* The sha line and the commit subject are two lines of one string, so the
+       newline between them has to survive. pre-line honours it without also
+       preserving the source indentation the way pre would. */
+    white-space: pre-line;
+}
+
+/* Working. */
+.status-line.is-checking .status-dot { background: var(--accent); animation: status-blink 1s ease-in-out infinite; }
+@keyframes status-blink { 50% { opacity: 0.25; } }
+
+/* Nothing to do. Stated in the ok colour so it is a confirmation rather than
+   another thing to read, but not lit -- there is no action here. */
+.status-line.is-current { color: var(--text); }
+.status-line.is-current .status-dot {
+    background: var(--ok);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 70%, transparent);
+}
+
+/* The one that wanted to stand out. */
+.status-line.is-update {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    box-shadow: var(--glow-2);
+}
+.status-line.is-update .status-head {
+    font-weight: 650;
+    color: var(--accent);
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 12px;
+    text-shadow: var(--glow-text);
+}
+.status-line.is-update .status-detail { color: var(--text); opacity: 0.9; }
+.status-line.is-update .status-dot {
+    background: var(--accent);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 85%, transparent);
+    animation: status-pulse 2s ease-in-out infinite;
+}
+/* Breathing rather than blinking. A hard flash beside a button that rebuilds
+   the panel would read as an alarm; this is news, not a fault. */
+@keyframes status-pulse {
+    50% { box-shadow: 0 0 16px 2px color-mix(in srgb, var(--accent) 95%, transparent); }
+}
+
+/* The check itself failed -- no network, bad ref, GitHub rate limit. */
+.status-line.is-error {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.status-line.is-error .status-dot {
+    background: var(--danger);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 75%, transparent);
+}
 
 /* --- scrollbars ----------------------------------------------------------- */
 
