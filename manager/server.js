@@ -235,6 +235,48 @@ async function recordBuild(name, settings, onLine = () => {}) {
     }
 }
 
+/**
+ * Applies the Nextcloud settings that only exist inside its own config.php.
+ *
+ * Trusted domains and the preview providers are both written by the image
+ * during first-time install and never again, so changing either afterwards
+ * means talking to the running container. That makes *when* this runs the
+ * whole problem: it has to be every time Nextcloud starts, because installing
+ * it and switching it on are separate actions here and neither one alone used
+ * to reach this code. Enabling it applied them; installing it and then
+ * flipping the sidebar switch -- which is the path the panel actually
+ * recommends -- did not.
+ *
+ * Nothing here is worth failing a job over. Nextcloud is up either way, and a
+ * setting that did not stick is fixed by the next start.
+ */
+async function reconcileNextcloud(onLine = () => {}) {
+    const cfg = apps.loadAppsConfig();
+
+    // A container that has just started is not a Nextcloud that can answer:
+    // the first boot installs the database, which takes a while, and `occ`
+    // refuses until it is done. So this waits for it rather than firing once
+    // into a container that is not listening yet.
+    const ready = await apps.waitForNextcloud(dockerctl.docker, {
+        onWaiting: () => onLine('Waiting for Nextcloud to finish starting before applying its settings...'),
+    });
+    if (!ready) {
+        onLine('Nextcloud did not become ready in time, so its settings were left for the next start.');
+        return;
+    }
+
+    try {
+        await apps.syncTrustedDomains(dockerctl.docker, cfg, onLine);
+    } catch (err) {
+        onLine(`Could not update the trusted domains: ${err.message}`);
+    }
+    try {
+        await apps.syncPreviewSettings(dockerctl.docker, onLine);
+    } catch (err) {
+        onLine(`Could not switch the preview providers on: ${err.message}`);
+    }
+}
+
 async function applyAppConfig(name, cfg, onLine = () => {}) {
     const app = apps.APPS[name];
     const settings = cfg[name];
@@ -265,13 +307,7 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
     // made later has to be applied to the running instance or it silently does
     // nothing. Failure here is worth reporting but not worth failing the job:
     // the container is up either way.
-    if (name === 'nextcloud') {
-        try {
-            await apps.syncTrustedDomains(dockerctl.docker, cfg, onLine);
-        } catch (err) {
-            onLine(`Could not update the trusted domains: ${err.message}`);
-        }
-    }
+    if (name === 'nextcloud') await reconcileNextcloud(onLine);
 
     onLine(`${app.label} is up.`);
     return { enabled: true };
@@ -1393,6 +1429,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin)\/(start|stop|restart)$/, async
     const job = jobs.start(`${action} ${app.label}`, async (onLine) => {
         const verb = action === 'start' ? ['up', '-d'] : [action];
         await dockerctl.compose([...verb, ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
+        if (name === 'nextcloud' && action !== 'stop') await reconcileNextcloud(onLine);
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -1551,9 +1588,12 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
     const state = await lifecycle.status(match[1]);
     if (!state.installed) return fail(res, 409, `${unit.label} is not installed yet.`);
 
-    const job = jobs.start(`${running ? 'Start' : 'Stop'} ${unit.label}`, (onLine) =>
-        lifecycle.setRunning(match[1], running, onLine),
-    );
+    const job = jobs.start(`${running ? 'Start' : 'Stop'} ${unit.label}`, async (onLine) => {
+        await lifecycle.setRunning(match[1], running, onLine);
+        // Settings that live inside the app rather than in compose have to be
+        // reapplied to the container that has just come up.
+        if (running && match[1] === 'nextcloud') await reconcileNextcloud(onLine);
+    });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
