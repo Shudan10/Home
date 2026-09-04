@@ -1,0 +1,1306 @@
+/*
+ * A near-black with a cyan cast for the background, deep teal surfaces and a
+ * mint accent sitting around hue 172. Chosen as a set rather than picked one at
+ * a time: the relationships between them are what make the panel read as one
+ * thing, so a new colour should be derived from these rather than added.
+ */
+:root {
+    --bg: #050b0d;
+    --panel: #0a1417;
+    --panel-2: #102025;
+    --line: #1a3238;
+    --text: #e6f4f2;
+    --muted: #7d9b9c;
+    --accent: #7dd8ca;
+    --accent-dim: #2e6f68;
+    /* The brighter mint of the glow ring, for things that should look lit. */
+    --accent-glow: #4fe3ce;
+
+    /* Status colours are pulled away from the accent hue on purpose. A mint
+       accent and a green "ok" next to each other are hard to tell apart, so ok
+       is warmer and danger is pushed towards coral. */
+    --danger: #ff6b62;
+    --warn: #e3a93c;
+    --ok: #46ce86;
+
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    /* The banner's light comes from one neon ring. These are that effect, kept
+       in two strengths so it stays a highlight rather than a wash. */
+    --glow-soft: 0 0 26px -10px rgba(125, 216, 202, 0.55);
+    --glow-hard: 0 0 0 1px rgba(125, 216, 202, 0.28), 0 0 20px -6px rgba(125, 216, 202, 0.6);
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #eef3f3;
+        --panel: #ffffff;
+        --panel-2: #e7efee;
+        --line: #cadbd9;
+        --text: #0c1a1c;
+        --muted: #55706f;
+        /* Darkened well past the banner mint: #7DD8CA on white is unreadable. */
+        --accent: #0f7d71;
+        --accent-dim: #9ad4cc;
+        --accent-glow: #0f7d71;
+        --danger: #c2372f;
+        --warn: #9a6a05;
+        --ok: #1a7f4b;
+        --glow-soft: 0 1px 3px rgba(12, 26, 28, 0.09);
+        --glow-hard: 0 0 0 1px rgba(15, 125, 113, 0.3);
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.hidden { display: none !important; }
+
+/* ------------------------------------------------------------------ login */
+
+.login {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+}
+
+.login-card {
+    width: min(380px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 28px;
+    display: grid;
+    gap: 14px;
+}
+
+/* ---------------------------------------------------------------- shell */
+
+#app {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* --- sidebar --- */
+
+.sidebar {
+    /* Width is driven by this one custom property: the collapsed and drawer
+       rules below just redefine it. Overriding `width`/`flex-basis` directly
+       does not reliably beat the `flex` shorthand once var() is involved, so
+       changing the variable is the dependable way to resize this. */
+    /* Wide enough that every service name fits whole beside an Install
+       button. A name that has to be hovered to be read is a name the sidebar
+       is failing to show, and 20 pixels of page is a cheap price for it. */
+    --sidebar-w: 252px;
+    width: var(--sidebar-w);
+    flex: 0 0 var(--sidebar-w);
+    min-width: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    z-index: 30;
+}
+/* Width is intentionally not transitioned: animating the width of a flex item
+   relayouts the whole content column every frame, which stutters on the
+   table-heavy pages. The drawer below animates `transform` instead, which is
+   composited and cheap. */
+
+.sidebar.collapsed {
+    --sidebar-w: 62px;
+}
+
+/* Collapsing hides every text label in one rule, so new nav entries and
+   footer items inherit the behaviour without extra CSS. */
+.sidebar.collapsed .label,
+.sidebar.collapsed .nav-group-title,
+.sidebar.collapsed .badge,
+.sidebar.collapsed #logout {
+    display: none;
+}
+.sidebar.collapsed .sidebar-head { justify-content: center; }
+.sidebar.collapsed .nav-item { justify-content: center; padding-inline: 0; }
+.sidebar.collapsed #sidebar-toggle svg { transform: rotate(180deg); }
+
+.sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 14px 12px;
+    border-bottom: 1px solid var(--line);
+    min-height: 56px;
+}
+
+.brand {
+    font-weight: 650;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex: 0 0 auto;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 25%, transparent);
+}
+.dot.ok { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent); }
+.dot.bad { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent); }
+
+.icon-button {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    padding: 6px;
+    border-radius: 7px;
+    cursor: pointer;
+    display: inline-flex;
+    line-height: 0;
+}
+.icon-button:hover { background: var(--panel-2); color: var(--text); }
+.icon-button svg { width: 18px; height: 18px; transition: transform 0.18s ease; }
+
+/* Scoped rather than global: these are the line icons, and a blanket svg rule
+   would fight anything drawn later (charts, logos). */
+.sidebar svg,
+.topbar svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 8px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.nav-group-title {
+    margin: 14px 0 4px;
+    padding: 0 8px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    opacity: 0.75;
+}
+.nav-group-title:first-child { margin-top: 2px; }
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex: 1;
+    min-width: 0;
+    /* Little right padding: the row's own gap already separates the name from
+       the control, and every pixel here is a pixel of name. */
+    padding: 9px 2px 9px 10px;
+    border: 0;
+    border-radius: 8px 0 0 8px;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+}
+/* The row is a name and a control, and the control is the part that must not
+   move. Without this the name is nowrap with nothing to clip it, so a long one
+   ran straight under the Install button instead of giving way to it. */
+.nav-item .label {
+    flex: 1;
+    min-width: 0;
+    /* The sidebar is sized so nothing here needs truncating. This stays as the
+       floor: a longer name added later gives way to the button rather than
+       running underneath it, which is the failure that is hard to notice. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.nav-item svg { width: 18px; height: 18px; flex: 0 0 18px; }
+.nav-item.active { color: var(--text); }
+.nav-item.active svg { color: var(--accent); }
+
+/* Highlighting the row rather than the button keeps the switch inside the
+   selected surface; on the button alone it looked detached from its entry. */
+.nav-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 6px;
+    border-radius: 8px;
+}
+.nav-row:hover { background: var(--panel-2); }
+.nav-row:hover .nav-item { color: var(--text); }
+.nav-row.active {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.sidebar-foot {
+    border-top: 1px solid var(--line);
+    padding: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.badge {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 3px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+}
+.badge.local {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+    cursor: help;
+}
+
+/* --- content column --- */
+
+.content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    min-height: 56px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+}
+
+.topbar h1 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+}
+
+/* The hamburger only exists for the drawer layout. */
+#sidebar-open { display: none; }
+
+.sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgb(0 0 0 / 0.5);
+    z-index: 25;
+}
+
+@media (max-width: 860px) {
+    /* Below this width the sidebar becomes an overlay drawer: keeping it in
+       flow would eat most of a phone screen. */
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        transform: translateX(-100%);
+        transition: transform 0.2s ease;
+        box-shadow: 0 0 40px rgb(0 0 0 / 0.4);
+    }
+    .sidebar.open { transform: translateX(0); }
+    /* The drawer is always full width; collapsing is a wide-screen idea. */
+    .sidebar.collapsed { --sidebar-w: 252px; }
+    .sidebar.collapsed .label,
+    .sidebar.collapsed .nav-group-title,
+    .sidebar.collapsed .badge,
+    .sidebar.collapsed #logout { display: revert; }
+    .sidebar.collapsed .nav-item { justify-content: flex-start; padding-inline: 10px; }
+    #sidebar-toggle { display: none; }
+    #sidebar-open { display: inline-flex; }
+}
+
+@media (min-width: 861px) {
+    .sidebar-scrim { display: none; }
+}
+
+/* ------------------------------------------------------------------ layout */
+
+/* The cap that decides how wide every page is. 1180 left a third of a large
+   monitor empty; the tables in particular had room to spare and were still
+   scrolling sideways. Raised rather than removed, because full-width prose on
+   an ultrawide is worse than the margin. */
+/* min-width: 0 is the important part. main is a flex item of .content, and a
+   flex item defaults to min-width: auto, which means it refuses to shrink below
+   its content. One wide table was therefore pushing the whole page out to the
+   cap and giving it a horizontal scrollbar, so a table-heavy tab rendered wider
+   than every other one. With this, .scroll-x scrolls the table inside itself
+   the way it was always meant to. */
+main {
+    padding: 20px;
+    /* width:100% matters as much as the cap. .content is a column flex box, and
+       `margin: 0 auto` cancels the default stretch, so without a definite width
+       main sizes to its own content: one wide table pushed the whole page out
+       to the cap and gave it a horizontal scrollbar, which is why a table-heavy
+       tab came out wider than every other one. With a definite width,
+       .scroll-x scrolls the table inside itself as intended. */
+    width: 100%;
+    max-width: 1480px;
+    min-width: 0;
+    margin: 0 auto;
+}
+.tab { display: none; }
+.tab.active { display: block; }
+
+/* `hidden` has to beat `display: grid`, or hiding a grid does nothing. The log
+   tiles needed the same guard for the same reason. */
+.grid[hidden] { display: none; }
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+.span2 { grid-column: span 2; }
+
+@media (max-width: 820px) {
+    .grid { grid-template-columns: 1fr; }
+    .span2 { grid-column: span 1; }
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+}
+
+.card h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ------------------------------------------------------------------- bits */
+
+.muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+.error { color: var(--danger); font-size: 13px; margin: 8px 0 0; }
+
+.bigstat { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.bigstat span { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.bigstat small { color: var(--muted); }
+
+.bar { height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-bottom: 14px; }
+.bar div { height: 100%; width: 0; background: var(--accent); transition: width 0.6s ease; }
+
+.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.kv.vertical { grid-template-columns: 1fr; gap: 7px; }
+.kv > div { min-width: 0; }
+.kv dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.kv dd { margin: 2px 0 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+/* A value that reports something switched off, rather than a number. */
+.kv dd.warn { color: var(--warn); }
+.kv.vertical > div { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.kv.vertical dt { text-transform: none; letter-spacing: 0; font-size: 13px; }
+
+.verdict { font-size: 13px; margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+.verdict.ok { color: var(--ok); }
+.verdict.bad { color: var(--warn); }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-top: 12px; }
+.row.end { justify-content: flex-end; }
+
+/* --------------------------------------------------------------- controls */
+
+button {
+    font: inherit;
+    border-radius: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+}
+button:hover:not(:disabled) { border-color: var(--accent-dim); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+button.primary { background: var(--accent); border-color: var(--accent); color: #04120f; font-weight: 600; }
+button.ghost { background: transparent; }
+button.danger, button.ghost.danger { color: var(--danger); }
+
+label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+label.inline { display: flex; align-items: center; gap: 8px; }
+label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+label.check input { margin: 0; }
+label.locked-row { opacity: 0.85; }
+
+input, select, textarea {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 7px 9px;
+    width: 100%;
+    margin-top: 4px;
+}
+label.inline input, label.inline select { margin-top: 0; width: auto; flex: 1; min-width: 60px; }
+input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+textarea { font-family: var(--mono); font-size: 13px; resize: vertical; }
+select.inline-select { width: auto; margin: 0; }
+
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0 0 12px; }
+legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 6px; }
+
+.pill {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--accent-dim);
+    color: var(--text);
+    padding: 2px 7px;
+    border-radius: 999px;
+}
+.locked { color: var(--muted); font-size: 12px; font-style: italic; }
+.pill.warn { background: color-mix(in srgb, var(--warn) 30%, transparent); }
+.suffix { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+
+/* ---------------------------------------------------------------- tables */
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tbody tr:last-child td { border-bottom: 0; }
+td.port { font-family: var(--mono); }
+table.toggles td:nth-child(3), table.toggles td:nth-child(4),
+table.toggles th:nth-child(3), table.toggles th:nth-child(4) { text-align: center; width: 90px; }
+table.ports td:first-child { font-family: var(--mono); width: 90px; }
+table.proxies td:last-child { text-align: right; white-space: nowrap; }
+.empty { color: var(--muted); font-style: italic; }
+
+.tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    margin-right: 4px;
+}
+.tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.tag.off { color: var(--muted); }
+.tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+
+/* ------------------------------------------------------------------- logs */
+
+.logview, .args, pre {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    margin: 0;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.logview { height: min(64vh, 620px); }
+.args { max-height: 220px; }
+.tail { margin-left: auto; font-size: 12px; }
+
+.update-status { padding: 10px 12px; background: var(--panel-2); border-radius: 8px; font-size: 14px; }
+.update-status.available { color: var(--accent); }
+.update-status.current { color: var(--ok); }
+
+/* ---------------------------------------------------------------- dialog */
+
+dialog {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+    width: min(560px, calc(100vw - 32px));
+    max-height: 90vh;
+}
+dialog.wide { width: min(680px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgb(0 0 0 / 0.6); }
+dialog h3 { margin-top: 0; }
+.dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dialog-head h3 { margin-bottom: 12px; }
+.dialog-close {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: 22px;
+    line-height: 1;
+    padding: 0 6px;
+    margin: -2px -4px 0 0;
+    cursor: pointer;
+    border-radius: 8px;
+}
+.dialog-close:hover { color: var(--text); background: var(--panel-2); }
+dialog .row label { flex: 1; min-width: 110px; }
+
+/* ----------------------------------------------------------------- toast */
+
+.toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 10px 20px;
+    z-index: 60;
+    font-size: 14px;
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+}
+.toast.bad { border-color: var(--danger); color: var(--danger); }
+.toast.good { border-color: var(--accent-dim); }
+
+/* --------------------------------------------------------------- subtabs */
+
+/* Panels within one sidebar destination (Nextcloud: Overview / Settings / …). */
+.subnav {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 16px;
+}
+.subtab-btn {
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--muted);
+    padding: 9px 14px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+}
+.subtab-btn:hover { color: var(--text); }
+.subtab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+
+.subtab { display: none; }
+.subtab.active { display: block; }
+
+/* The service rows are read down the Service column, so that one gets the
+   weight and the rest stay out of its way. */
+.publish-table td { vertical-align: middle; }
+.publish-table .service-name { font-weight: 600; }
+.publish-table .service-detail { color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
+.publish-table .row-actions { text-align: right; white-space: nowrap; }
+
+/* ------------------------------------------------------------ setup wizard */
+
+.step-head { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+.step-num {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    margin-right: 8px;
+    font-size: 12px;
+}
+.steps { margin: 10px 0 14px; padding-left: 22px; color: var(--text); }
+.steps li { margin: 5px 0; }
+.plan { list-style: none; margin: 10px 0 14px; padding: 0; }
+.plan li {
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    background: var(--panel-2);
+}
+.plan li.done { opacity: 0.55; }
+.plan li small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+.domain-choices { margin: 10px 0 4px; }
+.domain-choice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    cursor: pointer;
+}
+.domain-choice.taken { opacity: 0.5; cursor: default; }
+/* Inputs are full width by default in this panel, which is right for a text box
+   and wrong for a radio sitting beside a label. */
+.domain-choice input[type="radio"] { width: auto; flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
+.domain-choice span { flex: 1; min-width: 0; }
+.domain-choice small { display: block; color: var(--muted); font-size: 12px; }
+
+.protect { margin: 4px 0 10px; }
+.protect summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; }
+.protect summary:hover { color: var(--text); }
+
+/* The maintenance row under the services table: quiet, and pushed right. */
+.proxy-tools { align-items: center; gap: 8px; }
+.proxy-tools .spacer { flex: 1; }
+
+/* The one thing the panel cannot do for you, said before the table rather than
+   after an hour of building. */
+.notice {
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+    background: color-mix(in srgb, var(--warn) 7%, transparent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 0 0 14px;
+}
+/* A tab for something that is not installed: the real page, blurred, with the
+   one action that is available on top of it. Showing the page at all is
+   deliberate -- it is a preview of what installing gets you -- but reading its
+   empty numbers as though they meant something should not be possible. */
+.tab.not-installed { position: relative; }
+.tab.not-installed > *:not(.install-gate) {
+    filter: blur(5px);
+    opacity: 0.5;
+    pointer-events: none;
+    user-select: none;
+}
+.install-gate {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 12vh;
+    z-index: 3;
+}
+.install-gate-card {
+    /* Sticky rather than parked at the top: these tabs are long, and an overlay
+       whose only action scrolls out of sight leaves a blurred page and no way
+       forward. */
+    position: sticky;
+    top: 12vh;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px 30px;
+    text-align: center;
+    max-width: 30rem;
+    box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+}
+.install-gate-card h3 { margin-top: 0; }
+.install-gate-card p { margin-bottom: 18px; }
+
+/* Anything that installs, starts, stops or removes a container takes the whole
+   screen while it runs.
+
+   The log used to print inside the tab's own overlay, which left the rest of
+   the panel clickable: a build running, and every other switch still inviting
+   somebody to queue a second job behind it on the same docker daemon. Covering
+   everything is the honest version -- one thing is happening, this is it, and
+   the way out is for it to finish. */
+.action-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgb(0 0 0 / 0.55);
+    backdrop-filter: blur(7px);
+}
+/* display:flex would otherwise beat the hidden attribute. */
+.action-overlay[hidden] { display: none; }
+
+.action-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(760px, 100%);
+    max-height: 86vh;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
+}
+.action-card p { margin: 0; }
+.action-head { display: flex; align-items: center; gap: 10px; }
+.action-head h3 { margin: 0; font-size: 17px; }
+/* The log grows to fill the card rather than being a fixed height: a stop
+   prints four lines and should not open a screen of empty black. */
+.action-log {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 8rem;
+    max-height: 60vh;
+    font-size: 12px;
+}
+
+.spinner {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+}
+.spinner[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .spinner { animation-duration: 3s; }
+}
+button.big { font-size: 15px; padding: 11px 22px; }
+
+/* Shown in place of the switch until a service exists at all. Kept narrow: it
+   sits where the switch will, and every pixel it takes is one the name loses. */
+.nav-install[hidden] { display: none; }
+.nav-install {
+    flex: 0 0 auto;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--text);
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.6;
+    padding: 1px 7px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.nav-install:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.uninstall-card .notice { border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+
+.notice p { margin: 0 0 10px; font-size: 13px; }
+.notice .row { align-items: center; gap: 10px; }
+.notice .muted { font-size: 12px; }
+/* Above the sub-nav, so it is read before the thing it applies to. */
+.node-banner { margin-bottom: 16px; }
+.node-banner p:last-child { margin-bottom: 0; }
+
+.port-result { margin: 10px 0 0; font-size: 13px; }
+.port-result li { margin: 3px 0; list-style: none; }
+.port-result li::before { content: '· '; color: var(--muted); }
+.port-result li.ok::before { content: '✓ '; color: var(--ok); }
+.port-result li.bad::before { content: '✗ '; color: var(--danger); }
+
+/* ------------------------------------------------------------- log grid */
+
+.logs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+.logs-toolbar input[type="text"], .logs-toolbar #log-filter { width: auto; margin: 0; }
+
+.log-grid {
+    display: grid;
+    /* Two at most. auto-fit packed in as many as would fit, which on a wide
+       screen meant four narrow columns of wrapped log lines, and log output is
+       long horizontal text: fewer, wider tiles read far better than more. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    align-items: start;
+}
+@media (max-width: 820px) {
+    .log-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.log-tile {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    /* Every tile the same height so the grid stays a grid as logs fill up. */
+    height: 320px;
+}
+/* Expanded is a centred overlay, not a wider grid cell. The tile keeps its
+   place in the grid and is lifted out of it visually, so the element carries on
+   receiving its stream: no re-parenting, no reconnecting, nothing to lose. */
+.log-tile.expanded {
+    position: fixed;
+    /* Percentages, not vw: vw counts the scrollbar and the containing block for
+       a fixed element does not, so the two sides resolve against different
+       widths and it lands off-centre. */
+    inset: 6%;
+    height: auto;
+    z-index: 60;
+    box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
+}
+/* The grid still owns a slot for it, which would otherwise collapse and shuffle
+   every other tile around behind the overlay. */
+.log-tile.expanded::after {
+    content: "";
+    display: block;
+}
+
+.log-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(0 0 0 / 0.55);
+    backdrop-filter: blur(2px);
+}
+/* .log-tile sets display:flex, which would otherwise beat the hidden attribute. */
+.log-tile[hidden] { display: none; }
+
+.log-tile-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--panel-2);
+}
+.log-tile-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-tile-head .count { color: var(--muted); font-weight: 400; font-family: var(--mono); font-size: 11px; }
+.log-tile-head button {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    padding: 2px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.log-tile-head button:hover { background: var(--bg); color: var(--text); }
+
+.log-tile pre {
+    flex: 1;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    font-size: 11.5px;
+    line-height: 1.45;
+    overflow: auto;
+    background: var(--bg);
+}
+
+.log-grid .empty-tile {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font-style: italic;
+    padding: 20px;
+}
+
+/* --------------------------------------------------- on/off toggle header */
+
+/* A section's main on/off control: the switch is the primary action, so it
+   leads, and there is no separate Apply to forget to press. */
+.toggle-bar { margin-bottom: 16px; }
+.toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.toggle-row .toggle-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.toggle-row .toggle-text strong { font-size: 15px; }
+.toggle-row .toggle-text .muted { font-size: 13px; }
+.toggle-row .switch { width: 46px; height: 25px; flex-basis: 46px; }
+.toggle-row .switch .track::before { width: 17px; height: 17px; }
+.toggle-row .switch input:checked + .track::before { transform: translate(20px, -50%); }
+
+/* ------------------------------------------------- sidebar service switches */
+
+/* The nav entry and its switch are siblings, not nested: a checkbox inside a
+   button is invalid, and the button would swallow the clicks meant for it. */
+.switch.mini {
+    width: 30px;
+    height: 17px;
+    flex: 0 0 30px;
+    /* Optical centring: the switch is shorter than the row's text line, so it
+       needs no nudging vertically, only breathing room from the edge. */
+    margin: 0;
+}
+.switch.mini .track::before { width: 11px; height: 11px; left: 2px; }
+.switch.mini input:checked + .track::before { transform: translate(13px, -50%); }
+.switch.mini input:disabled + .track { opacity: 0.3; }
+
+/* No room for them on the icon rail, and nothing to label them with. */
+.sidebar.collapsed .switch.mini { display: none; }
+@media (max-width: 860px) {
+    .sidebar.collapsed .switch.mini { display: inline-block; }
+}
+
+/* ------------------------------------------------------------- log zoom */
+
+/* The fallback, for a view whose size has not been set yet. Each view carries
+   its own --log-size inline, so zooming one leaves the rest where they were. */
+.logview,
+.log-tile pre {
+    font-size: var(--log-size, 11.5px);
+}
+
+.zoom {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    overflow: hidden;
+}
+.zoom-btn {
+    background: var(--panel-2);
+    border: 0;
+    border-radius: 0;
+    color: var(--muted);
+    padding: 3px 10px;
+    font-size: 14px;
+    line-height: 1.2;
+    cursor: pointer;
+}
+.zoom-btn + .zoom-btn { border-left: 1px solid var(--line); }
+.zoom-btn:hover:not(:disabled) { background: var(--bg); color: var(--text); }
+.zoom-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* These bars lost their switch to the sidebar, so they are a title and status
+   strip now. Without the switch leading, the text should start at the edge. */
+.toggle-bar .toggle-row > .toggle-text:first-child { margin-left: 0; }
+
+/* ----------------------------------------------------------- nav health */
+
+/* One dot per destination: green running, amber running but not right yet, red
+   switched on and not there. A service that is deliberately off gets a hollow
+   dot, because "off" is not a fault and should not look like one. */
+.nav-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 7px;
+    margin-right: 1px;
+    background: transparent;
+    border: 1px solid var(--line);
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+.nav-dot.ok { background: var(--ok); border-color: var(--ok); }
+.nav-dot.warn { background: var(--warn); border-color: var(--warn); }
+.nav-dot.bad { background: var(--danger); border-color: var(--danger); }
+/* Sections that are not a service have nothing to report. */
+.nav-dot.none { visibility: hidden; }
+
+.sidebar.collapsed .nav-dot { display: none; }
+
+/* --- shell ---------------------------------------------------------------- */
+
+/* The sidebar reads as the console frame, so it sits deeper than the content
+   it is framing rather than level with it. */
+.sidebar {
+    background: linear-gradient(180deg, rgba(16, 32, 37, 0.55), rgba(5, 11, 13, 0.85));
+    border-right-color: var(--line);
+}
+
+.brand { letter-spacing: 0.01em; }
+
+/* The active row gets the light. A bar down the leading edge does more for
+   "you are here" than a background wash, and it echoes the rules that bracket
+   the banner wordmark. */
+.nav-row.active {
+    position: relative;
+    background: linear-gradient(90deg, rgba(125, 216, 202, 0.13), transparent 78%);
+    /* Clears the flat inset bar from the base rule, which would otherwise sit
+       full height behind the lit one below and read as two bars. */
+    box-shadow: none;
+}
+.nav-row.active::before {
+    content: "";
+    position: absolute;
+    inset: 4px auto 4px 0;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    background: var(--accent);
+    box-shadow: 0 0 10px -1px var(--accent-glow);
+}
+.nav-row.active .nav-item svg { filter: drop-shadow(0 0 6px rgba(125, 216, 202, 0.55)); }
+
+/* --- surfaces ------------------------------------------------------------- */
+
+/* A one pixel highlight along the top edge. It is the cheapest way to suggest a
+   light source above the page, and it keeps cards from reading as flat blocks. */
+.card {
+    position: relative;
+    background:
+        linear-gradient(180deg, rgba(125, 216, 202, 0.035), transparent 120px),
+        var(--panel);
+    box-shadow: 0 1px 0 rgba(125, 216, 202, 0.06) inset, 0 2px 14px -10px rgba(0, 0, 0, 0.9);
+}
+
+@media (prefers-color-scheme: light) {
+    .card { background: var(--panel); box-shadow: 0 1px 2px rgba(12, 26, 28, 0.06); }
+    .sidebar { background: var(--panel); }
+    .nav-row.active { background: rgba(15, 125, 113, 0.09); }
+}
+
+/* Card titles are labels on an instrument, so they get the mono treatment the
+   banner uses for its small type. */
+.card h3 {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    opacity: 0.85;
+}
+
+.danger-zone h3 { color: var(--danger); opacity: 1; }
+
+/* --- readings ------------------------------------------------------------- */
+
+/* Keys are quiet and wide-tracked; values are mono and tabular so digits line
+   up between refreshes instead of jittering. */
+.kv dt {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.09em;
+}
+.kv dd {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.bigstat span {
+    font-family: var(--mono);
+    letter-spacing: -0.01em;
+    text-shadow: 0 0 22px rgba(125, 216, 202, 0.35);
+}
+
+/* The sync bar is the one thing on the page that is genuinely alive, so it is
+   the one thing that gets to glow properly. */
+.bar { background: rgba(26, 50, 56, 0.7); }
+.bar div {
+    background: linear-gradient(90deg, var(--accent-dim), var(--accent-glow));
+    box-shadow: 0 0 12px -2px var(--accent-glow);
+}
+
+/* --- controls ------------------------------------------------------------- */
+
+button.primary {
+    background: linear-gradient(180deg, var(--accent), #5ec3b4);
+    border-color: var(--accent);
+    color: #03130f;
+    box-shadow: var(--glow-soft);
+}
+button.primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, var(--accent-glow), var(--accent));
+    box-shadow: 0 0 22px -6px var(--accent-glow);
+}
+
+button:hover:not(:disabled) { border-color: var(--accent-dim); }
+
+/* One visible focus treatment for everything that takes focus. Keyboard users
+   should never have to hunt for the cursor on a page this dense. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--accent-dim);
+    box-shadow: var(--glow-hard);
+    outline: none;
+}
+
+/* Values people type are almost all technical here: addresses, ports, hashes,
+   transaction ids. Mono makes them checkable at a glance. */
+input,
+select { font-family: var(--mono); font-size: 13.5px; }
+
+/* --- subtabs -------------------------------------------------------------- */
+
+.subtab-btn {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.04em;
+}
+.subtab-btn.active {
+    border-bottom-color: var(--accent);
+    box-shadow: 0 1px 0 var(--accent), 0 6px 14px -10px var(--accent-glow);
+}
+
+/* --- status --------------------------------------------------------------- */
+
+.tag {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.05em;
+}
+
+/* The health dots carry real meaning at a glance, so they are lit rather than
+   painted. The colours are already far apart in hue; the glow makes them
+   readable at the edge of vision too. */
+.dot.ok { box-shadow: 0 0 0 3px rgba(70, 206, 134, 0.18), 0 0 10px -1px var(--ok); }
+.dot.warn { box-shadow: 0 0 0 3px rgba(227, 169, 60, 0.18), 0 0 10px -1px var(--warn); }
+.dot.bad { box-shadow: 0 0 0 3px rgba(255, 107, 98, 0.18), 0 0 10px -1px var(--danger); }
+
+/* --- scrollbars ----------------------------------------------------------- */
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); background-clip: content-box; }
+
+/* Motion here is decoration, not information. */
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+}
+
+/* The language picker on the indexer's Translation tab. Two or three columns
+   rather than a list: two dozen checkboxes in one column is a page of scrolling
+   to compare a set somebody is choosing as a whole. */
+.lang-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 2px 14px;
+    margin: 12px 0;
+}
+.lang-grid .check { margin: 0; }
+
+/* The bottom of the action overlay: a bar while it runs, a way out when it is
+   done. The two never show at once -- the absence of the button is what says
+   there is no way out yet, which is the same thing the disabled "Please wait…"
+   used to say with more words and less information. */
+.action-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.action-bar {
+    flex: 1 1 auto;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    overflow: hidden;
+}
+.action-bar[hidden] { display: none; }
+.action-bar > span {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: var(--accent);
+    /* Eased in CSS rather than by the animation loop: the loop sets a target a
+       few times a second and the browser draws the movement between. */
+    transition: width 420ms ease-out;
+}
+/* A build can spend minutes inside one step, and a bar that has not moved for
+   two minutes reads as a hung panel. The stripes say work is happening without
+   claiming any progress the log has not reported. */
+.action-bar.working > span {
+    background-image: linear-gradient(
+        115deg,
+        color-mix(in srgb, var(--accent) 55%, transparent) 25%,
+        var(--accent) 25%,
+        var(--accent) 50%,
+        color-mix(in srgb, var(--accent) 55%, transparent) 50%,
+        color-mix(in srgb, var(--accent) 55%, transparent) 75%,
+        var(--accent) 75%
+    );
+    background-size: 22px 22px;
+    animation: bar-stripes 0.9s linear infinite;
+}
+.action-bar.failed > span { background: var(--warn); background-image: none; animation: none; }
+@keyframes bar-stripes { to { background-position: 22px 0; } }
+@media (prefers-reduced-motion: reduce) {
+    .action-bar.working > span { animation: none; }
+}
+.action-foot .mono { font-family: var(--mono); font-size: 12px; min-width: 4.5rem; text-align: right; }
+
+/* ---------------------------------------------------------------- overview */
+
+/* A usage meter: the number, then the bar. Colour is the whole point of the
+   disk one -- an amber bar at 75% and a red one at 90% is the warning a file
+   server actually needs, and it arrives before the disk is full rather than
+   after. */
+.meter-row { display: flex; align-items: center; gap: 14px; margin: 4px 0 10px; }
+
+.meter-pct {
+    font-size: 30px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    min-width: 3.6rem;
+}
+
+.meter {
+    flex: 1;
+    height: 8px;
+    background: var(--panel-2);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.meter-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    border-radius: 999px;
+    transition: width 0.6s ease, background-color 0.3s ease;
+}
+
+.meter-fill.warn { background: var(--warn); }
+.meter-fill.bad { background: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+    .meter-fill { transition: none; }
+}

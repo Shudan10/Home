@@ -1,0 +1,171 @@
+# Quick Start Home stack.
+#
+# This file is used by two different clients: the installer running on the host,
+# and the manager container running `docker compose` against the same stack.
+# That split decides how each path must be written:
+#
+#   volumes:       resolved by the Docker *daemon*, so they must be host paths
+#                  -> always ${STACK_DIR}/..., never relative.
+#   build.context: resolved by the *client* before upload, so it must be
+#                  relative -> ./nextcloud resolves to $STACK_DIR/nextcloud on
+#                  the host and to /stack/nextcloud inside the manager, both
+#                  correct.
+#
+# Getting either backwards produces mounts pointing at nothing.
+#
+# The optional apps publish no ports here on purpose -- the port mappings live
+# in the generated override at conf/apps-ports.yml so the web UI can toggle
+# them. Compose concatenates `ports` across files, so the base must leave the
+# list empty.
+
+name: quickstart-home
+
+services:
+  # ---- Nextcloud ------------------------------------------------------------
+  #
+  # Behind the "nextcloud" profile, so none of it exists until it is installed
+  # from the panel. Four containers: the app, its database, a Redis for file
+  # locking and caching, and Imaginary for image previews.
+  nextcloud-db:
+    image: mariadb:10.11
+    container_name: quickstart-home-nextcloud-db
+    hostname: nextcloud-db
+    profiles: ["nextcloud"]
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    environment:
+      MARIADB_ROOT_PASSWORD: ${NEXTCLOUD_DB_ROOT_PASSWORD:-}
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD: ${NEXTCLOUD_DB_PASSWORD:-}
+    volumes:
+      - nextcloud-db-data:/var/lib/mysql
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  nextcloud-redis:
+    image: redis:7-alpine
+    container_name: quickstart-home-nextcloud-redis
+    hostname: nextcloud-redis
+    profiles: ["nextcloud"]
+    restart: unless-stopped
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  # Generates image previews, including iPhone HEIC.
+  nextcloud-imaginary:
+    image: nextcloud/aio-imaginary:latest
+    container_name: quickstart-home-nextcloud-imaginary
+    hostname: nextcloud-imaginary
+    profiles: ["nextcloud"]
+    restart: unless-stopped
+    cap_add: ["SYS_NICE"]
+    environment:
+      IMAGINARY_SECRET: ${NEXTCLOUD_IMAGINARY_SECRET:-}
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  nextcloud:
+    image: quickstart-home/nextcloud:1
+    build:
+      context: ./nextcloud
+    container_name: quickstart-home-nextcloud
+    hostname: nextcloud
+    profiles: ["nextcloud"]
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: nextcloud-db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${NEXTCLOUD_DB_PASSWORD:-}
+      REDIS_HOST: nextcloud-redis
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-}
+      NEXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_TRUSTED_DOMAINS:-localhost}
+      # The docker bridge range, so Nextcloud believes the X-Forwarded-For the
+      # reverse proxy sets rather than logging every visitor as the proxy.
+      TRUSTED_PROXIES: 172.16.0.0/12
+    volumes:
+      - nextcloud-data:/var/www/html
+    networks:
+      - home
+    depends_on:
+      - nextcloud-db
+      - nextcloud-redis
+      - nextcloud-imaginary
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ---- The panel ------------------------------------------------------------
+  manager:
+    image: quickstart-home/manager:1
+    build:
+      context: ./manager
+    container_name: quickstart-home-manager
+    hostname: manager
+    restart: unless-stopped
+    environment:
+      STACK_DIR: ${STACK_DIR}
+      COMPOSE_PROJECT_NAME: quickstart-home
+      PROXY_CONTAINER: quickstart-home-proxy
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      STACK_REPO: ${STACK_REPO:-Shudan10/Home}
+      GUI_PORT: ${GUI_PORT:-8420}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${STACK_DIR}:/stack
+    ports:
+      - "${MANAGER_BIND:-0.0.0.0}:${GUI_PORT:-8420}:8080"
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Reverse proxy for domains and HTTPS. Behind a profile like the apps: it
+  # claims ports 80 and 443, which is rude on a machine that may already serve
+  # something there, and a stack with no domains does not need it.
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: quickstart-home-proxy
+    hostname: proxy
+    profiles: ["proxy"]
+    restart: unless-stopped
+    volumes:
+      - ${STACK_DIR}/proxy/conf.d:/etc/nginx/conf.d:ro
+      - ${STACK_DIR}/proxy/snippets:/etc/nginx/snippets:ro
+      - ${STACK_DIR}/proxy/letsencrypt:/etc/letsencrypt:ro
+      - ${STACK_DIR}/proxy/webroot:/var/www/certbot
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  home:
+    name: quickstart-home-net
+
+volumes:
+  nextcloud-db-data:
+    name: quickstart-home-nextcloud-db-data
+  nextcloud-data:
+    name: quickstart-home-nextcloud-data

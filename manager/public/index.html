@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Quick Start Home</title>
+<link rel="stylesheet" href="/style.css">
+<!-- A file, not an inline data URI: replace manager/public/favicon.svg to
+     change it and nothing here has to be edited. -->
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------ sign in -->
+<section id="login" class="login hidden">
+  <form class="login-card" id="login-form">
+    <div class="brand">Quick Start Home</div>
+    <p class="muted">Sign in to manage this server.</p>
+    <label>
+      Admin password
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="primary">Sign in</button>
+    <p class="error" id="login-error" hidden></p>
+    <p class="hint">The installer printed this password when it finished. Only a scrambled version of it is saved, so it cannot be read back out of the files.</p>
+  </form>
+</section>
+
+<!-- ---------------------------------------------------------------- app -->
+<div id="app" class="hidden">
+
+  <!--
+    Nav lives in the sidebar so sections can keep being added without the
+    horizontal room running out. Each entry is just a .nav-item with a data-tab
+    matching a <section id="tab-...">; groups are cosmetic.
+  -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <span class="brand">
+        <span class="label">Quick Start Home</span>
+      </span>
+      <button id="sidebar-toggle" class="icon-button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+    </div>
+
+    <nav class="nav" aria-label="Sections">
+      <div class="nav-row">
+        <button class="nav-item active" data-tab="overview" title="Overview">
+          <span class="nav-dot" data-health="overview"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
+          <span class="label">Overview</span>
+        </button>
+      </div>
+
+      <p class="nav-group-title">Apps</p>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="nextcloud" title="Nextcloud">
+          <span class="nav-dot" data-health="nextcloud"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.5a3.5 3.5 0 00-.7-6.9 5.5 5.5 0 00-10.5-1.2A4.2 4.2 0 006 16.5z"/><circle cx="12" cy="12.5" r="2.2"/></svg>
+          <span class="label">Nextcloud</span>
+        </button>
+        <label class="switch mini" title="Start or stop Nextcloud">
+          <input type="checkbox" data-service="nextcloud" aria-label="Start or stop Nextcloud">
+          <span class="track"></span>
+        </label>
+      </div>
+
+      <p class="nav-group-title">Network</p>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="proxy" title="Proxy &amp; domains">
+          <span class="nav-dot" data-health="proxy"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18z"/></svg>
+          <span class="label">Proxy &amp; domains</span>
+        </button>
+        <label class="switch mini" title="Start or stop the reverse proxy">
+          <input type="checkbox" data-service="proxy" aria-label="Start or stop the reverse proxy">
+          <span class="track"></span>
+        </label>
+      </div>
+
+      <p class="nav-group-title">System</p>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="logs" title="All logs">
+          <span class="nav-dot" data-health="logs"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h4"/></svg>
+          <span class="label">All logs</span>
+        </button>
+      </div>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="global" title="Global settings">
+          <span class="nav-dot" data-health="global"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.6 1.7 1.7 0 00-1.9.4l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.7 9a1.7 1.7 0 00-.4-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
+          <span class="label">Global settings</span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <span id="auth-note" class="badge local" hidden
+            title="No admin password is set, so anyone who can reach this port has full control of this machine's Docker daemon. Set one under Global settings.">no password</span>
+      <span id="version-badge" class="badge">–</span>
+      <button id="logout" class="ghost" hidden>Sign out</button>
+    </div>
+  </aside>
+
+  <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+
+  <div class="content">
+    <header class="topbar">
+      <button id="sidebar-open" class="icon-button" aria-label="Open menu" title="Menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <h1 id="page-title">Overview</h1>
+    </header>
+
+    <main>
+
+    <!-- -------------------------------------------------------- overview -->
+    <!--
+      The landing page is about the machine rather than any one app: a home
+      server has no single number worth putting in the middle of a screen, and
+      the thing that actually goes wrong is the disk filling up.
+    -->
+    <section id="tab-overview" class="tab active">
+      <div class="grid">
+
+        <article class="card">
+          <h3>Storage</h3>
+          <p class="muted">The disk your apps write to. Nextcloud fills this one.</p>
+          <div class="meter-row">
+            <span class="meter-pct" id="ov-disk-pct">–</span>
+            <div class="meter"><span class="meter-fill" id="ov-disk-bar"></span></div>
+          </div>
+          <p class="hint" id="ov-disk-detail">–</p>
+        </article>
+
+        <article class="card">
+          <h3>Memory</h3>
+          <p class="muted">What the machine is using right now, across everything on it.</p>
+          <div class="meter-row">
+            <span class="meter-pct" id="ov-mem-pct">–</span>
+            <div class="meter"><span class="meter-fill" id="ov-mem-bar"></span></div>
+          </div>
+          <p class="hint" id="ov-mem-detail">–</p>
+        </article>
+
+        <article class="card span2">
+          <h3>Services</h3>
+          <p class="muted">
+            Every container this stack can run. Anything not installed is simply
+            not installed: it is not a fault, and switching it on is done from
+            its own tab.
+          </p>
+          <table class="proxies">
+            <thead>
+              <tr><th>Service</th><th>Status</th><th>Uptime</th></tr>
+            </thead>
+            <tbody id="ov-containers"></tbody>
+          </table>
+        </article>
+
+        <article class="card span2">
+          <h3>This machine</h3>
+          <dl class="kv">
+            <div><dt>Hostname</dt><dd id="ov-hostname">–</dd></div>
+            <div><dt>System</dt><dd id="ov-platform">–</dd></div>
+            <div><dt>Processor</dt><dd id="ov-cpus">–</dd></div>
+            <div><dt>Uptime</dt><dd id="ov-uptime">–</dd></div>
+            <div class="wide"><dt>Load average</dt><dd id="ov-load" class="mono">–</dd></div>
+          </dl>
+          <p class="hint">
+            Load average is the one, five and fifteen minute figures the kernel
+            reports. Roughly, anything below the number of cores means nothing is
+            waiting its turn.
+          </p>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- nextcloud -->
+    <section id="tab-nextcloud" class="tab">
+      <nav class="subnav" aria-label="Nextcloud">
+        <button class="subtab-btn active" data-subtab="nextcloud-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="nextcloud-settings">Settings</button>
+        <button class="subtab-btn" data-subtab="nextcloud-updates">Updates</button>
+        <button class="subtab-btn" data-subtab="nextcloud-uninstall">Uninstall</button>
+      </nav>
+
+      <div id="sub-nextcloud-overview" class="subtab active">
+        <div class="grid">
+          <!-- Left: running it, and getting into it. -->
+          <article class="card">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <strong>Run Nextcloud</strong>
+                <span class="muted">Starts Nextcloud with its database, cache and preview generator.</span>
+              </div>
+              <span id="nextcloud-state" class="tag">off</span>
+            </div>
+            <div id="nextcloud-notice" class="verdict" hidden></div>
+            <p class="error" id="nextcloud-error" hidden></p>
+
+            <div class="node-section" id="nextcloud-open-card">
+              <h3>Open it</h3>
+              <div id="nextcloud-link" class="verdict" hidden></div>
+              <p class="hint">
+                Sign in as the admin user with the password generated when it was
+                installed. Both are on the Settings tab, where you can also change
+                the password.
+              </p>
+            </div>
+          </article>
+
+          <!-- Right: what it is, for anyone who has not switched it on yet. -->
+          <article class="card">
+            <h3>Nextcloud</h3>
+            <p class="muted">
+              Your own cloud for files, photos, calendars and contacts, running on
+              this machine and nobody else's. Video thumbnails and iPhone HEIC
+              previews are already set up for you.
+            </p>
+            <p class="hint">
+              It runs with its own database and cache, and stays off until you
+              switch it on. Nothing else in this stack depends on it.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-nextcloud-settings" class="subtab">
+        <div class="grid">
+          <!--
+            Access and Apply share the left column so Apply fills the space
+            under a short Access card, instead of waiting for the taller
+            password card beside it and leaving a hole.
+          -->
+          <div class="col">
+            <article class="card">
+              <h3>Access</h3>
+              <label class="check"><input type="checkbox" id="nextcloud-pub-web"> Publish on the host</label>
+              <label class="inline">Port <input type="number" id="nextcloud-port" min="1024" max="65535"></label>
+              <label class="inline">Admin user <input id="nextcloud-user"></label>
+              <label>Trusted domains
+                <input id="nextcloud-domains" placeholder="localhost cloud.example.com">
+              </label>
+              <p class="hint">
+                Nextcloud turns away requests for names it has not been told about.
+                Publishing it on a domain from the Proxy tab adds that name here
+                for you; this is where to add any others, separated by spaces.
+              </p>
+            </article>
+            <article class="card span2">
+              <h3>Apply</h3>
+              <p class="muted">Changes here restart Nextcloud.</p>
+              <div class="row">
+                <button type="button" id="nextcloud-save" class="primary">Apply settings</button>
+                <button type="button" class="ghost" data-app-action="nextcloud/restart">Restart</button>
+              </div>
+            </article>
+          </div>
+
+          <article class="card">
+            <h3>Admin password</h3>
+            <p class="muted">
+              Generated when Nextcloud was installed. This is the password for the
+              admin user above, and the panel is the only place it is shown.
+            </p>
+            <div class="row">
+              <input id="nextcloud-pass" type="password" size="26" readonly>
+              <button type="button" id="nextcloud-pass-show" class="ghost">Show</button>
+              <button type="button" id="nextcloud-pass-copy" class="ghost">Copy</button>
+            </div>
+            <label class="stack">Change it
+              <span class="row">
+                <input id="nextcloud-pass-new" type="password" size="26" placeholder="at least 10 characters">
+                <button type="button" id="nextcloud-pass-save" class="primary">Set new password</button>
+              </span>
+            </label>
+            <p class="hint">
+              This changes it inside Nextcloud straight away and remembers the new
+              one here. Anyone already signed in stays signed in.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-nextcloud-updates" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Updates</h3>
+            <p class="muted">
+              Nextcloud is built here from the official <code>nextcloud:stable</code>
+              image with ffmpeg added for video thumbnails. Updating pulls the
+              newest stable image and rebuilds on top of it. Your files and
+              database live on their own volumes, so a rebuild leaves them alone.
+            </p>
+            <div id="nextcloud-build" class="verdict"></div>
+            <div class="row">
+              <button type="button" id="nextcloud-update" class="primary">Update Nextcloud</button>
+            </div>
+            <p class="hint">
+              Nextcloud upgrades its own database schema on first start after an
+              image change, so give it a minute before signing in. It is worth
+              taking a copy of anything irreplaceable first.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-nextcloud-uninstall" class="subtab">
+        <div class="grid">
+          <article class="card span2 uninstall-card" data-uninstall="nextcloud"></article>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ----------------------------------------------------------- proxy -->
+    <section id="tab-proxy" class="tab">
+      <!--
+        One card: what it is, and the switch that starts it. Three stacked cards
+        for a single switch read as three separate things, and left most of the
+        page empty while it was off.
+      -->
+      <article class="card proxy-intro">
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <strong>Proxy and domains</strong>
+            <span class="muted">
+              Gives your apps a proper web address instead of an IP and a port
+              number, with free HTTPS.
+            </span>
+          </div>
+          <span id="proxy-state" class="tag">off</span>
+        </div>
+        <p class="hint">
+          It takes ports 80 and 443 on this machine, so it stays off until you
+          ask for it. Leave it off if something else here already uses them.
+          Switch it on to add domains and certificates.
+        </p>
+        <p class="error" id="proxy-error" hidden></p>
+      </article>
+
+      <div class="grid" id="proxy-config">
+        <article class="card span2">
+          <h3>Public addresses</h3>
+          <p class="muted">
+            Everything here can have a web address of its own.
+            <strong>Set up</strong> walks the whole thing: a free DuckDNS name,
+            whatever the service needs switched on, the nginx configuration, and
+            an HTTPS certificate.
+          </p>
+          <!--
+            The one requirement nothing here can arrange for you, and the reason
+            most setups fail at the certificate. It is stated before the table
+            rather than in the failure, because by then the work has been done.
+          -->
+          <div class="notice" id="ports-notice">
+            <p>
+              <strong>The outside has to reach this machine somewhere.</strong>
+              By default that means forwarding ports 80 and 443 to it on your
+              router. Nothing outside your network can open these addresses
+              until something does.
+            </p>
+            <p>
+              If 80 and 443 already belong to something else, forward two other
+              outside ports to this machine instead and set them here. The check
+              below then tests those rather than 80 and 443. Certificates work
+              either way: a DuckDNS name is proved with a DNS record rather than
+              an inbound request, so it needs no open port at all. Addresses
+              then carry the port, as
+              <code>https://yourname.duckdns.org:8443</code>.
+            </p>
+            <div class="row">
+              <label class="inline">Outside http <input type="number" id="ports-http" min="1" max="65535" value="80" size="5"></label>
+              <label class="inline">Outside https <input type="number" id="ports-https" min="1" max="65535" value="443" size="5"></label>
+              <span class="muted">what the internet dials</span>
+            </div>
+            <div class="row">
+              <label class="inline">On this machine <input type="number" id="ports-bind-http" min="1" max="65535" value="80" size="5"></label>
+              <label class="inline">and <input type="number" id="ports-bind-https" min="1" max="65535" value="443" size="5"></label>
+              <span class="muted">what nginx binds here, and what a forwarding rule points at</span>
+              <button id="ports-save" class="ghost">Save ports</button>
+            </div>
+            <p class="hint">
+              Usually the same numbers on both rows. They differ when a router
+              maps one to the other, and when it cannot, set this row to match
+              the rule. Changing what nginx binds restarts the proxy.
+            </p>
+            <p class="hint">
+              This connection looks like <code id="public-ip">…</code> from the
+              outside. That is the address a domain has to point at, and it is
+              the one DuckDNS publishes for you.
+            </p>
+            <div class="row">
+              <button id="ports-check" class="ghost">Check from outside</button>
+              <span class="muted" id="ports-check-note">Asks check-host.net to try connecting to your address. It sees your public IP.</span>
+            </div>
+            <div id="ports-check-result" hidden></div>
+          </div>
+          <table class="proxies publish-table">
+            <thead>
+              <tr><th>Service</th><th>Status</th><th>Public address</th><th></th></tr>
+            </thead>
+            <tbody id="publish-body"></tbody>
+          </table>
+          <p class="hint">
+            A service that is switched off can still be given an address: nginx
+            serves it either way and it starts answering the moment the service
+            does.
+          </p>
+          <div class="row proxy-tools">
+            <span class="muted" id="duck-status">–</span>
+            <span class="spacer"></span>
+            <button id="dd-now" class="ghost" title="Tell DuckDNS this machine's address right now, rather than waiting for the next check.">Refresh DNS</button>
+            <button id="proxy-renew" class="ghost" title="Renew every Let's Encrypt certificate that is close to expiring.">Renew certificates</button>
+            <button id="proxy-reload" class="ghost" title="Rewrite every vhost from the saved configuration and reload nginx.">Re-apply nginx config</button>
+          </div>
+        </article>
+      </div>
+
+      <div class="grid">
+        <article class="card span2 uninstall-card" data-uninstall="proxy"></article>
+      </div>
+
+    </section>
+
+    <!-- ------------------------------------------------------------ logs -->
+    <section id="tab-logs" class="tab">
+      <div class="logs-toolbar">
+        <label class="check" title="Jump to the newest line as it arrives. Untick to scroll back through history without being pulled to the bottom."><input type="checkbox" id="log-follow" checked> auto-scroll</label>
+        <input id="log-filter" placeholder="filter lines…" size="18">
+        <span class="muted" id="logs-note"></span>
+      </div>
+      <!-- One tile per container, all fed by a single multiplexed stream. -->
+      <div class="log-grid" id="log-grid"></div>
+    </section>
+
+    <!-- -------------------------------------------------- global settings -->
+    <section id="tab-global" class="tab">
+      <div class="grid">
+
+        <article class="card span2" id="password-card">
+          <h3>Admin password</h3>
+          <p class="muted" id="password-state">–</p>
+          <div class="row">
+            <label class="inline" id="password-current-row" hidden>
+              Current <input id="password-current" type="password" size="16" autocomplete="current-password">
+            </label>
+            <label class="inline">New <input id="password-new" type="password" size="18" autocomplete="new-password"></label>
+            <label class="inline">Repeat <input id="password-repeat" type="password" size="18" autocomplete="new-password"></label>
+            <button id="password-save" class="primary">Save</button>
+            <button id="password-clear" class="ghost danger" hidden>Remove it</button>
+          </div>
+          <p class="hint">
+            This panel drives the Docker daemon, which is root on this machine,
+            and it listens on your whole network so you can open it from a phone
+            or a laptop. The password is what makes that safe, and it is required
+            before the panel itself can go on a domain. Saving restarts the
+            panel, which takes a few seconds; the proxy and every app keep
+            running throughout.
+          </p>
+          <p class="hint" id="password-result" hidden></p>
+        </article>
+
+        <article class="card span2">
+          <h3>Panel address</h3>
+          <p class="muted" id="panel-port-state">–</p>
+          <div class="row">
+            <label class="inline">Port <input type="number" id="panel-port" min="1" max="65535" size="6"></label>
+            <button id="panel-port-save" class="ghost">Move the panel</button>
+          </div>
+          <p class="hint">
+            Worth moving if you want something else on this port instead. The
+            panel restarts and this page follows it to the new address; nothing
+            else is affected.
+          </p>
+          <p class="hint" id="panel-port-result" hidden></p>
+        </article>
+
+        <article class="card span2">
+          <h3>Update the control panel</h3>
+          <p class="muted">
+            This updates the panel itself, not the apps it runs. It downloads the
+            latest files, rebuilds the panel image and restarts it. Your
+            settings, certificates and app data are untouched, and everything
+            else keeps running throughout.
+          </p>
+          <dl class="kv">
+            <div><dt>Installed</dt><dd id="global-panel-version">–</dd></div>
+            <div><dt>Install directory</dt><dd id="global-stack-dir">–</dd></div>
+          </dl>
+          <label class="inline">Source
+            <input id="global-repo" value="Shudan10/Home" size="30">
+          </label>
+          <label class="inline">Branch or tag
+            <input id="global-ref" value="main" size="16">
+          </label>
+          <div class="row">
+            <button id="global-check-btn" class="ghost">Check for update</button>
+            <button id="global-update-btn" class="primary">Update the panel</button>
+          </div>
+          <p class="hint" id="global-check-status">Checked against GitHub when you ask, never on its own.</p>
+          <p class="hint">
+            The panel goes offline for a minute or two while it rebuilds. This
+            page will say so and come back on its own.
+          </p>
+          <div id="global-update-result" class="verdict" hidden></div>
+        </article>
+
+        <article class="card span2 danger-zone">
+          <h3>Remove everything</h3>
+          <p class="muted">
+            Deletes every container, image, volume, network and file this stack
+            created, including this panel. Docker itself is left installed, along
+            with anything else you run on it.
+          </p>
+          <ul class="plain">
+            <li>Every file, photo and calendar stored in Nextcloud goes with it.</li>
+            <li>Base images shared with your other projects are skipped
+              automatically rather than pulled out from under them.</li>
+            <li>One small helper image (<code>docker:cli</code>) is fetched to do
+              the removing, and is the one thing left behind, because it cannot
+              delete the image it is running from. Clear it with
+              <code>docker rmi docker:cli</code>.</li>
+            <li>There is no undo, and no cancelling once it starts. The log
+              appears on screen and runs until this panel is removed.</li>
+          </ul>
+          <label class="stack">Type <code>DELETE EVERYTHING</code> to confirm
+            <span class="row">
+              <input id="global-teardown-confirm" placeholder="DELETE EVERYTHING" size="24" autocomplete="off">
+              <button type="button" id="global-teardown-btn" class="danger" disabled>Remove everything</button>
+            </span>
+          </label>
+        </article>
+
+      </div>
+    </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ---------------------------------------------------------- setup wizard -->
+<dialog id="setup-dialog" class="wide">
+  <form method="dialog" id="setup-form">
+    <h3 id="setup-title">Set up a public address</h3>
+
+    <!-- 0: which name ------------------------------------------------------ -->
+    <section class="setup-step" data-step="0" hidden>
+      <p class="step-head"><span class="step-num">1</span> Which address?</p>
+      <p class="muted">You have names on this panel already. Use one of those, or make another.</p>
+      <div id="setup-domain-list" class="domain-choices"></div>
+    </section>
+
+    <!-- 1: the name ------------------------------------------------------- -->
+    <section class="setup-step" data-step="1">
+      <p class="step-head"><span class="step-num">1</span> Create a free DuckDNS name</p>
+      <p class="muted">
+        DuckDNS gives you a name like <code>myhome.duckdns.org</code> and keeps
+        it pointed at this machine even when your home connection changes
+        address. It is free and needs no card.
+      </p>
+      <ol class="steps">
+        <li>Open <a href="https://www.duckdns.org/" target="_blank" rel="noreferrer noopener">duckdns.org ↗</a> and sign in with an account you already have.</li>
+        <li>Type a name into the <strong>domain</strong> box and press <strong>add domain</strong>.</li>
+        <li>Copy the <strong>token</strong> shown at the top of that page. It is the password for the name.</li>
+      </ol>
+      <label class="inline">
+        Your name
+        <input id="setup-subdomain" placeholder="myhome" size="18" autocomplete="off">
+        <span class="suffix">.duckdns.org</span>
+      </label>
+      <p class="hint" id="setup-ip">–</p>
+    </section>
+
+    <!-- 2: the token ------------------------------------------------------ -->
+    <section class="setup-step" data-step="2" hidden>
+      <p class="step-head"><span class="step-num">2</span> Paste the token</p>
+      <p class="muted">
+        The panel keeps the name current from here on, so this is the only time
+        you need it. It is stored on this machine and never leaves it except to
+        talk to DuckDNS.
+      </p>
+      <label class="inline" id="setup-token-row">Token <input id="setup-token" type="password" size="32" autocomplete="off" placeholder="from duckdns.org"></label>
+      <p class="hint" id="setup-token-note" hidden>A token is already saved. Leave this blank to keep it.</p>
+    </section>
+
+    <!-- 3: what it will do ------------------------------------------------ -->
+    <section class="setup-step" data-step="3" hidden>
+      <p class="step-head"><span class="step-num">3</span> What this will do</p>
+      <p class="muted" id="setup-summary">–</p>
+      <ul class="plan" id="setup-plan"></ul>
+
+      <details class="protect">
+        <summary>Lock it down (optional)</summary>
+        <p class="muted">
+          Both of these apply to this address only, and either can be changed
+          later without redoing any of the above.
+        </p>
+        <label class="check">
+          <input type="checkbox" id="setup-auth"> Ask for a username and password
+        </label>
+        <div class="row" id="setup-auth-fields" hidden>
+          <label class="inline">User <input id="setup-auth-user" size="14" autocomplete="off"></label>
+          <label class="inline">Password <input id="setup-auth-pass" type="password" size="18" autocomplete="new-password"></label>
+        </div>
+        <label class="inline">
+          Only allow these addresses
+          <input id="setup-allowlist" size="28" placeholder="203.0.113.4, 10.0.0.0/24">
+        </label>
+        <p class="hint">Leave the address list empty to let anyone reach it.</p>
+      </details>
+
+      <p class="hint" id="setup-after"></p>
+      <p class="error" id="setup-error" hidden></p>
+    </section>
+
+    <menu>
+      <button type="button" class="ghost" id="setup-back">Back</button>
+      <button type="button" class="primary" id="setup-next">Next</button>
+      <button type="button" class="primary" id="setup-run" hidden>Set it up</button>
+      <button value="cancel" class="ghost">Cancel</button>
+    </menu>
+  </form>
+</dialog>
+
+<!-- ---------------------------------------------------------- proxy dialog -->
+<dialog id="proxy-dialog">
+  <form method="dialog" id="proxy-form">
+    <div class="dialog-head">
+      <h3 id="proxy-dialog-title">Add proxy host</h3>
+      <!-- formnovalidate: closing is not submitting, and the domain field is
+           required, which would otherwise refuse to let the dialog go. -->
+      <button value="cancel" class="dialog-close" formnovalidate aria-label="Close">&times;</button>
+    </div>
+
+    <label>Domain
+      <input id="px-domain" placeholder="myhome.duckdns.org" required>
+    </label>
+
+    <label>Forwards to
+      <select id="px-target"></select>
+    </label>
+
+    <div id="px-custom" class="row" hidden>
+      <label>Scheme
+        <select id="px-scheme"><option>http</option><option>https</option></select>
+      </label>
+      <label>Host <input id="px-host" placeholder="127.0.0.1"></label>
+      <label>Port <input id="px-port" type="number" min="1" max="65535"></label>
+      <label class="check"><input type="checkbox" id="px-websocket"> websocket</label>
+    </div>
+
+    <fieldset>
+      <legend>HTTPS</legend>
+      <label class="check"><input type="checkbox" id="px-tls"> Get a free certificate from Let's Encrypt</label>
+      <label class="inline">Contact e-mail <input id="px-email" type="email" placeholder="you@example.com"></label>
+      <label class="check"><input type="checkbox" id="px-forcehttps" checked> Redirect http → https</label>
+      <label class="check"><input type="checkbox" id="px-staging"> Use the staging CA (for testing)</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Access control</legend>
+      <label class="check"><input type="checkbox" id="px-auth"> Require a username and password</label>
+      <div class="row">
+        <label>User <input id="px-user" autocomplete="off"></label>
+        <label>Password <input id="px-pass" type="password" autocomplete="new-password" placeholder="unchanged"></label>
+      </div>
+      <label>Allow only these IPs / CIDRs
+        <textarea id="px-allow" rows="2" placeholder="one per line, leave empty to allow everyone"></textarea>
+      </label>
+      <label class="inline">Rate limit <input type="number" id="px-rate" min="1" placeholder="off" size="5"> req/s per IP</label>
+    </fieldset>
+
+    <label class="check"><input type="checkbox" id="px-enabled" checked> Enabled</label>
+
+    <p class="error" id="px-error" hidden></p>
+    <div class="row end">
+      <button value="save" class="primary" id="px-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Installing, starting, stopping and uninstalling all take over the screen
+     while they run. Two reasons: the log is the only thing worth looking at
+     until it finishes, and docker is one machine -- a build, a stop and an
+     uninstall queued on top of each other take longer and read as a panel that
+     ignored the click. There is no way out of this until the job is done. -->
+<div id="action-overlay" class="action-overlay" hidden>
+  <div class="action-card" role="dialog" aria-modal="true" aria-labelledby="action-title" aria-live="polite">
+    <header class="action-head">
+      <span class="spinner" id="action-spinner"></span>
+      <h3 id="action-title">Working</h3>
+    </header>
+    <p class="muted" id="action-note"></p>
+    <pre class="logview action-log" id="action-log"></pre>
+    <div class="action-foot">
+      <div class="action-bar" id="action-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <span id="action-bar-fill"></span>
+      </div>
+      <span class="muted mono" id="action-elapsed"></span>
+      <button class="ghost danger" id="action-cancel" hidden>Cancel</button>
+      <button class="primary" id="action-close" disabled hidden>Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
