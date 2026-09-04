@@ -1496,6 +1496,15 @@ $('ports-check').addEventListener('click', async () => {
             r.local.publishesHttp && r.local.publishesHttps
                 ? `It holds ports ${bound} on this machine.`
                 : `It is missing ${[!r.local.publishesHttp && r.local.bindHttp, !r.local.publishesHttps && r.local.bindHttps].filter(Boolean).join(' and ')} on this machine.`));
+
+        // Holding the port and answering on it are different things, and only
+        // the second one is what anybody means. An SSL listener needs a
+        // certificate to present, so until one exists nginx is not on 443 at
+        // all and the published port leads nowhere. Neutral rather than red:
+        // this is a stage of setting up, not a fault.
+        rows.push(line(r.local.servesHttps ? true : null, r.local.servesHttps
+            ? `nginx is listening for https on ${r.local.bindHttps}.`
+            : `nginx is not serving https yet, because no certificate exists to present. Port ${r.local.bindHttps} is published but nothing answers on it until Set up issues one.`));
         rows.push(line(r.local.servesChallenge, r.local.servesChallenge
             ? "It serves the file Let's Encrypt asks for."
             : "It did not serve the file Let's Encrypt asks for, which is the thing to fix first."));
@@ -1504,6 +1513,15 @@ $('ports-check').addEventListener('click', async () => {
             for (const key of ['http', 'https']) {
                 const p = r.outside[key];
                 const port = p.port;
+
+                // Not asked, because there is nothing listening to answer. A
+                // red cross here would be describing the certificate that does
+                // not exist yet, not the forwarding rule.
+                if (key === 'https' && p.serving === false) {
+                    rows.push(line(null, `Port ${port}: not checked, because nothing is serving https yet. It cannot pass until there is a certificate.`));
+                    continue;
+                }
+
                 // Port 80 is always identified -- the check fetches a file
                 // from this machine. Port 443 only once a certificate exists,
                 // and saying which is which is the difference between "it
@@ -1528,19 +1546,42 @@ $('ports-check').addEventListener('click', async () => {
             rows.push(line(null, `Could not check from outside: ${r.error ?? 'unknown reason'}.`));
         }
 
+        const httpsPending = r.outside?.https?.serving === false;
         const bothOpen = r.outside && r.outside.http?.open && r.outside.https?.open;
-        // A DuckDNS name is proved with a TXT record, so a closed http port
-        // costs the ability to serve plain http and nothing else. Reporting
-        // that as a failure would send someone into their router for no reason.
-        const certNote = r.dnsChallenge
-            ? ' Certificates do not depend on any of this: your DuckDNS name is proved with a DNS record.'
-            : " Let's Encrypt validates over port 80, so that one has to reach this machine before a certificate can be issued.";
 
-        const verdict = bothOpen
-            ? `<p class="muted">Both ports reach this machine.${certNote}</p>`
-            : r.outside && r.local.servesChallenge
-              ? `<p class="muted">This machine is set up correctly, so what is missing is the forwarding. Two numbers per rule, and they are not the same one: the outside port is what the internet dials, the forward port is what this machine listens on. On your router, external <strong>${escapeHtml(String(r.outside.http.port))}</strong> to this machine on port <strong>${escapeHtml(String(r.local.bindHttp))}</strong>, and external <strong>${escapeHtml(String(r.outside.https.port))}</strong> to port <strong>${escapeHtml(String(r.local.bindHttps))}</strong>. A rule that forwards ${escapeHtml(String(r.outside.http.port))} to ${escapeHtml(String(r.outside.http.port))} arrives at a port nothing is bound to.${certNote}</p>`
-              : '';
+        /*
+         * What this check does and does not say about certificates.
+         *
+         * Three different situations, and the wrong sentence in any of them
+         * sends somebody into their router for no reason. With no domain yet
+         * there is nothing to certify and nothing to conclude. With a DuckDNS
+         * name the challenge is a TXT record, so no port is involved at all --
+         * which is the case the old wording got flatly backwards, telling
+         * people port 80 had to be open when it did not. Only a name that is
+         * not DuckDNS actually needs port 80 inbound.
+         */
+        const certNote = !r.local.hasDomain
+            ? ' No domain is set up yet, so there is nothing to certify. Set up creates the name, the configuration and the certificate together.'
+            : r.dnsChallenge
+              ? ' Certificates do not depend on any of this: your DuckDNS name is proved with a DNS record, not an inbound request.'
+              : " This name is not a DuckDNS one, so Let's Encrypt proves it by fetching a file over port 80. That port has to reach this machine before a certificate can be issued.";
+
+        // The forwarding advice is only worth giving about a port that is
+        // supposed to be answering. Naming the https port while nothing is
+        // listening on it describes a rule that is not the problem.
+        const forwardAdvice = httpsPending
+            ? `On your router, external <strong>${escapeHtml(String(r.outside.http.port))}</strong> should point to this machine on port <strong>${escapeHtml(String(r.local.bindHttp))}</strong>. Leave the https rule until there is a certificate; it cannot be tested before then.`
+            : `Two numbers per rule, and they are not the same one: the outside port is what the internet dials, the forward port is what this machine listens on. On your router, external <strong>${escapeHtml(String(r.outside?.http?.port))}</strong> to this machine on port <strong>${escapeHtml(String(r.local.bindHttp))}</strong>, and external <strong>${escapeHtml(String(r.outside?.https?.port))}</strong> to port <strong>${escapeHtml(String(r.local.bindHttps))}</strong>.`;
+
+        let verdict = '';
+        if (bothOpen) {
+            verdict = `<p class="muted">Both ports reach this machine.${certNote}</p>`;
+        } else if (httpsPending && r.outside?.http?.open) {
+            // The good outcome at this stage, and it used to read as a failure.
+            verdict = `<p class="muted">Everything that can work yet does. Port ${escapeHtml(String(r.outside.http.port))} reaches this machine, and https is waiting on a certificate rather than on your router.${certNote}</p>`;
+        } else if (r.outside && r.local.servesChallenge) {
+            verdict = `<p class="muted">This machine is set up correctly, so what is missing is the forwarding. ${forwardAdvice}${certNote}</p>`;
+        }
 
         out.innerHTML = `<ul class="port-result">${rows.join('')}</ul>${verdict}`;
     } catch (e) {

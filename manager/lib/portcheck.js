@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { hasCertificate } from './nginx.js';
 import { selfTest } from './certbot.js';
-import { WEBROOT_DIR } from './paths.js';
+import { NGINX_CONF_D, WEBROOT_DIR } from './paths.js';
 import { publicIp } from './duckdns.js';
 import { containerState, publishedPorts, PROXY_CONTAINER } from './dockerctl.js';
 
@@ -122,6 +122,32 @@ async function probeChallenge(target, { scheme = 'http' } = {}) {
 }
 
 /**
+ * Whether nginx is actually serving https, which is not the same question as
+ * whether the https port is published.
+ *
+ * An SSL listener needs a certificate to present, so the panel only writes the
+ * `listen 443` block once one exists for a name. Until then docker still
+ * publishes the port and forwards it into the container, where nothing is
+ * listening -- so every connection is refused, from outside and from this
+ * machine alike.
+ *
+ * Reporting the published port as though it were a working one made a normal
+ * stage of setup look like a broken router. Read from what was actually
+ * written, rather than inferred from the certificates, so it says what nginx
+ * is doing rather than what it ought to be doing.
+ */
+function servesHttps() {
+    try {
+        return fs
+            .readdirSync(NGINX_CONF_D)
+            .filter((f) => f.endsWith('.conf'))
+            .some((f) => /^\s*listen\s+443\b/m.test(fs.readFileSync(path.join(NGINX_CONF_D, f), 'utf8')));
+    } catch {
+        return false;
+    }
+}
+
+/**
  * The whole picture: what this machine does, and what the internet can see.
  *
  * The local half is the more useful one when something is wrong, because it
@@ -149,10 +175,17 @@ export async function check(domain = null, { httpPort = 80, httpsPort = 443, bin
         bindHttps,
         publishesHttp: listening.has(String(bindHttp)),
         publishesHttps: listening.has(String(bindHttps)),
+        // Published is not the same as listening. Kept apart so the panel can
+        // stop reporting a green tick for a port nothing answers on.
+        servesHttps: servesHttps(),
         // Serves the file Let's Encrypt will ask for, which is the thing that
         // actually has to work on port 80.
         servesChallenge: state.running ? (await selfTest(domain ?? 'localhost')).ok : false,
         certificate: domain ? hasCertificate(domain) : null,
+        // Whether there is a name set up at all. Without one there is nothing
+        // for https to serve and nothing for a certificate to be issued for,
+        // which changes what every other line here means.
+        hasDomain: Boolean(domain),
     };
 
     if (!ip) return { ip: null, local, outside: null, error: 'Could not work out this connection\'s public address.' };
@@ -169,13 +202,22 @@ export async function check(domain = null, { httpPort = 80, httpsPort = 443, bin
         // and reported a closed port that nothing was supposed to be using.
         const identifyHttps = Boolean(domain) && hasCertificate(domain);
         const httpsTarget = identifyHttps ? `${domain}:${httpsPort}` : null;
-        const [http, https] = await Promise.all([
-            probeChallenge(`${ip}:${httpPort}`),
-            identifyHttps ? probeChallenge(httpsTarget, { scheme: 'https' }) : probeTcp(ip, httpsPort),
-        ]);
+
+        // Nothing is listening on 443 yet, so there is nothing to learn by
+        // asking the internet to connect to it: the answer is "refused" and it
+        // says nothing about the router. Skipped rather than reported as a
+        // failure, which is what sent people to check forwarding rules that
+        // were already correct.
+        const httpsProbe = !local.servesHttps
+            ? Promise.resolve({ open: null, serving: false, detail: 'nothing is serving https yet', link: null })
+            : identifyHttps
+              ? probeChallenge(httpsTarget, { scheme: 'https' })
+              : probeTcp(ip, httpsPort);
+
+        const [http, https] = await Promise.all([probeChallenge(`${ip}:${httpPort}`), httpsProbe]);
         outside = {
             http: { ...http, port: httpPort },
-            https: { ...https, port: httpsPort, identified: identifyHttps },
+            https: { serving: local.servesHttps, ...https, port: httpsPort, identified: identifyHttps },
         };
     } catch (err) {
         error = err.message;
