@@ -167,10 +167,13 @@ const proxyEnabled = () => loadManagerConfig().proxy.enabled === true;
  * else, and it keeps working if that ever changes.
  */
 function duckdnsFor(domain) {
-    const name = String(domain || '').toLowerCase();
-    if (!name.endsWith('.duckdns.org')) return null;
+    // The registered account, not the hostname: cloud.restohome.duckdns.org is
+    // served by the account `restohome`, and that is the only name the update
+    // API will accept.
+    const account = duckdns.duckdnsAccount(domain);
+    if (!account) return null;
     const token = loadManagerConfig().duckdns.token;
-    return token ? { subdomain: name.slice(0, -'.duckdns.org'.length), token } : null;
+    return token ? { subdomain: account, token } : null;
 }
 
 /**
@@ -1059,10 +1062,34 @@ route('POST', /^\/api\/setup\/([a-z]+)$/, async (req, res, match) => {
     const existing = body.domain ? loadDomains().find((d) => d.domain === String(body.domain).trim().toLowerCase()) : null;
     if (body.domain && !existing) return fail(res, 400, `${body.domain} is not one of your domains.`);
 
-    const [subdomain] = existing ? [null] : duckdns.normalizeDomains(body.subdomain);
-    if (!existing && (!subdomain || !/^[a-z0-9-]{1,63}$/.test(subdomain))) {
-        return fail(res, 400, 'Enter the DuckDNS subdomain you created, without the .duckdns.org.');
+    /*
+     * The name as typed, which may carry subdomains in front of the registered
+     * one: `restohome`, or `cloud.restohome`. DuckDNS answers for every label
+     * beneath a name it holds, at no cost and with nothing to configure, so
+     * giving each app its own hostname is better than sharing one on paths --
+     * a subpath has to be understood by the app behind it, and a hostname does
+     * not.
+     *
+     * Not run through normalizeDomains: that reduces a name to its account,
+     * which is right for the refresh list and would silently drop the `cloud.`
+     * from the hostname being published here.
+     */
+    const typed = existing
+        ? null
+        : String(body.subdomain || '')
+              .trim()
+              .toLowerCase()
+              .replace(/\.duckdns\.org\.?$/, '')
+              .replace(/^\.+|\.+$/g, '');
+    // Up to three labels: the registered name plus a little room in front of
+    // it. Each label is what DNS allows, and the whole thing has to end
+    // somewhere sane rather than accept an arbitrary depth.
+    const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+    if (!existing && (!typed || !new RegExp(`^${LABEL}(?:\\.${LABEL}){0,2}$`).test(typed))) {
+        return fail(res, 400, 'Enter the DuckDNS name you created, without the .duckdns.org. You can put a subdomain in front of it, as cloud.yourname.');
     }
+    // What the API has to be told, which is only ever the registered name.
+    const account = existing ? null : duckdns.duckdnsAccount(`${typed}.duckdns.org`);
 
     const storedToken = loadManagerConfig().duckdns.token;
     const token = String(body.token || '').trim();
@@ -1083,7 +1110,7 @@ route('POST', /^\/api\/setup\/([a-z]+)$/, async (req, res, match) => {
             .filter(Boolean),
     };
 
-    const domain = existing ? existing.domain : `${subdomain}.duckdns.org`;
+    const domain = existing ? existing.domain : `${typed}.duckdns.org`;
 
     const job = jobs.start(`Publish ${plan.service.label} on ${domain}`, async (onLine) => {
         // --- the name -------------------------------------------------------
@@ -1095,9 +1122,13 @@ route('POST', /^\/api\/setup\/([a-z]+)$/, async (req, res, match) => {
             // DuckDNS refreshes every name on the account in one call, so a
             // second service on a second name adds to the list rather than
             // replacing it.
+            // The account, not the hostname. Refreshing `restohome` moves every
+            // name beneath it, so publishing cloud. and media. of one account
+            // adds nothing to this list the second time.
             const names = new Set(duckdns.normalizeDomains(mgr.duckdns.domains));
-            names.add(subdomain);
+            names.add(account);
             mgr.duckdns.domains = [...names].join(',');
+            if (account !== typed) onLine(`${domain} is a subdomain of ${account}.duckdns.org, which is the name DuckDNS refreshes.`);
             if (token) mgr.duckdns.token = token;
             mgr.duckdns.enabled = true;
             saveManagerConfig(mgr);

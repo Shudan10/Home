@@ -725,9 +725,17 @@
       </ol>
       <label class="inline">
         Your name
-        <input id="setup-subdomain" placeholder="myhome" size="18" autocomplete="off">
+        <input id="setup-subdomain" placeholder="myhome" size="24" autocomplete="off">
         <span class="suffix">.duckdns.org</span>
       </label>
+      <p class="hint">
+        One DuckDNS name covers everything beneath it, so you can put a
+        subdomain in front and give each app an address of its own:
+        <code>cloud.myhome</code> for Nextcloud and <code>media.myhome</code>
+        for Jellyfin both reach you with nothing further to set up. That is
+        better than sharing one name on paths, because an app served under a
+        path has to be told it is there, and one at its own name does not.
+      </p>
       <p class="hint" id="setup-ip">–</p>
     </section>
 

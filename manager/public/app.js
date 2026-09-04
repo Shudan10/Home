@@ -1967,8 +1967,17 @@ $('setup-next').addEventListener('click', () => {
     }
 
     if (step === 1) {
-        const name = $('setup-subdomain').value.trim().toLowerCase().replace(/\.duckdns\.org\.?$/, '');
-        if (!/^[a-z0-9-]{1,63}$/.test(name)) return toast('Enter the name you created at duckdns.org.', 'bad');
+        const name = $('setup-subdomain').value.trim().toLowerCase()
+            .replace(/\.duckdns\.org\.?$/, '')
+            .replace(/^\.+|\.+$/g, '');
+        // A subdomain in front of the registered name is allowed, because
+        // DuckDNS answers for those too: cloud.yourname and media.yourname both
+        // reach you with nothing extra to set up, which is how two apps share
+        // one DuckDNS account without sharing a hostname.
+        const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+        if (!new RegExp(`^${LABEL}(?:\\.${LABEL}){0,2}$`).test(name)) {
+            return toast('Enter the name you created at duckdns.org, optionally with a subdomain in front, as cloud.yourname.', 'bad');
+        }
         $('setup-subdomain').value = name;
     }
 

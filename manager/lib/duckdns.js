@@ -17,12 +17,53 @@ export async function publicIp() {
     return null;
 }
 
-/** Strips a full hostname down to the DuckDNS label, so both forms are accepted. */
-export const normalizeDomains = (input) =>
-    String(input || '')
-        .split(/[\s,]+/)
-        .map((d) => d.trim().toLowerCase().replace(/\.duckdns\.org\.?$/, ''))
-        .filter(Boolean);
+export const DUCKDNS_SUFFIX = '.duckdns.org';
+
+export const isDuckdnsName = (domain) => String(domain || '').trim().toLowerCase().endsWith(DUCKDNS_SUFFIX);
+
+/**
+ * The name DuckDNS actually knows about, which stops being the same thing as
+ * the hostname as soon as subdomains are involved.
+ *
+ * DuckDNS answers for every label beneath a registered name -- register
+ * `restohome` and `cloud.restohome.duckdns.org` resolves to whatever
+ * `restohome` points at, for free and with nothing to set up. Its API, though,
+ * only knows `restohome`: send it `cloud.restohome` and it updates nothing and
+ * reports no error, which is the failure this exists to prevent.
+ *
+ * So the account is the last label before the suffix, and everything in front
+ * of it is a subdomain that comes along for free.
+ */
+export function duckdnsAccount(domain) {
+    const name = String(domain || '').trim().toLowerCase().replace(/\.$/, '');
+    if (!name.endsWith(DUCKDNS_SUFFIX)) return null;
+    const labels = name.slice(0, -DUCKDNS_SUFFIX.length).split('.').filter(Boolean);
+    return labels.length ? labels[labels.length - 1] : null;
+}
+
+/**
+ * Strips hostnames down to the DuckDNS account labels, so every form is
+ * accepted: `restohome`, `restohome.duckdns.org`, and
+ * `cloud.restohome.duckdns.org` all mean the account `restohome`.
+ *
+ * This list is what gets sent to the update API, so it must hold accounts and
+ * never subdomains. Deduplicated, because two published subdomains of one
+ * account are still one thing to refresh.
+ */
+export const normalizeDomains = (input) => [
+    ...new Set(
+        String(input || '')
+            .split(/[\s,]+/)
+            .map((d) => {
+                const raw = d.trim().toLowerCase();
+                if (!raw) return '';
+                // A bare label is already an account name; anything ending in
+                // the suffix has to give up its subdomains first.
+                return raw.endsWith(DUCKDNS_SUFFIX) ? (duckdnsAccount(raw) ?? '') : raw.split('.').pop();
+            })
+            .filter(Boolean),
+    ),
+];
 
 /**
  * A subdomain plus a token is the whole condition for refreshing. There is no
