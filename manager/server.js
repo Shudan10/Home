@@ -317,6 +317,45 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
 }
 
 /**
+ * Waits until a name actually points at this connection.
+ *
+ * Telling DuckDNS an address and that address being answered are two different
+ * moments, and the gap between them is the whole reason publishing appears to
+ * work and then does not. The old code looked once, printed whatever it found
+ * -- including "does not resolve yet" -- and carried on to ask Let's Encrypt
+ * for a certificate for a name that pointed nowhere. A failed challenge costs
+ * an hour of rate limit, so the cheap fix is to wait rather than race.
+ *
+ * Checked against the address the outside sees, not merely "does it resolve":
+ * a name left over from another machine resolves perfectly and is still wrong.
+ */
+async function waitForDomain(domain, expectedIp, onLine, { timeoutMs = 3 * 60_000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    let announced = false;
+    let seen = [];
+
+    while (Date.now() < deadline) {
+        seen = await dns.resolve4(domain).catch(() => []);
+        // With no public address to compare against, resolving at all is the
+        // most that can honestly be checked.
+        if (seen.length && (!expectedIp || seen.includes(expectedIp))) {
+            onLine(`${domain} resolves to ${seen.join(', ')}.`);
+            return { ok: true, seen };
+        }
+        if (!announced) {
+            announced = true;
+            onLine(
+                seen.length
+                    ? `${domain} currently points at ${seen.join(', ')}, and this connection is ${expectedIp}. Waiting for it to change...`
+                    : `${domain} does not resolve yet. Waiting for DNS to catch up, which usually takes under a minute...`,
+            );
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+    }
+    return { ok: false, seen };
+}
+
+/**
  * Tells an app the public name it now answers on.
  *
  * Some apps need to be told, and each refuses differently when it has not been:
@@ -1139,16 +1178,22 @@ route('POST', /^\/api\/setup\/([a-z]+)$/, async (req, res, match) => {
         }
 
         // --- does the name actually arrive here -----------------------------
-        const [resolved, publicIp] = await Promise.all([
-            dns.resolve4(domain).catch(() => []),
-            duckdns.publicIp(),
-        ]);
-        if (!resolved.length) {
-            onLine(`${domain} does not resolve yet. DNS can take a minute; the certificate step will say if it is still not there.`);
-        } else if (publicIp && !resolved.includes(publicIp)) {
-            onLine(`Careful: ${domain} resolves to ${resolved.join(', ')} but this connection looks like ${publicIp}.`);
-        } else {
-            onLine(`${domain} resolves to ${resolved.join(', ')}.`);
+        //
+        // Waited for rather than glanced at, and waited for here: nothing below
+        // this point is worth doing for a name that points somewhere else, and
+        // failing now means the only thing changed so far is the DuckDNS record
+        // itself, which is both harmless and already correct.
+        const publicIp = await duckdns.publicIp();
+        const dnsOk = await waitForDomain(domain, publicIp, onLine);
+        if (!dnsOk.ok) {
+            throw new Error(
+                dnsOk.seen.length
+                    ? `${domain} still points at ${dnsOk.seen.join(', ')} rather than at this connection (${publicIp}). ` +
+                      'Nothing else was changed. If that address belongs to another machine, the name is already in use; ' +
+                      'otherwise give DNS a few more minutes and run this again.'
+                    : `${domain} never started resolving, so nothing else was changed. ` +
+                      'The usual cause is a DuckDNS token that does not match the name. Check both at duckdns.org and run this again.',
+            );
         }
 
         // --- whatever this service needs before it can answer ---------------
