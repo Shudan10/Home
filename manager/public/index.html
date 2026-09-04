@@ -658,103 +658,123 @@
 
     <!-- -------------------------------------------------- global settings -->
     <section id="tab-global" class="tab">
-      <div class="grid">
+      <nav class="subnav" aria-label="Global settings">
+        <button class="subtab-btn active" data-subtab="global-password">Password</button>
+        <button class="subtab-btn" data-subtab="global-address">Panel address</button>
+        <button class="subtab-btn" data-subtab="global-updates">Updates</button>
+        <button class="subtab-btn" data-subtab="global-remove">Remove everything</button>
+      </nav>
 
-        <article class="card span2" id="password-card">
-          <h3>Admin password</h3>
-          <p class="muted" id="password-state">–</p>
-          <div class="row">
-            <label class="inline" id="password-current-row" hidden>
-              Current <input id="password-current" type="password" size="16" autocomplete="current-password">
-            </label>
-            <label class="inline">New <input id="password-new" type="password" size="18" autocomplete="new-password"></label>
-            <label class="inline">Repeat <input id="password-repeat" type="password" size="18" autocomplete="new-password"></label>
-            <button id="password-save" class="primary">Save</button>
-            <button id="password-clear" class="ghost danger" hidden>Remove it</button>
-          </div>
-          <p class="hint">
-            This panel drives the Docker daemon, which is root on this machine,
-            and it listens on your whole network so you can open it from a phone
-            or a laptop. The password is what makes that safe, and it is required
-            before the panel itself can go on a domain. Saving restarts the
-            panel, which takes a few seconds; the proxy and every app keep
-            running throughout.
-          </p>
-          <p class="hint" id="password-result" hidden></p>
-        </article>
-
-        <article class="card span2">
-          <h3>Panel address</h3>
-          <p class="muted" id="panel-port-state">–</p>
-          <div class="row">
-            <label class="inline">Port <input type="number" id="panel-port" min="1" max="65535" size="6"></label>
-            <button id="panel-port-save" class="ghost">Move the panel</button>
-          </div>
-          <p class="hint">
-            Worth moving if you want something else on this port instead. The
-            panel restarts and this page follows it to the new address; nothing
-            else is affected.
-          </p>
-          <p class="hint" id="panel-port-result" hidden></p>
-        </article>
-
-        <article class="card span2">
-          <h3>Update the control panel</h3>
-          <p class="muted">
-            This updates the panel itself, not the apps it runs. It downloads the
-            latest files, rebuilds the panel image and restarts it. Your
-            settings, certificates and app data are untouched, and everything
-            else keeps running throughout.
-          </p>
-          <dl class="kv">
-            <div><dt>Installed</dt><dd id="global-panel-version">–</dd></div>
-            <div><dt>Install directory</dt><dd id="global-stack-dir">–</dd></div>
-          </dl>
-          <label class="inline">Source
-            <input id="global-repo" value="Shudan10/Home" size="30">
-          </label>
-          <label class="inline">Branch or tag
-            <input id="global-ref" value="main" size="16">
-          </label>
-          <div class="row">
-            <button id="global-check-btn" class="ghost">Check for update</button>
-            <button id="global-update-btn" class="primary">Update the panel</button>
-          </div>
-          <p class="hint" id="global-check-status">Checked against GitHub when you ask, never on its own.</p>
-          <p class="hint">
-            The panel goes offline for a minute or two while it rebuilds. This
-            page will say so and come back on its own.
-          </p>
-          <div id="global-update-result" class="verdict" hidden></div>
-        </article>
-
-        <article class="card span2 danger-zone">
-          <h3>Remove everything</h3>
-          <p class="muted">
-            Deletes every container, image, volume, network and file this stack
-            created, including this panel. Docker itself is left installed, along
-            with anything else you run on it.
-          </p>
-          <ul class="plain">
-            <li>Every file, photo and calendar stored in Nextcloud goes with it.</li>
-            <li>Base images shared with your other projects are skipped
-              automatically rather than pulled out from under them.</li>
-            <li>One small helper image (<code>docker:cli</code>) is fetched to do
-              the removing, and is the one thing left behind, because it cannot
-              delete the image it is running from. Clear it with
-              <code>docker rmi docker:cli</code>.</li>
-            <li>There is no undo, and no cancelling once it starts. The log
-              appears on screen and runs until this panel is removed.</li>
-          </ul>
-          <label class="stack">Type <code>DELETE EVERYTHING</code> to confirm
-            <span class="row">
-              <input id="global-teardown-confirm" placeholder="DELETE EVERYTHING" size="24" autocomplete="off">
-              <button type="button" id="global-teardown-btn" class="danger" disabled>Remove everything</button>
-            </span>
-          </label>
-        </article>
-
+      <div id="sub-global-password" class="subtab active">
+        <div class="grid">
+          <article class="card span2" id="password-card">
+            <h3>Admin password</h3>
+            <p class="muted" id="password-state">–</p>
+            <div class="row">
+              <label class="inline" id="password-current-row" hidden>
+                Current <input id="password-current" type="password" size="16" autocomplete="current-password">
+              </label>
+              <label class="inline">New <input id="password-new" type="password" size="18" autocomplete="new-password"></label>
+              <label class="inline">Repeat <input id="password-repeat" type="password" size="18" autocomplete="new-password"></label>
+              <button id="password-save" class="primary">Save</button>
+              <button id="password-clear" class="ghost danger" hidden>Remove it</button>
+            </div>
+            <p class="hint">
+              This panel drives the Docker daemon, which is root on this machine,
+              and it listens on your whole network so you can open it from a phone
+              or a laptop. The password is what makes that safe, and it is required
+              before the panel itself can go on a domain. Saving restarts the
+              panel, which takes a few seconds; the proxy and every app keep
+              running throughout.
+            </p>
+            <p class="hint" id="password-result" hidden></p>
+          </article>
+        </div>
       </div>
+
+      <div id="sub-global-address" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Panel address</h3>
+            <p class="muted" id="panel-port-state">–</p>
+            <div class="row">
+              <label class="inline">Port <input type="number" id="panel-port" min="1" max="65535" size="6"></label>
+              <button id="panel-port-save" class="ghost">Move the panel</button>
+            </div>
+            <p class="hint">
+              Worth moving if you want something else on this port instead. The
+              panel restarts and this page follows it to the new address; nothing
+              else is affected.
+            </p>
+            <p class="hint" id="panel-port-result" hidden></p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-global-updates" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Update the control panel</h3>
+            <p class="muted">
+              This updates the panel itself, not the apps it runs. It downloads the
+              latest files, rebuilds the panel image and restarts it. Your
+              settings, certificates and app data are untouched, and everything
+              else keeps running throughout.
+            </p>
+            <dl class="kv">
+              <div><dt>Installed</dt><dd id="global-panel-version">–</dd></div>
+              <div><dt>Install directory</dt><dd id="global-stack-dir">–</dd></div>
+            </dl>
+            <label class="inline">Source
+              <input id="global-repo" value="Shudan10/Home" size="30">
+            </label>
+            <label class="inline">Branch or tag
+              <input id="global-ref" value="main" size="16">
+            </label>
+            <div class="row">
+              <button id="global-check-btn" class="ghost">Check for update</button>
+              <button id="global-update-btn" class="primary">Update the panel</button>
+            </div>
+            <p class="hint" id="global-check-status">Checked against GitHub when you ask, never on its own.</p>
+            <p class="hint">
+              The panel goes offline for a minute or two while it rebuilds. This
+              page will say so and come back on its own.
+            </p>
+            <div id="global-update-result" class="verdict" hidden></div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-global-remove" class="subtab">
+        <div class="grid">
+          <article class="card span2 danger-zone">
+            <h3>Remove everything</h3>
+            <p class="muted">
+              Deletes every container, image, volume, network and file this stack
+              created, including this panel. Docker itself is left installed, along
+              with anything else you run on it.
+            </p>
+            <ul class="plain">
+              <li>Every file, photo and calendar stored in Nextcloud goes with it.</li>
+              <li>Base images shared with your other projects are skipped
+                automatically rather than pulled out from under them.</li>
+              <li>One small helper image (<code>docker:cli</code>) is fetched to do
+                the removing, and is the one thing left behind, because it cannot
+                delete the image it is running from. Clear it with
+                <code>docker rmi docker:cli</code>.</li>
+              <li>There is no undo, and no cancelling once it starts. The log
+                appears on screen and runs until this panel is removed.</li>
+            </ul>
+            <label class="stack">Type <code>DELETE EVERYTHING</code> to confirm
+              <span class="row">
+                <input id="global-teardown-confirm" placeholder="DELETE EVERYTHING" size="24" autocomplete="off">
+                <button type="button" id="global-teardown-btn" class="danger" disabled>Remove everything</button>
+              </span>
+            </label>
+          </article>
+        </div>
+      </div>
+
     </section>
 
     </main>
