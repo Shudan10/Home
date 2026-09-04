@@ -933,6 +933,31 @@ async function loadApps() {
 const APP_KEYS = ['nextcloud', 'jellyfin'];
 
 /**
+ * The ways in to an app: the one on this network, and the one from outside.
+ *
+ * Both are shown when both exist, because they are not interchangeable. The
+ * public address goes through the proxy and depends on DNS, a certificate and
+ * a forwarded port; the local one is a straight line to the container and
+ * keeps working when any of that is broken -- which is exactly when somebody
+ * needs it. Showing only the public one turns a proxy problem into a Nextcloud
+ * that appears to be gone.
+ *
+ * The local host comes from whatever address the panel itself was opened on,
+ * so a phone reading this gets a link that works from the phone rather than a
+ * localhost that only means anything on the server.
+ */
+function appLinks(hostPort, publicUrl) {
+    const a = (url, label) =>
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>` +
+        `<span class="muted"> ${escapeHtml(label)}</span>`;
+
+    const rows = [];
+    if (publicUrl) rows.push(a(publicUrl, 'from anywhere'));
+    if (hostPort) rows.push(a(`http://${location.hostname}:${hostPort}`, 'on this network'));
+    return rows.map((r) => `<div class="app-link">${r}</div>`).join('');
+}
+
+/**
  * The message for an app that is switched on but has no container. Saying
  * "starting up" is right while it is still working and wrong once it has given
  * up, and a build that fails leaves exactly that second state behind, so the
@@ -1004,14 +1029,13 @@ function renderAppState(name, state) {
         const link = $('nextcloud-link');
         const cfg = appsState.config.nextcloud;
         link.hidden = false;
-        if (running && cfg.publish.web) {
-            const url = `http://${location.hostname}:${cfg.hostPort}`;
+        if (running && (cfg.publish.web || state.publicUrl)) {
             link.className = 'verdict ok';
-            link.innerHTML = `<a href="${url}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>`;
+            link.innerHTML = appLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl);
         } else if (running) {
             link.className = 'verdict';
             link.textContent =
-                'Running, but not published on the host. Reach it through a proxy host, or tick "Publish on the host" under Settings.';
+                'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Proxy and domains.';
         } else {
             const note = appStatusNote(state, {
                 absent: 'Not installed yet. Installing builds it and leaves it switched off.',
@@ -1037,17 +1061,13 @@ function renderAppState(name, state) {
         const link = $('jellyfin-link');
         const cfg = appsState.config.jellyfin ?? {};
         link.hidden = false;
-        if (running && cfg.publish?.web) {
-            // location.hostname rather than localhost: the panel is often open
-            // from another machine on the network, and localhost would send
-            // that browser to itself.
-            const url = `http://${location.hostname}:${cfg.hostPort}`;
+        if (running && (cfg.publish?.web || state.publicUrl)) {
             link.className = 'verdict ok';
-            link.innerHTML = `<a href="${url}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>`;
+            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl);
         } else if (running) {
             link.className = 'verdict';
             link.textContent =
-                'Running, but not published on the host. Reach it through a domain on the proxy, or tick "Publish on the host" under Settings.';
+                'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Proxy and domains.';
         } else {
             const note = appStatusNote(state, {
                 absent: 'Not installed yet. Installing downloads the image and leaves it switched off.',
