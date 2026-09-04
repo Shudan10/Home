@@ -1319,10 +1319,78 @@ async function loadProxies() {
         button.title = on ? '' : 'Turn the reverse proxy on first.';
     }
 
-    // The one table on this page is the service view, which reads the same
+    $('proxy-add').disabled = !on;
+    $('proxy-add').title = on ? '' : 'Turn the reverse proxy on first.';
+    renderProxyHosts();
+
+    // The main table on this page is the service view, which reads the same
     // proxy list back from its own endpoint.
     await loadPublish();
 }
+
+/**
+ * Every proxy host as it actually is, rather than as a service.
+ *
+ * The Overview table lists what this panel can publish, which is the right
+ * question for the apps it runs and the wrong one for anything it does not:
+ * only a raw host can point at another machine, and only this list can show
+ * that one does.
+ */
+function renderProxyHosts() {
+    const body = $('proxy-body');
+    if (!body) return;
+
+    if (!proxies.length) {
+        body.innerHTML = '<tr><td colspan="4" class="muted">No proxy hosts yet.</td></tr>';
+        return;
+    }
+
+    body.innerHTML = proxies
+        .map((p) => {
+            const path = (p.path ?? '/') === '/' ? '' : escapeHtml(p.path);
+            const target =
+                p.target?.kind === 'custom'
+                    ? `${escapeHtml(p.target.scheme ?? 'http')}://${escapeHtml(p.target.host ?? '?')}:${escapeHtml(String(p.target.port ?? '?'))}`
+                    : escapeHtml(targetKinds[p.target?.kind]?.label ?? p.target?.kind ?? 'unknown');
+            // A host that is switched off still holds its name, so say so
+            // rather than let it look like the others.
+            const off = p.enabled === false ? ' <span class="tag off">disabled</span>' : '';
+            const https = p.ssl?.mode === 'letsencrypt'
+                ? (p.certificate ? '<span class="tag ok">certificate</span>' : '<span class="tag">requested</span>')
+                : '<span class="tag off">plain http</span>';
+            return `<tr>
+                <td><strong>${escapeHtml(p.domain)}</strong>${path}${off}</td>
+                <td>${target}</td>
+                <td>${https}</td>
+                <td>
+                    <button type="button" class="ghost mini" data-edit-proxy="${p.id}">Edit</button>
+                    <button type="button" class="ghost mini danger" data-del-proxy="${p.id}">Remove</button>
+                </td>
+            </tr>`;
+        })
+        .join('');
+}
+
+$('proxy-add').addEventListener('click', () => openProxyDialog(null));
+
+$('proxy-body').addEventListener('click', async (event) => {
+    const { editProxy, delProxy } = event.target.dataset ?? {};
+    if (editProxy) return openProxyDialog(proxies.find((p) => p.id === editProxy));
+    if (!delProxy) return;
+
+    const proxy = proxies.find((p) => p.id === delProxy);
+    // Removing a host takes a name off the internet, which is not a thing to do
+    // on a mis-click. The certificate is deliberately left on disk: it is still
+    // valid, and putting the name back should not mean asking for another.
+    if (!confirm(`Stop answering for ${proxy?.domain}?\n\nThe nginx configuration for it is removed. Its certificate is kept.`)) return;
+    try {
+        await api(`/api/proxies/${delProxy}`, { method: 'DELETE' });
+        await loadProxies();
+        toast(`${proxy?.domain} is no longer served.`);
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+});
 
 // ------------------------------------------------- services and domains ---
 
@@ -2166,7 +2234,12 @@ $('proxy-form').addEventListener('submit', async (event) => {
         // A brand new https host has no certificate yet; offer to fetch it now.
         const saved = proxies.find((p) => p.domain === payload.domain);
         if (saved && payload.ssl.mode === 'letsencrypt' && !saved.certificate) {
-            if (confirm(`Request a Let's Encrypt certificate for ${payload.domain} now?\n\nPort 80 must already reach this machine.`)) {
+            // A DuckDNS name is proved with a TXT record and needs no open
+            // port; saying otherwise sends people to their router for nothing.
+            const how = payload.domain.endsWith('.duckdns.org')
+                ? 'It is a DuckDNS name, so this is proved with a DNS record and needs no open port.'
+                : 'Port 80 must already reach this machine.';
+            if (confirm(`Request a Let's Encrypt certificate for ${payload.domain} now?\n\n${how}`)) {
                 await api(`/api/proxies/${saved.id}/certificate`, {
                     method: 'POST',
                     body: { email: payload.ssl.email, staging: $('px-staging').checked },

@@ -480,6 +480,7 @@
     <section id="tab-proxy" class="tab">
       <nav class="subnav" aria-label="Proxy and domains">
         <button class="subtab-btn active" data-subtab="proxy-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="proxy-advanced">Advanced</button>
         <button class="subtab-btn" data-subtab="proxy-uninstall">Uninstall</button>
       </nav>
 
@@ -586,6 +587,50 @@
         </article>
       </div>
 
+      </div>
+
+      <!--
+        The raw proxy-host list. Overview asks "what do you want reachable" and
+        answers it for the apps on this machine; this asks "what should answer
+        on this name", which is the only question that can be pointed somewhere
+        else entirely.
+      -->
+      <div id="sub-proxy-advanced" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Proxy hosts</h3>
+            <p class="muted">
+              Every name this machine answers for, and what it forwards each one
+              to. The ones the Overview page set up appear here too — this is the
+              same list, with the details it does not ask about.
+            </p>
+            <table class="proxies">
+              <thead>
+                <tr><th>Address</th><th>Forwards to</th><th>HTTPS</th><th></th></tr>
+              </thead>
+              <tbody id="proxy-body"></tbody>
+            </table>
+            <div class="row">
+              <button type="button" id="proxy-add" class="primary">Add proxy host</button>
+            </div>
+            <div class="notice">
+              <p>
+                <strong>Another machine can sit behind this one.</strong> Only one
+                machine on your network can hold port 443, but it does not have to
+                be the machine running the service. Choose
+                <strong>Custom host:port</strong> and give this proxy the other
+                machine's address on your network, and it will forward that name
+                to it — certificate and all, handled here.
+              </p>
+              <p>
+                So a second machine running something else needs no proxy, no
+                certificate and no forwarded port of its own. It serves plain http
+                on your network, this machine terminates HTTPS in front of it, and
+                each name goes where it belongs.
+              </p>
+            </div>
+          </article>
+        </div>
       </div>
 
       <!--
