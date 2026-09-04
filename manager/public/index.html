@@ -474,6 +474,12 @@
 
     <!-- ----------------------------------------------------------- proxy -->
     <section id="tab-proxy" class="tab">
+      <nav class="subnav" aria-label="Proxy and domains">
+        <button class="subtab-btn active" data-subtab="proxy-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="proxy-uninstall">Uninstall</button>
+      </nav>
+
+      <div id="sub-proxy-overview" class="subtab active">
       <!--
         One card: what it is, and the switch that starts it. Three stacked cards
         for a single switch read as three separate things, and left most of the
@@ -576,8 +582,16 @@
         </article>
       </div>
 
-      <div class="grid">
-        <article class="card span2 uninstall-card" data-uninstall="proxy"></article>
+      </div>
+
+      <!--
+        Its own panel, like every other service. Removing something is not a
+        thing to meet at the bottom of the page you use to configure it.
+      -->
+      <div id="sub-proxy-uninstall" class="subtab">
+        <div class="grid">
+          <article class="card span2 uninstall-card" data-uninstall="proxy"></article>
+        </div>
       </div>
 
     </section>
