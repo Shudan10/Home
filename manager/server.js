@@ -297,6 +297,15 @@ async function reconcileNextcloud(onLine = () => {}) {
     } catch (err) {
         onLine(`Could not switch the preview providers on: ${err.message}`);
     }
+    // First install only -- it marks itself done in Nextcloud's own config, so
+    // this is a cheap no-op on every start after the first. Sits here rather
+    // than in the install route because this is the one place that has already
+    // waited for `occ` to start answering.
+    try {
+        await apps.installBundledApps(dockerctl.docker, onLine);
+    } catch (err) {
+        onLine(`Could not install the bundled apps: ${err.message}`);
+    }
     // Reapplied on every start rather than only when the name is assigned: the
     // public port can change without the name changing, and a stale origin
     // sends every redirect somewhere wrong.
