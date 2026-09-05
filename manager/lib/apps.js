@@ -821,6 +821,100 @@ const PREVIEW_PROVIDERS = [
     'OC\\Preview\\Krita',
 ];
 
+/*
+ * The apps a fresh Nextcloud is expected to have.
+ *
+ * A bare Nextcloud is files and nothing else -- no calendar, no contacts, no
+ * notes. Every one of these is a thing somebody sets up a home server *for*,
+ * and finding them means knowing the app store exists and picking the right
+ * entry out of it. So they arrive with it.
+ *
+ * Only on first install. Re-running this on every start would put back an app
+ * the owner had deliberately removed, and an install that will not stay
+ * uninstalled is worse than one that never happened.
+ */
+const NEXTCLOUD_BUNDLE = [
+    { id: 'contacts', label: 'Contacts' },
+    { id: 'calendar', label: 'Calendar' },
+    { id: 'tasks', label: 'Tasks' },
+    { id: 'notes', label: 'Notes' },
+    { id: 'spreed', label: 'Talk' },
+];
+
+/*
+ * The marker lives in Nextcloud's own config rather than in the panel's, so it
+ * has exactly the right lifetime: uninstalling Nextcloud takes its database and
+ * this with it, and the next install is genuinely a first install again. A flag
+ * in the panel's apps.json would outlive the thing it describes and quietly
+ * suppress the bundle on a rebuilt instance.
+ */
+const BUNDLE_MARKER = 'quickstart_home_bundled_apps';
+
+/**
+ * Installs the bundled apps, once, and says what it did.
+ *
+ * Each app is attempted on its own and a failure is reported rather than
+ * thrown. These downloads come from the Nextcloud app store over the internet,
+ * and one app being unavailable for this version is a normal thing that must
+ * not take the other five down with it -- or fail the install job, which by
+ * this point has a perfectly good Nextcloud running.
+ */
+export async function installBundledApps(docker, onLine = () => {}) {
+    try {
+        const { stdout } = await docker(occArgs(['config:system:get', BUNDLE_MARKER]));
+        if (stdout.trim()) return { skipped: true };
+    } catch {
+        // Unset, which is what a first install looks like. `occ` exits non-zero
+        // for a key that is not there, so this is the normal path, not an error.
+    }
+
+    onLine('Installing the apps a new Nextcloud should come with...');
+    const installed = [];
+    const failed = [];
+
+    for (const app of NEXTCLOUD_BUNDLE) {
+        try {
+            // `app:install` fails on an app that is already present, which is
+            // true for anything shipped in the image. `app:enable` is the part
+            // that must succeed, and it is idempotent, so it decides the
+            // verdict and the install is allowed to have been a no-op.
+            await docker(occArgs(['app:install', app.id]), { timeoutMs: 5 * 60_000 }).catch(() => {});
+            await docker(occArgs(['app:enable', app.id]), { timeoutMs: 2 * 60_000 });
+            installed.push(app.label);
+        } catch (err) {
+            failed.push(`${app.label} (${summarizeError(err)})`);
+        }
+    }
+
+    if (installed.length) onLine(`Installed: ${installed.join(', ')}.`);
+    if (failed.length) {
+        onLine(`Could not install: ${failed.join('; ')}.`);
+    }
+
+    /*
+     * Marked only when the whole set went in.
+     *
+     * The obvious version of this marks itself done regardless, so it can never
+     * put back an app the owner deliberately removed. But these are downloads
+     * from apps.nextcloud.com, and that host is not always reachable -- on the
+     * machine this was written on it refuses connections outright while the
+     * rest of the internet is fine. Marking done after a failed run would mean
+     * a Nextcloud that missed the store once never gets its apps at all, and
+     * the panel would never mention it again.
+     *
+     * So a partial run stays unmarked and is retried on the next start. That
+     * cannot fight the owner over a removed app, because reaching this point at
+     * all requires an earlier run to have failed -- once a run succeeds the
+     * marker is set and nothing here touches the apps again.
+     */
+    if (failed.length) {
+        onLine('Leaving these to try again next time Nextcloud starts.');
+        return { skipped: false, installed, failed, marked: false };
+    }
+    await docker(occArgs(['config:system:set', BUNDLE_MARKER, '--value', new Date().toISOString()])).catch(() => {});
+    return { skipped: false, installed, failed, marked: true };
+}
+
 export async function syncPreviewSettings(docker, onLine = () => {}) {
     const env = readEnvFile();
 
