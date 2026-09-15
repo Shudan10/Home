@@ -595,6 +595,26 @@ legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter
 
 /* ---------------------------------------------------------------- tables */
 
+/*
+ * The scroll container the comments on `main` have always described.
+ *
+ * It was referenced in two places as the reason a wide table cannot push the
+ * page out, and it was never actually written -- no rule, and the class on no
+ * element. So a table wider than the screen did exactly what those comments
+ * said it would not: on a 393px phone the publish table ran 15px past the
+ * viewport and took the whole document with it.
+ *
+ * min-width:0 is the part that does the work. A grid and flex item's automatic
+ * minimum size is its content, so without this the container refuses to be
+ * narrower than the table and there is nothing to scroll within.
+ */
+.scroll-x {
+    overflow-x: auto;
+    min-width: 0;
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+}
+
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -1667,3 +1687,151 @@ select { font-family: var(--mono); font-size: 13.5px; }
    is what says which is which. */
 .app-link + .app-link { margin-top: 4px; }
 .app-link a { overflow-wrap: anywhere; }
+
+/* ==========================================================================
+   Phones, and the panel as an installed app
+   ==========================================================================
+
+   Written against an iPhone 15 -- 393x852 CSS pixels, a Dynamic Island at the
+   top and a home indicator at the bottom. Everything here was measured on that
+   viewport rather than guessed at.
+   ========================================================================== */
+
+/* iOS enlarges text in landscape on its own unless told not to, which quietly
+   breaks any layout that was sized in the other orientation. */
+html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+/*
+ * The safe area.
+ *
+ * The viewport meta says viewport-fit=cover, so the page now extends under the
+ * Dynamic Island and the home indicator instead of being letterboxed between
+ * them. That is the point -- the background reaches the edges -- but nothing
+ * readable may sit in those bands, so every surface that touches an edge pads
+ * itself back out. env() is 0 everywhere that has no notch, so these are inert
+ * on a desktop.
+ */
+main {
+    padding-left: max(var(--main-pad, 20px), env(safe-area-inset-left));
+    padding-right: max(var(--main-pad, 20px), env(safe-area-inset-right));
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
+}
+/* The topbar is sticky at top:0, so in standalone it sits under the status bar
+   rather than below it. This pushes its contents clear while the bar's own
+   background still fills the space behind the clock. */
+.topbar {
+    padding-top: env(safe-area-inset-top);
+    /* min-height is the bar itself; the inset is extra on top of it. */
+    height: auto;
+}
+.sidebar {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+}
+
+@media (max-width: 860px) {
+    /*
+     * The subtab row scrolls.
+     *
+     * This was the one thing on a phone that lost information rather than just
+     * looking cramped: four tabs need 375px of a 353px row, with nowrap and
+     * overflow visible, so the last one was simply cut off the side with no way
+     * to reach it. "Remove everything" and both "Uninstall" tabs were
+     * unreachable on a 393px screen.
+     *
+     * Scrolled rather than wrapped: a tab strip that reflows to two lines moves
+     * the content under it every time the selection changes.
+     */
+    .subnav {
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex-wrap: nowrap;
+        scrollbar-width: none;
+        /* Let a sideways flick on the strip scroll it without the page taking
+           over and going back a screen. */
+        overscroll-behavior-x: contain;
+        scroll-snap-type: x proximity;
+        /* Room for the focus ring and the lit underline, which are drawn
+           outside the button box and would otherwise be clipped by the scroll
+           container. */
+        padding-bottom: 2px;
+    }
+    .subnav::-webkit-scrollbar { display: none; }
+    .subtab-btn {
+        flex: 0 0 auto;
+        scroll-snap-align: start;
+    }
+
+    /* One column everywhere. The two-column grid at this width leaves each card
+       too narrow to hold a label and its field on one line. */
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .span2 { grid-column: span 1; }
+    /* Readings are three across on a desktop, which is unreadable at 393px. */
+    .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kv.vertical { grid-template-columns: minmax(0, 1fr); }
+
+    /* A dialog on a phone is the screen, not a box floating on it. */
+    .dialog, dialog {
+        width: calc(100vw - 20px);
+        max-width: none;
+        max-height: calc(100dvh - max(20px, env(safe-area-inset-bottom)) - env(safe-area-inset-top));
+    }
+    /* Buttons in a dialog footer stack rather than squeeze. */
+    .row.end { flex-direction: column-reverse; align-items: stretch; }
+    .row.end > button { width: 100%; }
+
+    .card { padding: 14px; }
+    /* 20px each side of a 393px screen is a tenth of it spent on margin. */
+    main { --main-pad: 14px; }
+    .topbar { padding-inline: 14px; }
+}
+
+/*
+ * Touch, rather than screen width.
+ *
+ * A small window on a desktop still has a mouse and does not want 44px rows;
+ * a tablet at 1024px does. `pointer: coarse` asks the question that actually
+ * matters here.
+ */
+@media (pointer: coarse) {
+    /*
+     * 16px is not a style choice. Safari zooms the whole page when a focused
+     * field is smaller than that, and it does not zoom back out afterwards --
+     * so one tap on a port number left the panel scrolled sideways and stuck.
+     * Every field here was 13.5px.
+     *
+     * The mono family stays: it is what makes addresses and hashes checkable.
+     * Only the size moves.
+     */
+    input, select, textarea { font-size: 16px; }
+
+    /* Apple's minimum target is 44x44. Applied to the things that are hit
+       often; the log zoom buttons stay small on purpose, being a pair of
+       adjacent controls where a fat target would be easier to hit wrongly. */
+    button, .nav-item, .subtab-btn { min-height: 44px; }
+    .nav-row { min-height: 44px; }
+    .switch { min-height: 44px; display: inline-flex; align-items: center; }
+
+    /* Hover glow is meaningless without a pointer, and on touch it sticks
+       after a tap until something else is touched. */
+    button:hover:not(:disabled) { box-shadow: none; }
+    .card:hover { border-color: var(--line); }
+}
+
+/*
+ * Installed to the home screen.
+ *
+ * There is no browser chrome in standalone mode, so nothing above the panel
+ * gives it a top edge and nothing below absorbs an overscroll bounce.
+ */
+@media (display-mode: standalone) {
+    body {
+        /* Stops the whole page rubber-banding away from the status bar, which
+           in standalone looks like the app coming unstuck. */
+        overscroll-behavior-y: none;
+    }
+}

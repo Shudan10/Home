@@ -69,6 +69,10 @@ const MIME = {
     '.svg': 'image/svg+xml',
     '.ico': 'image/x-icon',
     '.png': 'image/png',
+    // Served with the right type or the browser ignores the manifest entirely
+    // and the panel is silently not installable.
+    '.webmanifest': 'application/manifest+json; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
 };
 
 function sendJson(res, status, body, headers = {}) {
