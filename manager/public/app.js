@@ -3274,3 +3274,17 @@ api('/api/session')
         } else showLogin();
     })
     .catch(() => showLogin());
+
+/*
+ * Registers the no-cache service worker, which exists only so the panel can be
+ * installed to a home screen. Failure is ignored on purpose: this is not served
+ * over https on a LAN address, and browsers refuse to register a worker on an
+ * insecure origin. That refusal is expected and must not surface as an error --
+ * the panel works identically without it, and iOS installs from the manifest
+ * and the apple-touch-icon regardless.
+ */
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+}
