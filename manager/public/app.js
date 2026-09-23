@@ -961,6 +961,10 @@ function renderContainers(list) {
         .join('');
 }
 
+/* The last host payload, kept so the app links can use the LAN address the
+   server discovered. Null until the first status poll lands. */
+let hostSnapshot = null;
+
 async function refreshStatus() {
     let s;
     try {
@@ -971,6 +975,7 @@ async function refreshStatus() {
     if (reloadIfManagerRestarted(s.bootId)) return;
 
     const h = s.host ?? {};
+    hostSnapshot = h;
     $('ov-hostname').textContent = h.hostname ?? '–';
     $('ov-platform').textContent = `${h.platform ?? '–'} (${h.arch ?? '?'})`;
     $('ov-cpus').textContent = h.cpus ? `${h.cpus} cores` : '–';
@@ -1049,8 +1054,36 @@ function appLinks(hostPort, publicUrl) {
 
     const rows = [];
     if (publicUrl) rows.push(a(publicUrl, 'from anywhere'));
-    if (hostPort) rows.push(a(`http://${location.hostname}:${hostPort}`, 'on this network'));
+    const local = localHost();
+    if (hostPort && local) rows.push(a(`http://${local}:${hostPort}`, 'on this network'));
     return rows.map((r) => `<div class="app-link">${r}</div>`).join('');
+}
+
+/**
+ * Which name the "on this network" link should use.
+ *
+ * The address in the address bar is right whenever it is already a local one,
+ * and it is the better answer then: it is demonstrably reachable from wherever
+ * this page is being read, whereas a discovered address is only inferred.
+ *
+ * It is wrong in one case, and it is a case that happens daily -- sitting at
+ * home and opening the panel by its public name, which hairpin NAT allows and
+ * habit encourages. The hostname is then the DuckDNS name, and building a
+ * "local" link out of it produced a link to the public name labelled as if it
+ * were the LAN, which is what this is fixing.
+ */
+function localHost() {
+    const here = location.hostname;
+    const isLocal =
+        here === 'localhost' ||
+        here.endsWith('.local') ||
+        /^127\./.test(here) ||
+        /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(here) ||
+        /^\[?::1\]?$/.test(here);
+    // Whatever the server discovered is the fallback, and null when it could
+    // not work one out -- in which case there is no honest local link to show
+    // and the row is left out rather than guessed at.
+    return isLocal ? here : (hostSnapshot?.lanAddress ?? null);
 }
 
 /**

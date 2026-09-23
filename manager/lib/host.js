@@ -78,6 +78,51 @@ export async function containers() {
     );
 }
 
+/*
+ * This machine's address on the home network.
+ *
+ * Not readable from in here. Every interface this process can see belongs to
+ * the docker network -- 172.18.0.5 and a loopback -- and offering either as
+ * "on this network" sends somebody to an address that exists only inside a
+ * container.
+ *
+ * The panel used to sidestep this by building the local link out of whatever
+ * hostname the browser had used, on the reasoning that it is the one address
+ * certain to work from wherever the page is being read. That holds right up
+ * until you are sitting at home and reach the panel by its public name, which
+ * a router with hairpin NAT lets you do and habit makes likely -- and then the
+ * "on this network" link confidently points at the DuckDNS name.
+ *
+ * So it is asked properly: a throwaway container sharing the host's network
+ * stack opens a socket towards a public address and reports which local
+ * address the kernel chose for it. Nothing is sent -- a connected UDP socket
+ * only picks a route. The panel's own image is used because it is certainly
+ * present; pulling something would make a landing page depend on the network.
+ */
+let lanCache = null;
+
+export async function lanAddress() {
+    if (lanCache !== null) return lanCache;
+    const probe = "const s=require('node:dgram').createSocket('udp4');" +
+        "s.connect(53,'1.1.1.1',()=>{console.log(s.address().address);s.close()});" +
+        "setTimeout(()=>process.exit(0),2000);";
+    try {
+        const { stdout } = await run(
+            'docker',
+            ['run', '--rm', '--network', 'host', 'quickstart-home/manager:1', 'node', '-e', probe],
+            { timeoutMs: 20_000 },
+        );
+        const ip = String(stdout).trim().split('\n').pop().trim();
+        // Only a private address is an answer. A public one means this machine
+        // is not behind a router at all, and there is no "on this network" to
+        // offer -- better to say nothing than to print its public address.
+        lanCache = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) ? ip : null;
+    } catch {
+        lanCache = null;
+    }
+    return lanCache;
+}
+
 /**
  * The whole Overview payload.
  *
@@ -92,6 +137,8 @@ export async function snapshot() {
 
     return {
         hostname: name,
+        // Cached after the first look, so polling this page costs nothing.
+        lanAddress: await lanAddress(),
         platform: `${os.type()} ${os.release()}`,
         arch: os.arch(),
         cpus: os.cpus().length,

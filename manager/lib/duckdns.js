@@ -72,6 +72,40 @@ export const normalizeDomains = (input) => [
  */
 export const isConfigured = (dd) => Boolean(normalizeDomains(dd?.domains).length && dd?.token);
 
+/**
+ * Would publishing this address actually point anyone at this machine?
+ *
+ * The address a request appears to come from and the address that reaches this
+ * machine are usually the same, and are not the same the moment anything sits
+ * in between. A VPN on this host is the case that matters: the tunnel gives
+ * every outbound connection a new source address, DuckDNS believes it, and the
+ * published names quietly start pointing at a datacentre in another country.
+ * That is not a failure anything notices -- the update succeeds, the panel logs
+ * "refreshed", and every service is unreachable until somebody works out why.
+ *
+ * So an address that has not been seen before has to prove itself before it is
+ * published, by being asked from the outside whether it answers on the port the
+ * proxy is published on. Somewhere else on the internet connecting back is the
+ * only test of the one property that actually matters here.
+ *
+ * Only on change. The address is the same on almost every run, so the usual
+ * path stays a single request and this costs nothing.
+ */
+async function reaches(candidate, cfg) {
+    const port = Number(cfg.proxy?.publicHttpsPort) || 443;
+    try {
+        const { probeTcp } = await import('./portcheck.js');
+        const r = await probeTcp(candidate, port);
+        // `open: null` is "the check did not finish", which is not proof of
+        // anything. Treated as a failure on purpose: refusing to publish leaves
+        // a working record in place, and publishing a wrong one takes
+        // everything down, so the uncertain case takes the harmless side.
+        return { ok: r.open === true, detail: r.detail ?? (r.open === true ? 'answers from outside' : 'no answer from outside') };
+    } catch (err) {
+        return { ok: false, detail: `could not be checked: ${err.message}` };
+    }
+}
+
 export async function update({ domains, token, ip } = {}) {
     const cfg = loadManagerConfig();
     const list = normalizeDomains(domains ?? cfg.duckdns.domains);
@@ -80,12 +114,35 @@ export async function update({ domains, token, ip } = {}) {
     if (!list.length) throw new Error('No DuckDNS subdomain configured.');
     if (!useToken) throw new Error('No DuckDNS token configured.');
 
+    // What would be published, worked out here rather than left to DuckDNS to
+    // infer from the source address -- inferring is what cannot be checked.
+    let publish = ip ?? (await publicIp());
+
+    if (!ip && publish) {
+        const known = cfg.duckdns.verifiedIp;
+        if (publish !== known) {
+            const verdict = await reaches(publish, cfg);
+            if (!verdict.ok) {
+                const next = loadManagerConfig();
+                next.duckdns.lastRunAt = new Date().toISOString();
+                next.duckdns.lastResult =
+                    `HELD: this machine appears to come from ${publish}, but that address ${verdict.detail}. ` +
+                    `The names were left pointing at ${known ?? 'their current address'}. ` +
+                    `A VPN on this machine does exactly this.`;
+                saveManagerConfig(next);
+                throw new Error(
+                    `Not publishing ${publish}: it ${verdict.detail}. Leaving DNS alone rather than pointing your names somewhere that cannot answer.`,
+                );
+            }
+        }
+    }
+
     const url = new URL(UPDATE_URL);
     url.searchParams.set('domains', list.join(','));
     url.searchParams.set('token', useToken);
-    // An empty ip makes DuckDNS use the source address of this request, which
-    // is the right answer for the common case of a node behind a home router.
-    url.searchParams.set('ip', ip ?? '');
+    // Explicit rather than empty. An empty ip makes DuckDNS use the source
+    // address of this request, which is the thing that goes wrong above.
+    url.searchParams.set('ip', publish ?? '');
     url.searchParams.set('verbose', 'true');
 
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -95,6 +152,9 @@ export async function update({ domains, token, ip } = {}) {
     const next = loadManagerConfig();
     next.duckdns.lastRunAt = new Date().toISOString();
     next.duckdns.lastResult = ok ? `OK (${body.split('\n').slice(1).join(' ').trim() || 'no change'})` : `FAILED: ${body}`;
+    // Remembered so the next run recognises this address as one already proven
+    // to reach here, and skips the outside check.
+    if (ok && publish) next.duckdns.verifiedIp = publish;
     saveManagerConfig(next);
 
     if (!ok) throw new Error(`DuckDNS rejected the update: ${body || 'empty response'}`);
