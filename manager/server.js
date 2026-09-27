@@ -310,6 +310,14 @@ async function reconcileNextcloud(onLine = () => {}) {
     } catch (err) {
         onLine(`Could not install the bundled apps: ${err.message}`);
     }
+    // The bind mounts are made by compose; this is the half that tells
+    // Nextcloud they are there. Reapplied on every start because the mount list
+    // lives in Nextcloud's database, which a reinstall starts empty.
+    try {
+        await apps.syncExternalStorage(dockerctl.docker, cfg, onLine);
+    } catch (err) {
+        onLine(`Could not update the shared folders: ${err.message}`);
+    }
     // Reapplied on every start rather than only when the name is assigned: the
     // public port can change without the name changing, and a stale origin
     // sends every redirect somewhere wrong.

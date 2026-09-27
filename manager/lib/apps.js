@@ -93,6 +93,16 @@ export const DEFAULT_APPS_CONFIG = {
         // so a LAN address works wherever it is reached from; a public name is
         // added to this list when one is attached.
         trustedDomains: 'localhost 192.168.*.* 10.*.*.* 172.16.*.*',
+        // Folders that already exist on this machine, shown inside Nextcloud
+        // where they are rather than copied into it.
+        //
+        // The alternative is what people do by default: point the desktop sync
+        // client at a folder and let it upload. That works, and on a machine
+        // that is also the server it stores everything twice on one disk --
+        // measured at 219GB of films held as two independent copies here, on a
+        // filesystem with no way to share blocks between them. These mounts are
+        // the same folder seen from both sides instead.
+        sharedPaths: [],
     },
     jellyfin: {
         enabled: false,
@@ -187,18 +197,30 @@ const normalizeMediaPath = (value) => {
  * where /media/1 is not. Duplicates are suffixed, since two different paths can
  * easily end in the same word.
  */
-export function mediaMounts(paths) {
+function mountsUnder(prefix, paths) {
     const used = new Set();
     return paths.map((path) => {
-        const base = (path.split('/').filter(Boolean).pop() || 'media').replace(/[^A-Za-z0-9._-]+/g, '-');
+        const base = (path.split('/').filter(Boolean).pop() || 'folder').replace(/[^A-Za-z0-9._-]+/g, '-');
         let name = base;
         for (let i = 2; used.has(name); i += 1) name = `${base}-${i}`;
         used.add(name);
-        return { path, target: `/media/${name}`, name };
+        return { path, target: `${prefix}/${name}`, name };
     });
 }
 
-function validateMediaPaths(input, errors) {
+export const mediaMounts = (paths) => mountsUnder('/media', paths);
+
+/**
+ * The same idea for Nextcloud, under a prefix of its own.
+ *
+ * Not /media: that is Jellyfin's, and the two containers are unrelated. Not
+ * anywhere under /var/www/html either -- that is the application and its data
+ * directory, and a bind mount landing inside it would be indistinguishable to
+ * Nextcloud from files it believes it owns.
+ */
+export const sharedMounts = (paths) => mountsUnder('/external', paths);
+
+function validateMediaPaths(input, errors, label = 'Jellyfin') {
     const seen = new Set();
     const out = [];
 
@@ -206,7 +228,7 @@ function validateMediaPaths(input, errors) {
         const path = normalizeMediaPath(entry);
         if (!path) continue;
         if (out.length >= MAX_MEDIA_PATHS) {
-            errors.push(`That is more than ${MAX_MEDIA_PATHS} media folders, which is more than this is meant for.`);
+            errors.push(`That is more than ${MAX_MEDIA_PATHS} folders, which is more than this is meant for.`);
             break;
         }
         if (!path.startsWith('/')) {
@@ -216,7 +238,7 @@ function validateMediaPaths(input, errors) {
         } else if (path.split('/').includes('..')) {
             errors.push(`"${path}" contains "..", so write the real path instead.`);
         } else if (path === '/') {
-            errors.push('Mounting the whole filesystem into Jellyfin is not something this will do. Pick the folder your media is actually in.');
+            errors.push(`Mounting the whole filesystem into ${label} is not something this will do. Pick the folder you actually mean.`);
         } else if (seen.has(path)) {
             errors.push(`"${path}" is listed twice.`);
         } else {
@@ -310,6 +332,8 @@ export function validateAppsConfig(input) {
         // whitespace and a comma would stay stuck to the hostname before it.
         cfg.nextcloud.trustedDomains = domains.split(/[\s,]+/).filter(Boolean).join(' ') || 'localhost';
     }
+
+    cfg.nextcloud.sharedPaths = validateMediaPaths(n.sharedPaths, errors, 'Nextcloud');
 
     // --- Jellyfin ---
     const j = input.jellyfin ?? {};
@@ -443,6 +467,18 @@ export function renderAppsPortsOverride(cfg) {
             published.nextcloud = [cfg.nextcloud.hostPort];
         } else {
             blocks.push('      []');
+        }
+
+        // Shared folders, mounted where Nextcloud's external storage will look
+        // for them. Read-write: unlike Jellyfin, the point of showing a folder
+        // in Nextcloud is being able to work with what is in it, and a mount
+        // that is read-only at the Docker layer produces errors in the web UI
+        // that name no cause. Whether a given folder is writable is decided per
+        // mount inside Nextcloud instead, where it can say so.
+        const shared = sharedMounts(cfg.nextcloud.sharedPaths ?? []);
+        if (shared.length) {
+            blocks.push('    volumes:');
+            for (const m of shared) blocks.push(`      - "${m.path}:${m.target}"`);
         }
     }
 
@@ -913,6 +949,77 @@ export async function installBundledApps(docker, onLine = () => {}) {
     }
     await docker(occArgs(['config:system:set', BUNDLE_MARKER, '--value', new Date().toISOString()])).catch(() => {});
     return { skipped: false, installed, failed, marked: true };
+}
+
+/*
+ * Shows the shared folders inside Nextcloud, without copying anything.
+ *
+ * Nextcloud's external storage points a mount point in the file tree at a
+ * directory the server can already see -- here, the bind mounts under
+ * /external. The files stay exactly where they are on the disk, which is the
+ * whole point: the folder Jellyfin reads and the folder Nextcloud shows are the
+ * same bytes, not two copies kept in step.
+ *
+ * Reconciled rather than appended. The mount list in Nextcloud is the thing
+ * that has to end up matching the panel's config, so anything this created
+ * before and is no longer configured has to go -- otherwise removing a folder
+ * from the panel leaves it on display in Nextcloud, pointing at a mount that
+ * the next container restart will not provide.
+ *
+ * Only mounts this panel made are touched. They are recognised by their target
+ * being under /external, so a mount somebody added by hand in Nextcloud's own
+ * admin page is left alone.
+ */
+export async function syncExternalStorage(docker, cfg, onLine = () => {}) {
+    const wanted = sharedMounts(cfg.nextcloud.sharedPaths ?? []);
+
+    if (!wanted.length) {
+        const existing = await listPanelMounts(docker);
+        for (const m of existing) await docker(occArgs(['files_external:delete', String(m.id), '-y'])).catch(() => {});
+        if (existing.length) onLine(`Removed ${existing.length} shared folder(s) from Nextcloud.`);
+        return;
+    }
+
+    // Enabling is idempotent and cheap, and doing it here means the feature
+    // needs no separate setup step: asking for a folder is asking for this.
+    await docker(occArgs(['app:enable', 'files_external']), { timeoutMs: 120_000 }).catch(() => {});
+
+    const existing = await listPanelMounts(docker);
+    const byTarget = new Map(existing.map((m) => [m.datadir, m]));
+
+    for (const m of wanted) {
+        if (byTarget.has(m.target)) {
+            byTarget.delete(m.target);
+            continue;
+        }
+        await docker(
+            occArgs(['files_external:create', m.name, 'local', 'null::null', '-c', `datadir=${m.target}`]),
+            { timeoutMs: 120_000 },
+        );
+        onLine(`Shared "${m.path}" into Nextcloud as "${m.name}".`);
+    }
+
+    // Whatever is left was ours and is no longer wanted.
+    for (const stale of byTarget.values()) {
+        await docker(occArgs(['files_external:delete', String(stale.id), '-y'])).catch(() => {});
+        onLine(`Stopped sharing "${stale.datadir}".`);
+    }
+}
+
+/** The external mounts this panel is responsible for, and where each points. */
+async function listPanelMounts(docker) {
+    try {
+        const { stdout } = await docker(occArgs(['files_external:list', '--output=json', '--show-password']));
+        const rows = JSON.parse(stdout.slice(stdout.indexOf('[')));
+        return rows
+            .map((r) => ({
+                id: r.mount_id ?? r.id,
+                datadir: r.configuration?.datadir ?? r.config?.datadir ?? null,
+            }))
+            .filter((r) => typeof r.datadir === 'string' && r.datadir.startsWith('/external/'));
+    } catch {
+        return [];
+    }
 }
 
 export async function syncPreviewSettings(docker, onLine = () => {}) {

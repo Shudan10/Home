@@ -1022,6 +1022,8 @@ async function loadApps() {
     // every render is what keeps the two from drifting.
     mediaPaths = [...(c.jellyfin?.mediaPaths ?? [])];
     renderMediaPaths();
+    sharedPaths = [...(c.nextcloud?.sharedPaths ?? [])];
+    renderSharedPaths();
     renderAppState('jellyfin', r.apps.jellyfin);
 
     for (const app of APP_KEYS) {
@@ -1290,6 +1292,58 @@ function addMediaPath() {
     toast('Added. Press Apply settings to mount it.');
 }
 
+/*
+ * The same list again for Nextcloud's shared folders. Deliberately a copy
+ * rather than a shared widget: the two differ in what they mean -- Jellyfin's
+ * are read-only libraries, these are folders you can work in -- and one
+ * parameterised renderer covering both would hide that behind a flag.
+ */
+let sharedPaths = [];
+
+function renderSharedPaths() {
+    const list = $('nextcloud-shared-list');
+    if (!list) return;
+    if (!sharedPaths.length) {
+        list.innerHTML = '<p class="muted">No folders shared yet.</p>';
+        return;
+    }
+    list.innerHTML = sharedPaths
+        .map(
+            (path, i) => `<div class="media-row">
+                <code>${escapeHtml(path)}</code>
+                <button type="button" class="ghost mini" data-shared-remove="${i}" title="Stop sharing this folder">Remove</button>
+            </div>`,
+        )
+        .join('');
+}
+
+function addSharedPath() {
+    const box = $('nextcloud-shared-new');
+    const path = box.value.trim().replace(/\/+$/, '');
+    if (!path) return;
+    if (!path.startsWith('/')) return toast('Give the full path, starting with a /.', 'bad');
+    if (sharedPaths.includes(path)) return toast('That folder is already shared.', 'bad');
+
+    sharedPaths.push(path);
+    box.value = '';
+    renderSharedPaths();
+    toast('Added. Press Apply settings to share it.');
+}
+
+$('nextcloud-shared-add').addEventListener('click', addSharedPath);
+$('nextcloud-shared-new').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        addSharedPath();
+    }
+});
+$('nextcloud-shared-list').addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-shared-remove]');
+    if (!button) return;
+    sharedPaths.splice(Number(button.dataset.sharedRemove), 1);
+    renderSharedPaths();
+});
+
 $('jellyfin-media-add').addEventListener('click', addMediaPath);
 $('jellyfin-media-new').addEventListener('keydown', (event) => {
     // Enter in a lone text box would submit nothing and look like it did.
@@ -1326,6 +1380,7 @@ function collectAppConfig(name) {
         hostPort: Number($('nextcloud-port').value),
         adminUser: $('nextcloud-user').value.trim(),
         trustedDomains: $('nextcloud-domains').value.trim(),
+        sharedPaths: [...sharedPaths],
     };
 }
 
