@@ -292,6 +292,26 @@
               </p>
             </article>
             <article class="card span2">
+              <h3>Shared folders</h3>
+              <p class="muted">
+                Folders already on this machine, shown inside Nextcloud where
+                they are. Nothing is copied &mdash; the same files appear in
+                Nextcloud, in Jellyfin, and on the disk.
+              </p>
+              <div id="nextcloud-shared-list" class="media-list"></div>
+              <div class="row">
+                <input id="nextcloud-shared-new" size="40" placeholder="/home/you/Media" autocomplete="off">
+                <button type="button" id="nextcloud-shared-add" class="ghost">Share folder</button>
+              </div>
+              <p class="hint">
+                The path as <strong>this machine</strong> sees it. Each appears
+                in Nextcloud named after its last folder. Use this instead of
+                pointing the desktop sync client at a folder on this same
+                machine &mdash; syncing would store everything twice on one disk.
+              </p>
+            </article>
+
+            <article class="card span2">
               <h3>Apply</h3>
               <p class="muted">Changes here restart Nextcloud.</p>
               <div class="row">
