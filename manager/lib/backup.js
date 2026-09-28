@@ -209,6 +209,22 @@ export async function run(onLine = () => {}) {
     ];
     if (cfg.mirrorDeletes) flags.push('--delete');
 
+    /*
+     * rsync's "some files could not be transferred" is not a failed backup.
+     *
+     * 23 and 24 mean the copy ran and finished and some individual files did
+     * not make it -- most often because the destination filesystem cannot store
+     * the name. A drive formatted NTFS or FAT rejects : ? * " < > and |, all of
+     * which are ordinary characters on Linux, so a handful of documents fail
+     * while a quarter of a terabyte copies perfectly.
+     *
+     * Reporting that as "failed" is worse than unhelpful: it says the backup
+     * did not happen when it almost entirely did, and it hides which files
+     * actually need attention behind an alarm about everything.
+     */
+    const PARTIAL = new Set([23, 24]);
+    const skipped = [];
+
     const leaf = cfg.destination.split('/').filter(Boolean).pop() || '';
     for (const src of sources) {
         const name = src.split('/').filter(Boolean).pop() || 'root';
@@ -217,6 +233,7 @@ export async function run(onLine = () => {}) {
         // rather than nesting another <name> inside it on every run.
         // A non-zero exit rejects, so there is no code to test here -- the
         // throw is the failure path, and the job it runs under reports it.
+        try {
         await docker(
             [
                 'run', '--rm',
@@ -234,12 +251,30 @@ export async function run(onLine = () => {}) {
             ],
             { onLine, timeoutMs: 12 * 60 * 60_000 },
         );
+        } catch (err) {
+            if (!PARTIAL.has(err.code)) throw err;
+            // Pull the names out of rsync's own complaint, so the report names
+            // the files rather than the exit code.
+            for (const m of String(err.stderr || err.stdout || '').matchAll(/"\/dest[^"]*\/\.?([^/"]+?)\.[A-Za-z0-9]{6}"/g)) {
+                if (!skipped.includes(m[1])) skipped.push(m[1]);
+            }
+            onLine(`\nSome files in ${src} could not be written to the drive.`);
+        }
     }
 
     const stamp = new Date().toISOString();
+    if (skipped.length) {
+        const note =
+            `Copied to ${cfg.destination}, but ${skipped.length} file(s) could not be written: ` +
+            `${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? '…' : ''}. ` +
+            'Usually their names contain characters the drive\'s filesystem cannot store, such as : or ?.';
+        saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: note });
+        onLine(`\n${note}`);
+        return { ok: true, skipped };
+    }
     saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: `Copied ${sources.length} folder(s) to ${cfg.destination}.` });
     onLine(`\nBacked up to ${cfg.destination}.`);
-    return { ok: true };
+    return { ok: true, skipped: [] };
 }
 
 /** Whether a host path is there, asked from a container that can see the host. */
