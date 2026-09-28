@@ -22,6 +22,7 @@ import * as nginx from './lib/nginx.js';
 import * as certbot from './lib/certbot.js';
 import * as duckdns from './lib/duckdns.js';
 import * as apps from './lib/apps.js';
+import * as backup from './lib/backup.js';
 import * as host from './lib/host.js';
 import * as selfservice from './lib/selfservice.js';
 import * as publish from './lib/publish.js';
@@ -657,6 +658,60 @@ route('GET', /^\/api\/logs\/stream-all$/, async (req, res) => {
 });
 
 // --------------------------------------------------------------------- jobs --
+
+// -------------------------------------------------------------------- backup --
+
+/**
+ * What can be backed up to, and how the last attempt went.
+ *
+ * The drive list is discovered rather than typed: a path is easy to get subtly
+ * wrong, and a wrong one here does not fail -- Docker creates a bind mount
+ * source that is missing, so a typo backs up onto the internal disk and reports
+ * success.
+ */
+route('GET', /^\/api\/backup$/, async (req, res) => {
+    const [drives] = await Promise.all([backup.listDestinations()]);
+    sendJson(res, 200, { config: backup.loadBackupConfig(), drives });
+});
+
+route('PUT', /^\/api\/backup$/, async (req, res) => {
+    const body = await readBody(req);
+    const { cfg, errors } = backup.validateBackupConfig(body ?? {});
+    if (errors.length) return fail(res, 400, errors[0], { details: errors });
+
+    // Preserved: these describe what happened, not what was asked for, and a
+    // save should not erase the record of the last run.
+    const prev = backup.loadBackupConfig();
+    const saved = backup.saveBackupConfig({
+        ...cfg,
+        lastRunAt: prev.lastRunAt,
+        lastResult: prev.lastResult,
+        lastOk: prev.lastOk,
+    });
+    backup.scheduleFromConfig(log, enqueueBackup);
+    sendJson(res, 200, { ok: true, config: saved });
+});
+
+/** Runs one copy now, through the job queue so it gets the usual live log. */
+route('POST', /^\/api\/backup\/run$/, async (req, res) => {
+    const job = enqueueBackup();
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+function enqueueBackup() {
+    return jobs.start('Back up', async (onLine) => {
+        try {
+            await backup.run(onLine);
+        } catch (err) {
+            backup.saveBackupConfig({
+                lastRunAt: new Date().toISOString(),
+                lastOk: false,
+                lastResult: err.message,
+            });
+            throw err;
+        }
+    });
+}
 
 route('GET', /^\/api\/jobs\/stream$/, async (req, res) => {
     const { send, onClose } = sse(req, res);
@@ -2049,6 +2104,10 @@ async function bootstrap() {
     }
 
     duckdns.scheduleFromConfig(log);
+    // Queued rather than run directly, so a scheduled copy shares the one-at-a-
+    // time queue with everything else and cannot start while an image is
+    // building or a container is being recreated underneath it.
+    backup.scheduleFromConfig(log, enqueueBackup);
 
     // Certificates are valid for 90 days; a daily attempt is what certbot's own
     // packaging recommends and is a no-op until one is close to expiry.
