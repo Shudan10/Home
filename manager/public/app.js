@@ -384,6 +384,31 @@ function progressFromLine(line) {
         return setProgress(0.06 + 0.74 * mean);
     }
 
+    /*
+     * rsync's own percentage, which is the only job here that can report a real
+     * one -- everything else is a sequence of named steps the bar guesses at.
+     *
+     * Scoped to the backup action. The shape is generic enough ("123,456  45%")
+     * that letting it run against every job would let some other tool's output
+     * drive the bar backwards.
+     */
+    if (pendingAction.key === 'backup') {
+        const pct = /^\s*[\d,]+\s+(\d{1,3})%/.exec(line);
+        if (pct) {
+            const done = Math.min(100, Number(pct[1])) / 100;
+            // Folders are copied one after another, so each one's percentage is
+            // a slice of the whole rather than the whole thing.
+            const total = pendingAction.backupTotal || 1;
+            const index = pendingAction.backupIndex || 0;
+            return setProgress((index + done) / total);
+        }
+        const start = /^> (\/.*)$/.exec(line);
+        if (start) {
+            pendingAction.backupIndex = (pendingAction.backupIndex ?? -1) + 1;
+            return;
+        }
+    }
+
     for (const [re, fraction] of ACTION_MARKS) {
         if (re.test(line)) return setProgress(fraction);
     }
@@ -3509,11 +3534,21 @@ $('backup-save').addEventListener('click', async () => {
 });
 
 $('backup-run').addEventListener('click', async () => {
-    const job = await runAction({
+    const pending = runAction({
         key: 'backup',
         title: 'Backing up',
         note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
         request: () => api('/api/backup/run', { method: 'POST' }),
     });
+    // runAction opens the overlay synchronously before it awaits anything, so
+    // pendingAction exists by the time this line runs. The bar needs to know
+    // how many folders there are to turn one folder's percentage into a share
+    // of the whole; the index starts below zero because the first "> /path"
+    // line advances it to zero.
+    if (pendingAction) {
+        pendingAction.backupTotal = backupSources.length || 1;
+        pendingAction.backupIndex = -1;
+    }
+    const job = await pending;
     if (job) loadBackup().catch(() => {});
 });
