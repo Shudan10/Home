@@ -1,5 +1,6 @@
 import { loadManagerConfig, saveManagerConfig } from './store.js';
 import { docker } from './dockerctl.js';
+import { loadAppsConfig } from './apps.js';
 
 /**
  * Copies folders from this machine onto a drive plugged into it.
@@ -23,7 +24,6 @@ const SEARCH_ROOTS = ['/media', '/run/media', '/mnt'];
 export const DEFAULT_BACKUP_CONFIG = {
     enabled: false,
     destination: '',
-    sources: [],
     intervalHours: 24,
     // Off, and it stays off unless somebody deliberately asks. With this on the
     // copy becomes a mirror, and a mirror of a folder you just deleted
@@ -33,6 +33,18 @@ export const DEFAULT_BACKUP_CONFIG = {
     lastResult: null,
     lastOk: null,
 };
+
+/**
+ * What this backs up: the folders Nextcloud is serving, and nothing else.
+ *
+ * Derived rather than configured. A second list of paths to keep in step with
+ * the first is a list that drifts, and the failure is silent -- a folder added
+ * to Nextcloud and not to the backup is a folder nobody notices is unprotected
+ * until they need it.
+ */
+export function backupSources() {
+    return [...(loadAppsConfig().nextcloud.sharedPaths ?? [])];
+}
 
 export function loadBackupConfig() {
     const cfg = loadManagerConfig();
@@ -113,22 +125,12 @@ export function validateBackupConfig(input) {
 
     out.enabled = Boolean(input.enabled);
     out.mirrorDeletes = Boolean(input.mirrorDeletes);
+    const sources = backupSources();
 
     const dest = String(input.destination ?? '').trim().replace(/\/+$/, '');
     if (dest && !dest.startsWith('/')) errors.push('The destination has to be a full path starting with /.');
     else if (dest.split('/').includes('..')) errors.push('The destination contains "..", so write the real path instead.');
     else out.destination = dest;
-
-    const sources = [];
-    for (const entry of Array.isArray(input.sources) ? input.sources : []) {
-        const p = String(entry ?? '').trim().replace(/\/+$/, '');
-        if (!p) continue;
-        if (!p.startsWith('/')) errors.push(`"${p}" is not a full path.`);
-        else if (p.split('/').includes('..')) errors.push(`"${p}" contains "..", so write the real path instead.`);
-        else if (p === '/') errors.push('Backing up the whole filesystem is not something this will do.');
-        else if (!sources.includes(p)) sources.push(p);
-    }
-    out.sources = sources;
 
     const hours = Number(input.intervalHours ?? 24);
     if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
@@ -138,11 +140,13 @@ export function validateBackupConfig(input) {
     }
 
     if (out.enabled && !out.destination) errors.push('Pick a drive to back up to first.');
-    if (out.enabled && !out.sources.length) errors.push('Add at least one folder to back up.');
+    if (out.enabled && !sources.length) {
+        errors.push('Nextcloud has no shared folders yet, so there is nothing to back up. Add one under Settings.');
+    }
 
     // Copying a folder into itself, or into something inside itself, is a loop
     // that fills the disk. Cheap to check and miserable to discover.
-    for (const s of out.sources) {
+    for (const s of sources) {
         if (out.destination === s || out.destination.startsWith(`${s}/`)) {
             errors.push(`The destination is inside "${s}", which would copy that folder into itself.`);
         }
@@ -165,8 +169,9 @@ export function validateBackupConfig(input) {
  */
 export async function run(onLine = () => {}) {
     const cfg = loadBackupConfig();
+    const sources = backupSources();
     if (!cfg.destination) throw new Error('No backup drive is set.');
-    if (!cfg.sources.length) throw new Error('No folders are set to back up.');
+    if (!sources.length) throw new Error('Nextcloud has no shared folders, so there is nothing to back up.');
 
     // The destination itself may legitimately not exist yet -- a first run
     // creates it. Its parent must, and that is the check that matters: the
@@ -189,7 +194,7 @@ export async function run(onLine = () => {}) {
     if (cfg.mirrorDeletes) flags.push('--delete');
 
     const leaf = cfg.destination.split('/').filter(Boolean).pop() || '';
-    for (const src of cfg.sources) {
+    for (const src of sources) {
         const name = src.split('/').filter(Boolean).pop() || 'root';
         onLine(`\n> ${src}`);
         // Trailing slash on the source: copy the contents into <dest>/<name>,
@@ -212,7 +217,7 @@ export async function run(onLine = () => {}) {
     }
 
     const stamp = new Date().toISOString();
-    saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: `Copied ${cfg.sources.length} folder(s) to ${cfg.destination}.` });
+    saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: `Copied ${sources.length} folder(s) to ${cfg.destination}.` });
     onLine(`\nBacked up to ${cfg.destination}.`);
     return { ok: true };
 }
@@ -246,7 +251,7 @@ export function scheduleFromConfig(log = () => {}, enqueue = null) {
     timer = null;
 
     const cfg = loadBackupConfig();
-    if (!cfg.enabled || !cfg.destination || !cfg.sources.length) return;
+    if (!cfg.enabled || !cfg.destination || !backupSources().length) return;
 
     const tick = async () => {
         try {
