@@ -1095,6 +1095,35 @@ const APP_KEYS = ['nextcloud', 'jellyfin'];
  * so a phone reading this gets a link that works from the phone rather than a
  * localhost that only means anything on the server.
  */
+
+/**
+ * The address to paste into a file manager.
+ *
+ * Nextcloud speaks WebDAV, which every desktop file manager can mount, and that
+ * is the way to work with these files from this machine now that Nextcloud owns
+ * them -- they are its to read and write, and the account is the way in.
+ *
+ * /remote.php/webdav/ rather than /remote.php/dav/files/<user>/ on purpose: the
+ * short form serves whoever logs in, so the link is the same for everybody and
+ * does not have to be rewritten per account. The scheme follows the protocol --
+ * dav:// for http, davs:// for https -- because file managers pick their
+ * transport from it and a davs:// against a plain http port simply fails.
+ */
+function webdavLinks(hostPort, publicUrl) {
+    const rows = [];
+    const row = (url, label) =>
+        `<div class="media-row"><code>${escapeHtml(url)}</code>` +
+        `<span class="muted">${escapeHtml(label)}</span></div>`;
+
+    if (publicUrl) {
+        const u = new URL(publicUrl);
+        rows.push(row(`${u.protocol === 'https:' ? 'davs' : 'dav'}://${u.host}/remote.php/webdav/`, 'from anywhere'));
+    }
+    const local = localHost();
+    if (hostPort && local) rows.push(row(`dav://${local}:${hostPort}/remote.php/webdav/`, 'on this network'));
+    return rows.join('');
+}
+
 function appLinks(hostPort, publicUrl) {
     const a = (url, label) =>
         `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>` +
@@ -1122,16 +1151,26 @@ function appLinks(hostPort, publicUrl) {
  */
 function localHost() {
     const here = location.hostname;
-    const isLocal =
-        here === 'localhost' ||
-        here.endsWith('.local') ||
-        /^127\./.test(here) ||
-        /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(here) ||
-        /^\[?::1\]?$/.test(here);
-    // Whatever the server discovered is the fallback, and null when it could
-    // not work one out -- in which case there is no honest local link to show
-    // and the row is left out rather than guessed at.
-    return isLocal ? here : (hostSnapshot?.lanAddress ?? null);
+    const lan = hostSnapshot?.lanAddress ?? null;
+
+    // Already a real address on the network, and demonstrably reachable from
+    // wherever this page is being read, so it beats anything inferred.
+    if (here.endsWith('.local') || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(here)) {
+        return here;
+    }
+
+    // localhost is this *machine*, not this network. Echoing it back produced a
+    // link labelled "on this network" that works only on the one computer the
+    // panel happens to be open on -- paste it into a phone and nothing answers.
+    // The discovered address is the one worth showing, so it wins here.
+    if (here === 'localhost' || /^127\./.test(here) || /^\[?::1\]?$/.test(here)) {
+        return lan ?? here;
+    }
+
+    // A public name: nothing about it is local, so only the discovered address
+    // will do. Null when there is none, and then the row is left out rather
+    // than guessed at.
+    return lan;
 }
 
 /**
@@ -1206,9 +1245,19 @@ function renderAppState(name, state) {
         const link = $('nextcloud-link');
         const cfg = appsState.config.nextcloud;
         link.hidden = false;
+        // Hidden by default each pass, so the branches below only have to say
+        // when it should appear rather than every branch remembering to hide it.
+        $('nextcloud-webdav-card').hidden = true;
         if (running && (cfg.publish.web || state.publicUrl)) {
             link.className = 'verdict ok';
             link.innerHTML = appLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl);
+
+            // Only offered when it is actually reachable, which is the same
+            // condition as the links above -- an address nobody can connect to
+            // is worse than no address.
+            const dav = webdavLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl);
+            $('nextcloud-webdav-card').hidden = !dav;
+            $('nextcloud-webdav').innerHTML = dav;
         } else if (running) {
             link.className = 'verdict';
             link.textContent =
