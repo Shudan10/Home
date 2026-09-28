@@ -43,7 +43,38 @@ export const DEFAULT_BACKUP_CONFIG = {
  * until they need it.
  */
 export function backupSources() {
-    return [...(loadAppsConfig().nextcloud.sharedPaths ?? [])];
+    const shared = loadAppsConfig().nextcloud.sharedPaths ?? [];
+    if (shared.length) return [...shared];
+    // No shared folders means Nextcloud keeps its files itself, in its own data
+    // volume, and that is then the thing worth copying. Asked of Docker rather
+    // than assumed: the volume's location on the host is the daemon's business
+    // and differs with how Docker is configured.
+    return dataVolumePath ? [dataVolumePath] : [];
+}
+
+/*
+ * Where Nextcloud's own data lives on the host.
+ *
+ * Resolved once at startup rather than on every call: it is a property of the
+ * installation, and a backup tick should not spend a container start asking
+ * Docker a question whose answer cannot change while the panel is running.
+ */
+let dataVolumePath = null;
+
+export async function resolveDataVolume() {
+    try {
+        const { stdout } = await docker(
+            ['volume', 'inspect', 'quickstart-home-nextcloud-data', '--format', '{{.Mountpoint}}'],
+            { timeoutMs: 20_000 },
+        );
+        const p = stdout.trim();
+        // The user files, not the whole Nextcloud install: config and the
+        // application itself are rebuilt by an install, the files are not.
+        if (p.startsWith('/')) dataVolumePath = `${p}/data`;
+    } catch {
+        dataVolumePath = null;
+    }
+    return dataVolumePath;
 }
 
 export function loadBackupConfig() {
@@ -187,6 +218,9 @@ export function validateBackupConfig(input) {
  */
 export async function run(onLine = () => {}) {
     const cfg = loadBackupConfig();
+    // Lazy rather than boot-order dependent: whatever calls this first gets it
+    // resolved, so a reordering at startup cannot quietly leave it empty.
+    if (!dataVolumePath) await resolveDataVolume();
     const sources = backupSources();
     if (!cfg.destination) throw new Error('No backup drive is set.');
     if (!sources.length) throw new Error('Nextcloud has no shared folders, so there is nothing to back up.');
@@ -323,6 +357,7 @@ async function pathExists(p) {
  */
 export async function hasChanges() {
     const cfg = loadBackupConfig();
+    if (!dataVolumePath) await resolveDataVolume();
     const sources = backupSources();
     if (!cfg.destination || !sources.length) return false;
 
@@ -371,6 +406,7 @@ export function scheduleFromConfig(log = () => {}, enqueue = null) {
 
     const tick = async () => {
         try {
+            if (!dataVolumePath) await resolveDataVolume();
             // Nothing to copy means nothing to announce. This is the whole
             // reason a five-minute schedule is reasonable.
             if (!(await hasChanges())) return;

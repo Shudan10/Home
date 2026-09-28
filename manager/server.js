@@ -2121,6 +2121,9 @@ async function bootstrap() {
     // Queued rather than run directly, so a scheduled copy shares the one-at-a-
     // time queue with everything else and cannot start while an image is
     // building or a container is being recreated underneath it.
+    // Resolved before the schedule is armed: without it a Nextcloud that keeps
+    // its own files has no backup source and every tick does nothing.
+    await backup.resolveDataVolume();
     backup.scheduleFromConfig(log, enqueueBackup);
 
     // Certificates are valid for 90 days; a daily attempt is what certbot's own
