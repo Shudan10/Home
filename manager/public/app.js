@@ -3411,20 +3411,16 @@ let backupSources = [];
 let backupDrives = [];
 
 function renderBackupSources() {
-    const list = $('backup-source-list');
-    if (!list) return;
+    const note = $('backup-sources-note');
+    if (!note) return;
     if (!backupSources.length) {
-        list.innerHTML = '<p class="muted">No folders yet.</p>';
+        note.className = 'verdict bad';
+        note.textContent =
+            'Nextcloud has no shared folders yet, so there is nothing to back up. Add one under Settings.';
         return;
     }
-    list.innerHTML = backupSources
-        .map(
-            (path, i) => `<div class="media-row">
-                <code>${escapeHtml(path)}</code>
-                <button type="button" class="ghost mini" data-backup-remove="${i}" title="Remove this folder">Remove</button>
-            </div>`,
-        )
-        .join('');
+    note.className = 'verdict';
+    note.textContent = `Backs up what Nextcloud is serving: ${backupSources.join(', ')}.`;
 }
 
 function renderBackupDrives(selected) {
@@ -3463,7 +3459,7 @@ async function loadBackup() {
     }
     const c = r.config ?? {};
     backupDrives = r.drives ?? [];
-    backupSources = [...(c.sources ?? [])];
+    backupSources = r.sources ?? [];
     renderBackupSources();
     renderBackupDrives(c.destination);
     $('backup-enabled').checked = Boolean(c.enabled);
@@ -3480,31 +3476,7 @@ async function loadBackup() {
         last.className = 'verdict';
         last.textContent = 'No backup has run yet.';
     }
-    setNavHealth('backup', !c.enabled ? 'off' : c.lastOk === false ? 'bad' : 'ok');
 }
-
-$('backup-source-add').addEventListener('click', () => {
-    const box = $('backup-source-new');
-    const path = box.value.trim().replace(/\/+$/, '');
-    if (!path) return;
-    if (!path.startsWith('/')) return toast('Give the full path, starting with a /.', 'bad');
-    if (backupSources.includes(path)) return toast('That folder is already on the list.', 'bad');
-    backupSources.push(path);
-    box.value = '';
-    renderBackupSources();
-});
-$('backup-source-new').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        $('backup-source-add').click();
-    }
-});
-$('backup-source-list').addEventListener('click', (event) => {
-    const button = event.target.closest?.('[data-backup-remove]');
-    if (!button) return;
-    backupSources.splice(Number(button.dataset.backupRemove), 1);
-    renderBackupSources();
-});
 
 $('backup-rescan').addEventListener('click', async () => {
     const button = $('backup-rescan');
@@ -3523,7 +3495,6 @@ $('backup-save').addEventListener('click', async () => {
     const body = {
         enabled: $('backup-enabled').checked,
         destination: $('backup-destination').value,
-        sources: [...backupSources],
         intervalHours: Number($('backup-interval').value),
         mirrorDeletes: $('backup-mirror').checked,
     };

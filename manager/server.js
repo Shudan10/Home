@@ -670,8 +670,10 @@ route('GET', /^\/api\/logs\/stream-all$/, async (req, res) => {
  * success.
  */
 route('GET', /^\/api\/backup$/, async (req, res) => {
-    const [drives] = await Promise.all([backup.listDestinations()]);
-    sendJson(res, 200, { config: backup.loadBackupConfig(), drives });
+    const drives = await backup.listDestinations();
+    // The folders come from Nextcloud's shared folders, so the page shows what
+    // will be copied rather than asking for it a second time.
+    sendJson(res, 200, { config: backup.loadBackupConfig(), drives, sources: backup.backupSources() });
 });
 
 route('PUT', /^\/api\/backup$/, async (req, res) => {

@@ -118,13 +118,6 @@
 
       <p class="nav-group-title">System</p>
       <div class="nav-row">
-        <button class="nav-item" data-tab="backup" title="Backup">
-          <span class="nav-dot" data-health="backup"></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
-          <span class="label">Backup</span>
-        </button>
-      </div>
-      <div class="nav-row">
         <button class="nav-item" data-tab="logs" title="All logs">
           <span class="nav-dot" data-health="logs"></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h4"/></svg>
@@ -231,6 +224,7 @@
       <nav class="subnav" aria-label="Nextcloud">
         <button class="subtab-btn active" data-subtab="nextcloud-overview">Overview</button>
         <button class="subtab-btn" data-subtab="nextcloud-settings">Settings</button>
+        <button class="subtab-btn" data-subtab="nextcloud-backup">Backup</button>
         <button class="subtab-btn" data-subtab="nextcloud-updates">Updates</button>
         <button class="subtab-btn" data-subtab="nextcloud-uninstall">Uninstall</button>
       </nav>
@@ -349,6 +343,75 @@
               This changes it inside Nextcloud straight away and remembers the new
               one here. Anyone already signed in stays signed in.
             </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-nextcloud-backup" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Back up Nextcloud to a drive</h3>
+            <p class="muted">
+              Copies the folders Nextcloud is serving onto a drive plugged into
+              this machine. A copy, not a sync &mdash; nothing that happens to
+              the originals is repeated onto the drive, which is the point of
+              having one.
+            </p>
+            <div id="backup-sources-note" class="verdict"></div>
+            <div id="backup-last" class="verdict" hidden></div>
+          </article>
+
+          <article class="card span2">
+            <h3>Drive</h3>
+            <label>
+              Back up to
+              <select id="backup-destination"></select>
+            </label>
+            <p class="hint">
+              If your drive is not listed, plug it in and open it once in your
+              file manager, then press Rescan.
+            </p>
+            <div class="row">
+              <button type="button" id="backup-rescan" class="ghost">Rescan drives</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Schedule</h3>
+            <label class="check">
+              <input type="checkbox" id="backup-enabled"> Back up automatically
+            </label>
+            <label class="inline">
+              Every
+              <input type="number" id="backup-interval" min="1" max="720" step="1" style="max-width:6rem">
+              hours
+            </label>
+            <p class="hint">
+              A scheduled run that finds the drive unplugged records why and
+              waits for the next one.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Deleted files</h3>
+            <label class="check">
+              <input type="checkbox" id="backup-mirror"> Remove files from the drive when they are deleted here
+            </label>
+            <p class="hint">
+              Off by default, and worth leaving off. With this on the drive is a
+              mirror, and a mirror of a folder you have just deleted something
+              from is a folder with that thing deleted from it.
+            </p>
+          </article>
+
+          <article class="card span2">
+            <h3>Apply</h3>
+            <div class="row">
+              <button type="button" id="backup-save" class="primary">Save settings</button>
+              <button type="button" id="backup-run" class="ghost">Back up now</button>
+            </div>
+            <p class="error" id="backup-error" hidden></p>
+            <div id="backup-result" class="verdict" hidden></div>
           </article>
         </div>
       </div>
@@ -703,87 +766,6 @@
     </section>
 
     <!-- ------------------------------------------------------------ logs -->
-    <section id="tab-backup" class="tab">
-      <div class="grid">
-        <article class="card span2">
-          <h3>Back up to a drive</h3>
-          <p class="muted">
-            Copies folders from this machine onto a drive plugged into it. This
-            is a copy, not a sync &mdash; nothing that happens to the originals
-            is repeated onto the drive, which is the point of having one.
-          </p>
-          <div id="backup-last" class="verdict" hidden></div>
-        </article>
-
-        <article class="card span2">
-          <h3>Drive</h3>
-          <label>
-            Back up to
-            <select id="backup-destination"></select>
-          </label>
-          <p class="hint" id="backup-drive-note">
-            Drives are found where the system mounts them. If yours is not
-            listed, plug it in and open it once in your file manager, then press
-            Rescan.
-          </p>
-          <div class="row">
-            <button type="button" id="backup-rescan" class="ghost">Rescan drives</button>
-          </div>
-        </article>
-
-        <article class="card span2">
-          <h3>Folders to back up</h3>
-          <div id="backup-source-list" class="media-list"></div>
-          <div class="row">
-            <input id="backup-source-new" size="40" placeholder="/home/you/Documents" autocomplete="off">
-            <button type="button" id="backup-source-add" class="ghost">Add folder</button>
-          </div>
-          <p class="hint">
-            Full paths as <strong>this machine</strong> sees them. Each is copied
-            into a folder of the same name on the drive.
-          </p>
-        </article>
-
-        <article class="card">
-          <h3>Schedule</h3>
-          <label class="check">
-            <input type="checkbox" id="backup-enabled"> Back up automatically
-          </label>
-          <label class="inline">
-            Every
-            <input type="number" id="backup-interval" min="1" max="720" step="1" style="max-width:6rem">
-            hours
-          </label>
-          <p class="hint">
-            A scheduled run that finds the drive unplugged records why and waits
-            for the next one.
-          </p>
-        </article>
-
-        <article class="card">
-          <h3>Deleted files</h3>
-          <label class="check">
-            <input type="checkbox" id="backup-mirror"> Remove files from the drive when they are deleted here
-          </label>
-          <p class="hint">
-            Off by default, and worth leaving off. With this on the drive is a
-            mirror, and a mirror of a folder you have just deleted something
-            from is a folder with that thing deleted from it.
-          </p>
-        </article>
-
-        <article class="card span2">
-          <h3>Apply</h3>
-          <div class="row">
-            <button type="button" id="backup-save" class="primary">Save settings</button>
-            <button type="button" id="backup-run" class="ghost">Back up now</button>
-          </div>
-          <p class="error" id="backup-error" hidden></p>
-          <div id="backup-result" class="verdict" hidden></div>
-        </article>
-      </div>
-    </section>
-
     <section id="tab-logs" class="tab">
       <div class="logs-toolbar">
         <label class="check" title="Jump to the newest line as it arrives. Untick to scroll back through history without being pulled to the bottom."><input type="checkbox" id="log-follow" checked> auto-scroll</label>
