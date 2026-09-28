@@ -103,6 +103,8 @@ export const DEFAULT_APPS_CONFIG = {
         // filesystem with no way to share blocks between them. These mounts are
         // the same folder seen from both sides instead.
         sharedPaths: [],
+        // Filled in when the folders are applied; see ownerGids.
+        sharedGids: [],
     },
     jellyfin: {
         enabled: false,
@@ -334,6 +336,11 @@ export function validateAppsConfig(input) {
     }
 
     cfg.nextcloud.sharedPaths = validateMediaPaths(n.sharedPaths, errors, 'Nextcloud');
+    // Not user input -- discovered from the filesystem when the folders are
+    // applied, and carried through a save so it is not lost.
+    cfg.nextcloud.sharedGids = (Array.isArray(n.sharedGids) ? n.sharedGids : [])
+        .map(Number)
+        .filter((g) => Number.isInteger(g) && g > 0);
 
     // --- Jellyfin ---
     const j = input.jellyfin ?? {};
@@ -479,6 +486,13 @@ export function renderAppsPortsOverride(cfg) {
         if (shared.length) {
             blocks.push('    volumes:');
             for (const m of shared) blocks.push(`      - "${m.path}:${m.target}"`);
+        }
+        // Without this, browsing a shared folder works and uploading into it
+        // returns 403 -- see ownerGids for why.
+        const gids = cfg.nextcloud.sharedGids ?? [];
+        if (gids.length) {
+            blocks.push('    group_add:');
+            for (const g of gids) blocks.push(`      - "${g}"`);
         }
     }
 
@@ -1017,6 +1031,37 @@ async function listPanelMounts(docker) {
                 datadir: r.configuration?.datadir ?? r.config?.datadir ?? null,
             }))
             .filter((r) => typeof r.datadir === 'string' && r.datadir.startsWith('/external/'));
+    } catch {
+        return [];
+    }
+}
+
+
+/**
+ * The group that owns each shared folder, so Nextcloud can be put in it.
+ *
+ * Nextcloud runs as www-data, uid 33. A folder on the host belongs to the
+ * person who made it, usually uid 1000, and is mode 775 -- so www-data falls
+ * through to "other", gets r-x, and every upload fails with 403 while browsing
+ * works perfectly. That combination is confusing enough to be worth preventing
+ * rather than explaining.
+ *
+ * Adding the folder's own group to the container is the least invasive fix
+ * available. Changing ownership would mean rewriting thousands of files and
+ * would take them away from the person who owns them; running the container as
+ * uid 1000 would break the data volume the image sets up as 33. This leaves
+ * both sides owning what they already own.
+ */
+export async function ownerGids(docker, paths) {
+    if (!paths.length) return [];
+    const script = paths.map((p) => `stat -c '%g' "/host${p}" 2>/dev/null`).join('\n');
+    try {
+        const { stdout } = await docker(
+            ['run', '--rm', '-v', '/:/host:ro', 'quickstart-home/manager:1', 'sh', '-c', script],
+            { timeoutMs: 30_000 },
+        );
+        const gids = stdout.split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
+        return [...new Set(gids)];
     } catch {
         return [];
     }

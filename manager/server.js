@@ -333,6 +333,18 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
     const app = apps.APPS[name];
     const settings = cfg[name];
 
+    // Which group owns each shared folder, so the container can be put in it.
+    // Done here rather than in validation because it reads the filesystem, and
+    // it has to happen before the override is written.
+    if (name === 'nextcloud') {
+        const gids = await apps.ownerGids(dockerctl.docker, cfg.nextcloud.sharedPaths ?? []);
+        if (gids.length) {
+            cfg.nextcloud.sharedGids = gids;
+            apps.saveAppsConfig(cfg);
+            onLine(`Shared folders are owned by group ${gids.join(', ')}; Nextcloud will run as a member.`);
+        }
+    }
+
     apps.ensureSecrets();
     apps.writeAppsEnv(cfg);
     apps.renderAppsPortsOverride(cfg);
