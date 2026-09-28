@@ -13,6 +13,10 @@ RUN apk add --no-cache \
     docker-cli-buildx \
     curl \
     ca-certificates \
+    # The backup copies run rsync in a throwaway container built from this
+    # image, because it is the one image certainly present -- pulling something
+    # would make a backup depend on the network reaching a registry.
+    rsync \
     tini
 
 WORKDIR /app

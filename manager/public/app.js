@@ -55,6 +55,23 @@ function fmtBytes(text) {
     return text; // docker already reports a human-readable size
 }
 
+/**
+ * Shows a one-line outcome next to the control that produced it.
+ *
+ * Called from six places and defined in none of them until now -- every one of
+ * those paths threw ReferenceError instead of reporting, so saving a password,
+ * moving the panel's port and a failed update all went visibly nowhere. The
+ * targets are a mix of <p class="hint"> and <div class="verdict">, so the
+ * classes are set here rather than assumed.
+ */
+function kResult(id, message, bad = false) {
+    const el = $(id);
+    if (!el) return;
+    el.hidden = false;
+    el.className = bad ? 'verdict bad' : 'verdict';
+    el.textContent = message;
+}
+
 function fmtDuration(iso) {
     if (!iso || iso.startsWith('0001')) return '–';
     const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
@@ -84,6 +101,10 @@ function showApp() {
     loadProxies();
     loadApps();
     loadDuckDns();
+    // Drive discovery runs a container, so this is the one load that costs
+    // something. Once on sign-in is enough -- Rescan is there for the moment a
+    // drive is plugged in afterwards.
+    loadBackup().catch(() => {});
     connectJobs();
     connectLogs();
 }
@@ -584,7 +605,7 @@ function closeAction() {
     // What exists, what is running and what every tab shows can all have
     // changed while this was on screen. Failures here are the panel not
     // knowing something yet, which the next poll fixes.
-    for (const reload of [loadServices, refreshStatus, loadApps, loadProxies, loadPublish]) {
+    for (const reload of [loadServices, refreshStatus, loadApps, loadProxies, loadPublish, loadBackup]) {
         Promise.resolve(reload()).catch(() => {});
     }
 }
@@ -3376,3 +3397,152 @@ if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
 }
+
+// ------------------------------------------------------------------ backup --
+
+/**
+ * The Backup tab.
+ *
+ * Destinations are chosen from a discovered list rather than typed, because a
+ * mistyped path here does not fail: Docker creates a bind mount source that is
+ * missing, so the copy would run onto the internal disk and report success.
+ */
+let backupSources = [];
+let backupDrives = [];
+
+function renderBackupSources() {
+    const list = $('backup-source-list');
+    if (!list) return;
+    if (!backupSources.length) {
+        list.innerHTML = '<p class="muted">No folders yet.</p>';
+        return;
+    }
+    list.innerHTML = backupSources
+        .map(
+            (path, i) => `<div class="media-row">
+                <code>${escapeHtml(path)}</code>
+                <button type="button" class="ghost mini" data-backup-remove="${i}" title="Remove this folder">Remove</button>
+            </div>`,
+        )
+        .join('');
+}
+
+function renderBackupDrives(selected) {
+    const sel = $('backup-destination');
+    if (!sel) return;
+    if (!backupDrives.length) {
+        sel.innerHTML = '<option value="">No drives found</option>';
+        return;
+    }
+    const gb = (n) => `${(n / 1e9).toFixed(0)} GB`;
+    sel.innerHTML =
+        '<option value="">Choose a drive…</option>' +
+        backupDrives
+            .map(
+                (d) =>
+                    `<option value="${escapeHtml(d.path)}"${d.path === selected ? ' selected' : ''}>` +
+                    `${escapeHtml(d.path)} — ${gb(d.free)} free of ${gb(d.total)}</option>`,
+            )
+            .join('');
+    // A destination saved earlier for a drive that is not plugged in now would
+    // otherwise silently become "Choose a drive", and saving would clear it.
+    if (selected && !backupDrives.some((d) => d.path === selected)) {
+        sel.insertAdjacentHTML(
+            'beforeend',
+            `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} — not plugged in</option>`,
+        );
+    }
+}
+
+async function loadBackup() {
+    let r;
+    try {
+        r = await api('/api/backup');
+    } catch {
+        return;
+    }
+    const c = r.config ?? {};
+    backupDrives = r.drives ?? [];
+    backupSources = [...(c.sources ?? [])];
+    renderBackupSources();
+    renderBackupDrives(c.destination);
+    $('backup-enabled').checked = Boolean(c.enabled);
+    $('backup-mirror').checked = Boolean(c.mirrorDeletes);
+    $('backup-interval').value = c.intervalHours ?? 24;
+
+    const last = $('backup-last');
+    if (c.lastRunAt) {
+        last.hidden = false;
+        last.className = c.lastOk === false ? 'verdict bad' : 'verdict ok';
+        last.textContent = `${c.lastOk === false ? 'Last attempt failed' : 'Last backup'}: ${c.lastResult ?? ''} (${new Date(c.lastRunAt).toLocaleString()})`;
+    } else {
+        last.hidden = false;
+        last.className = 'verdict';
+        last.textContent = 'No backup has run yet.';
+    }
+    setNavHealth('backup', !c.enabled ? 'off' : c.lastOk === false ? 'bad' : 'ok');
+}
+
+$('backup-source-add').addEventListener('click', () => {
+    const box = $('backup-source-new');
+    const path = box.value.trim().replace(/\/+$/, '');
+    if (!path) return;
+    if (!path.startsWith('/')) return toast('Give the full path, starting with a /.', 'bad');
+    if (backupSources.includes(path)) return toast('That folder is already on the list.', 'bad');
+    backupSources.push(path);
+    box.value = '';
+    renderBackupSources();
+});
+$('backup-source-new').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        $('backup-source-add').click();
+    }
+});
+$('backup-source-list').addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-backup-remove]');
+    if (!button) return;
+    backupSources.splice(Number(button.dataset.backupRemove), 1);
+    renderBackupSources();
+});
+
+$('backup-rescan').addEventListener('click', async () => {
+    const button = $('backup-rescan');
+    button.disabled = true;
+    try {
+        await loadBackup();
+        toast(backupDrives.length ? `Found ${backupDrives.length} drive(s).` : 'No drives found.');
+    } finally {
+        button.disabled = false;
+    }
+});
+
+$('backup-save').addEventListener('click', async () => {
+    const err = $('backup-error');
+    err.hidden = true;
+    const body = {
+        enabled: $('backup-enabled').checked,
+        destination: $('backup-destination').value,
+        sources: [...backupSources],
+        intervalHours: Number($('backup-interval').value),
+        mirrorDeletes: $('backup-mirror').checked,
+    };
+    try {
+        await api('/api/backup', { method: 'PUT', body });
+        kResult('backup-result', 'Saved.', false);
+        await loadBackup();
+    } catch (e) {
+        err.hidden = false;
+        err.textContent = e.message;
+    }
+});
+
+$('backup-run').addEventListener('click', async () => {
+    const job = await runAction({
+        key: 'backup',
+        title: 'Backing up',
+        note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
+        request: () => api('/api/backup/run', { method: 'POST' }),
+    });
+    if (job) loadBackup().catch(() => {});
+});
