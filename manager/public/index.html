@@ -382,13 +382,16 @@
               <input type="checkbox" id="backup-enabled"> Back up automatically
             </label>
             <label class="inline">
-              Every
-              <input type="number" id="backup-interval" min="1" max="720" step="1" style="max-width:6rem">
-              hours
+              Check every
+              <input type="number" id="backup-interval" min="5" max="43200" step="5" style="max-width:6rem">
+              minutes
             </label>
             <p class="hint">
-              A scheduled run that finds the drive unplugged records why and
-              waits for the next one.
+              Checking is cheap &mdash; about a second, even across thousands of
+              files &mdash; so a short interval costs almost nothing. A check
+              that finds no changes does nothing and says nothing; only a real
+              copy appears in the log. A run that finds the drive unplugged
+              records why and waits for the next one.
             </p>
           </article>
 

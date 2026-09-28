@@ -3489,7 +3489,7 @@ async function loadBackup() {
     renderBackupDrives(c.destination);
     $('backup-enabled').checked = Boolean(c.enabled);
     $('backup-mirror').checked = Boolean(c.mirrorDeletes);
-    $('backup-interval').value = c.intervalHours ?? 24;
+    $('backup-interval').value = c.intervalMinutes ?? 15;
 
     const last = $('backup-last');
     if (c.lastRunAt) {
@@ -3520,7 +3520,7 @@ $('backup-save').addEventListener('click', async () => {
     const body = {
         enabled: $('backup-enabled').checked,
         destination: $('backup-destination').value,
-        intervalHours: Number($('backup-interval').value),
+        intervalMinutes: Number($('backup-interval').value),
         mirrorDeletes: $('backup-mirror').checked,
     };
     try {

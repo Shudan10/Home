@@ -24,7 +24,7 @@ const SEARCH_ROOTS = ['/media', '/run/media', '/mnt'];
 export const DEFAULT_BACKUP_CONFIG = {
     enabled: false,
     destination: '',
-    intervalHours: 24,
+    intervalMinutes: 15,
     // Off, and it stays off unless somebody deliberately asks. With this on the
     // copy becomes a mirror, and a mirror of a folder you just deleted
     // something from is a folder with that thing deleted from it.
@@ -48,8 +48,26 @@ export function backupSources() {
 
 export function loadBackupConfig() {
     const cfg = loadManagerConfig();
-    return { ...DEFAULT_BACKUP_CONFIG, ...(cfg.backup ?? {}) };
+    const saved = { ...(cfg.backup ?? {}) };
+    // This used to be measured in hours, back when a run was assumed to be
+    // expensive. Anything saved then is carried over rather than silently
+    // reset to the new default.
+    if (saved.intervalMinutes == null && saved.intervalHours != null) {
+        saved.intervalMinutes = Math.max(MIN_INTERVAL, Number(saved.intervalHours) * 60);
+    }
+    delete saved.intervalHours;
+    return { ...DEFAULT_BACKUP_CONFIG, ...saved };
 }
+
+/*
+ * Five minutes is the floor.
+ *
+ * Not because a check is expensive -- it is one second against 8,000 files --
+ * but because the copy it may start is not, and a new run beginning while a
+ * 40GB rip is still being written would spend its time copying a file that is
+ * changing underneath it.
+ */
+export const MIN_INTERVAL = 5;
 
 export function saveBackupConfig(next) {
     const cfg = loadManagerConfig();
@@ -132,11 +150,11 @@ export function validateBackupConfig(input) {
     else if (dest.split('/').includes('..')) errors.push('The destination contains "..", so write the real path instead.');
     else out.destination = dest;
 
-    const hours = Number(input.intervalHours ?? 24);
-    if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
-        errors.push('The interval has to be between 1 and 720 hours.');
+    const mins = Number(input.intervalMinutes ?? DEFAULT_BACKUP_CONFIG.intervalMinutes);
+    if (!Number.isFinite(mins) || mins < MIN_INTERVAL || mins > 43200) {
+        errors.push(`The interval has to be between ${MIN_INTERVAL} minutes and 30 days.`);
     } else {
-        out.intervalHours = Math.round(hours);
+        out.intervalMinutes = Math.round(mins);
     }
 
     if (out.enabled && !out.destination) errors.push('Pick a drive to back up to first.');
@@ -290,6 +308,49 @@ async function pathExists(p) {
     }
 }
 
+
+/**
+ * Would a copy actually move anything?
+ *
+ * Asked with --dry-run, which walks the same trees and writes nothing. It costs
+ * about a second against 8,000 files, so it is cheap enough to ask every few
+ * minutes -- and asking is what keeps a frequent schedule quiet. Without it a
+ * check every five minutes is 288 jobs a day in the log and 288 notifications,
+ * for a backup that had nothing to do 287 of those times.
+ *
+ * Any failure answers "no". A drive that is unplugged, or busy, is not a reason
+ * to start a real run that would only fail more loudly.
+ */
+export async function hasChanges() {
+    const cfg = loadBackupConfig();
+    const sources = backupSources();
+    if (!cfg.destination || !sources.length) return false;
+
+    const parent = cfg.destination.replace(/\/[^/]+\/?$/, '') || '/';
+    const leaf = cfg.destination.split('/').filter(Boolean).pop() || '';
+
+    for (const src of sources) {
+        const name = src.split('/').filter(Boolean).pop() || 'root';
+        try {
+            const { stdout } = await docker(
+                [
+                    'run', '--rm',
+                    '-v', `${src}:/src/${name}:ro`,
+                    '-v', `${parent}:/dest-root`,
+                    IMAGE, 'sh', '-c',
+                    `rsync -aHn --stats --exclude=.nextcloudsync.log --exclude=lost+found ` +
+                        `"/src/${name}/" "/dest-root/${leaf}/${name}/" 2>/dev/null | grep "^Number of regular files transferred:"`,
+                ],
+                { timeoutMs: 10 * 60_000 },
+            );
+            if (Number(stdout.split(':').pop().trim().replace(/,/g, '')) > 0) return true;
+        } catch {
+            return false;
+        }
+    }
+    return false;
+}
+
 // ------------------------------------------------------------------ schedule
 
 let timer = null;
@@ -310,6 +371,9 @@ export function scheduleFromConfig(log = () => {}, enqueue = null) {
 
     const tick = async () => {
         try {
+            // Nothing to copy means nothing to announce. This is the whole
+            // reason a five-minute schedule is reasonable.
+            if (!(await hasChanges())) return;
             if (enqueue) enqueue();
             else await run((line) => log(`backup: ${line}`));
         } catch (err) {
@@ -318,6 +382,6 @@ export function scheduleFromConfig(log = () => {}, enqueue = null) {
         }
     };
 
-    timer = setInterval(tick, Math.max(1, cfg.intervalHours) * 60 * 60_000);
+    timer = setInterval(tick, Math.max(MIN_INTERVAL, cfg.intervalMinutes) * 60_000);
     timer.unref?.();
 }
