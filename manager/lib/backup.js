@@ -186,11 +186,27 @@ export async function run(onLine = () => {}) {
         );
     }
 
-    // --stats rather than --progress: rsync writes progress with carriage
-    // returns and no newlines, and the line splitter feeding the overlay would
-    // hold all of it as one unterminated line until the very end. A per-folder
-    // summary actually arrives.
-    const flags = ['-aH', '--stats', '--exclude=.nextcloudsync.log', '--exclude=lost+found'];
+    /*
+     * Progress that actually arrives.
+     *
+     * rsync draws progress by rewriting one line with carriage returns and no
+     * newline, and the line splitter feeding the overlay only emits on \n -- so
+     * the whole thing arrives as a single line when the copy ends. Piping
+     * through `tr` turns each redraw into its own line, which streams.
+     *
+     * --no-inc-recursive costs an upfront scan of the tree, and buys a total
+     * that is the real total. Without it rsync counts as it goes, so the
+     * percentage walks backwards as more files are found, which is worse than
+     * no percentage at all.
+     */
+    const flags = [
+        '-aH',
+        '--info=progress2',
+        '--no-inc-recursive',
+        '--stats',
+        '--exclude=.nextcloudsync.log',
+        '--exclude=lost+found',
+    ];
     if (cfg.mirrorDeletes) flags.push('--delete');
 
     const leaf = cfg.destination.split('/').filter(Boolean).pop() || '';
@@ -210,7 +226,11 @@ export async function run(onLine = () => {}) {
                 // by Docker rather than refused -- on the internal disk.
                 '-v', `${parent}:/dest-root`,
                 IMAGE, 'sh', '-c',
-                `mkdir -p "/dest-root/${leaf}/${name}" && rsync ${flags.join(' ')} "/src/${name}/" "/dest-root/${leaf}/${name}/"`,
+                // pipefail so the exit status is rsync's and not `tr`'s --
+                // otherwise a failed copy pipes into a successful tr and the
+                // whole thing reports success.
+                `set -o pipefail; mkdir -p "/dest-root/${leaf}/${name}" && ` +
+                    `rsync ${flags.join(' ')} "/src/${name}/" "/dest-root/${leaf}/${name}/" | tr '\\r' '\\n'`,
             ],
             { onLine, timeoutMs: 12 * 60 * 60_000 },
         );
