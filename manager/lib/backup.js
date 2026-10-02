@@ -258,6 +258,21 @@ export async function run(onLine = () => {}) {
         '--stats',
         '--exclude=.nextcloudsync.log',
         '--exclude=lost+found',
+        /*
+         * Nextcloud's thumbnail cache, which is not worth copying and is the
+         * single biggest thing slowing this down.
+         *
+         * Measured here: 25,954 preview files averaging 569KB -- 76% of every
+         * file in the backup for 3% of the bytes. The destination is a USB
+         * drive, usually NTFS through FUSE, where the cost is per file rather
+         * than per byte, so those thumbnails take far longer than the 526GB of
+         * actual films sitting next to them.
+         *
+         * And they are regenerable. Nextcloud rebuilds a preview the next time
+         * something asks for one, so restoring them buys nothing a few seconds
+         * of browsing would not.
+         */
+        '--exclude=appdata_*/preview/',
     ];
     if (cfg.mirrorDeletes) flags.push('--delete');
 
