@@ -1064,6 +1064,34 @@
   </form>
 </dialog>
 
+<!-- ------------------------------------------------------- confirm dialog -->
+<!-- Every "are you sure" in the panel. The browser's own confirm() names the
+     host and port in its title bar, which reads like the page is a stranger
+     asking for something, and it cannot be styled or made to hold a typed
+     phrase. This is the same question asked by the panel itself. -->
+<dialog id="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog" id="confirm-form">
+    <div class="dialog-head">
+      <h3 id="confirm-title">Are you sure?</h3>
+      <button value="cancel" class="dialog-close" formnovalidate aria-label="Close">&times;</button>
+    </div>
+
+    <p class="confirm-body" id="confirm-body"></p>
+
+    <!-- Only for the handful of actions that destroy something. Hidden, and
+         emptied, for every other question. -->
+    <label id="confirm-typed-wrap" hidden>
+      <span id="confirm-typed-label">Type the name to confirm</span>
+      <input id="confirm-typed" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+
+    <menu class="confirm-actions">
+      <button value="cancel" class="ghost" formnovalidate id="confirm-cancel">Cancel</button>
+      <button value="ok" class="primary" id="confirm-ok">OK</button>
+    </menu>
+  </form>
+</dialog>
+
 <!-- Installing, starting, stopping and uninstalling all take over the screen
      while they run. Two reasons: the log is the only thing worth looking at
      until it finishes, and docker is one machine -- a build, a stop and an
