@@ -72,6 +72,89 @@ function kResult(id, message, bad = false) {
     el.textContent = message;
 }
 
+/**
+ * The panel's own "are you sure", in place of the browser's.
+ *
+ * confirm() puts the host and port in its title bar, so a question the panel
+ * asked arrives looking like it came from a site rather than from the thing in
+ * front of you. It also cannot hold the typed-phrase case, which is why
+ * uninstalling used prompt() and compared strings by hand.
+ *
+ * Resolves true only on the confirm button. Escape, the backdrop, the close
+ * cross and Cancel all mean no, which is the behaviour confirm() had and the
+ * safer reading of someone dismissing a question they were asked.
+ */
+function askConfirm({ title, body = '', confirmLabel = 'OK', danger = false, requireText = null }) {
+    const dialog = $('confirm-dialog');
+    const ok = $('confirm-ok');
+    const typedWrap = $('confirm-typed-wrap');
+    const typed = $('confirm-typed');
+
+    $('confirm-title').textContent = title;
+    $('confirm-body').textContent = body;
+    ok.textContent = confirmLabel;
+    ok.className = danger ? 'primary danger' : 'primary';
+
+    if (requireText) {
+        typedWrap.hidden = false;
+        $('confirm-typed-label').innerHTML = `Type <code></code> to confirm`;
+        $('confirm-typed-label').querySelector('code').textContent = requireText;
+        typed.value = '';
+        // Armed only once the phrase matches, so the button cannot be hit by
+        // someone clicking through on muscle memory.
+        ok.disabled = true;
+        typed.oninput = () => { ok.disabled = typed.value.trim() !== requireText; };
+    } else {
+        typedWrap.hidden = true;
+        typed.oninput = null;
+        ok.disabled = false;
+    }
+
+    const cancel = $('confirm-cancel');
+    const closeX = dialog.querySelector('.dialog-close');
+
+    return new Promise((resolve) => {
+        // Answered from the buttons rather than only from the dialog's close
+        // event. Both are wired because they fail in opposite directions: the
+        // buttons cannot catch Escape or a click on the backdrop, and `close`
+        // is dispatched as a queued task, so anything that is not running those
+        // leaves the promise pending for ever -- which for a confirmation means
+        // every destructive action quietly hangs instead of asking. Whichever
+        // arrives first wins and the rest are torn down.
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            dialog.removeEventListener('close', onClose);
+            dialog.removeEventListener('keydown', onKey);
+            ok.removeEventListener('click', onOk);
+            cancel.removeEventListener('click', onNo);
+            closeX?.removeEventListener('click', onNo);
+            typed.oninput = null;
+            if (dialog.open) dialog.close();
+            resolve(value);
+        };
+
+        const matched = () => !requireText || typed.value.trim() === requireText;
+        const onOk = () => finish(matched());
+        const onNo = () => finish(false);
+        const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+        // returnValue is '' when Escape or the backdrop closed it, so anything
+        // other than the confirm button reads as no.
+        const onClose = () => finish(dialog.returnValue === 'ok' && matched());
+
+        ok.addEventListener('click', onOk);
+        cancel.addEventListener('click', onNo);
+        closeX?.addEventListener('click', onNo);
+        dialog.addEventListener('close', onClose);
+        dialog.addEventListener('keydown', onKey);
+
+        dialog.returnValue = '';
+        dialog.showModal();
+        (requireText ? typed : ok).focus();
+    });
+}
+
 function fmtDuration(iso) {
     if (!iso || iso.startsWith('0001')) return '–';
     const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
@@ -709,15 +792,15 @@ function watchForPanelGone() {
 $('action-cancel').addEventListener('click', async () => {
     const action = pendingAction;
     if (!action?.jobId || action.finished) return;
-    if (
-        !confirm(
-            `Cancel "${action.title}"?\n\n` +
-                'Whatever it has already done stays done -- this stops it where it is rather than undoing it. ' +
-                'A build keeps the parts it finished, so starting again does not start from the beginning.',
-        )
-    ) {
-        return;
-    }
+    const stop = await askConfirm({
+        title: `Cancel "${action.title}"?`,
+        body:
+            'Whatever it has already done stays done -- this stops it where it is rather than undoing it. ' +
+            'A build keeps the parts it finished, so starting again does not start from the beginning.',
+        confirmLabel: 'Cancel it',
+        danger: true,
+    });
+    if (!stop) return;
 
     const button = $('action-cancel');
     button.disabled = true;
@@ -1553,7 +1636,12 @@ for (const name of APP_KEYS) {
     });
 
     $(`${name}-update`).addEventListener('click', async () => {
-        if (!confirm('Rebuild Nextcloud on the newest base image?\n\nIt will be unavailable while it rebuilds. Your files are not touched.')) return;
+        const go = await askConfirm({
+            title: 'Rebuild Nextcloud on the newest base image?',
+            body: 'It will be unavailable while it rebuilds. Your files are not touched.',
+            confirmLabel: 'Rebuild',
+        });
+        if (!go) return;
         await runAction({
             key: name,
             title: `Rebuilding ${appsState?.apps?.[name]?.label ?? name}`,
@@ -1681,7 +1769,13 @@ $('proxy-body').addEventListener('click', async (event) => {
     // Removing a host takes a name off the internet, which is not a thing to do
     // on a mis-click. The certificate is deliberately left on disk: it is still
     // valid, and putting the name back should not mean asking for another.
-    if (!confirm(`Stop answering for ${proxy?.domain}?\n\nThe nginx configuration for it is removed. Its certificate is kept.`)) return;
+    const drop = await askConfirm({
+        title: `Stop answering for ${proxy?.domain}?`,
+        body: 'The nginx configuration for it is removed. Its certificate is kept.',
+        confirmLabel: 'Stop answering',
+        danger: true,
+    });
+    if (!drop) return;
     try {
         await api(`/api/proxies/${delProxy}`, { method: 'DELETE' });
         await loadProxies();
@@ -1813,7 +1907,13 @@ $('publish-body').addEventListener('click', async (event) => {
     if (!unpublish) return;
 
     const service = publishState.services.find((s) => s.key === unpublish);
-    if (!confirm(`Stop publishing ${service?.label ?? unpublish} on ${service?.domain}?\n\nThe name stays on your list and the certificate is left alone.`)) {
+    const hide = await askConfirm({
+        title: `Stop publishing ${service?.label ?? unpublish} on ${service?.domain}?`,
+        body: 'The name stays on your list and the certificate is left alone.',
+        confirmLabel: 'Stop publishing',
+        danger: true,
+    });
+    if (!hide) {
         return;
     }
     event.target.disabled = true;
@@ -2161,10 +2261,14 @@ document.addEventListener('click', async (event) => {
 
     // Typed rather than clicked. This is the one action in the panel that
     // deletes something a person cannot get back.
-    const typed = prompt(
-        `This removes ${what}.\n\nThis cannot be undone. Type the name to confirm:\n\n  ${key}`,
-    );
-    if (typed !== key) return toast(typed === null ? 'Nothing was removed.' : 'That did not match, so nothing was removed.');
+    const sure = await askConfirm({
+        title: `Uninstall ${state?.label ?? key}?`,
+        body: `This removes ${what}.\n\nThis cannot be undone.`,
+        confirmLabel: 'Uninstall',
+        danger: true,
+        requireText: key,
+    });
+    if (!sure) return toast('Nothing was removed.');
 
     await runAction({
         key,
@@ -2301,7 +2405,13 @@ $('setup-domain-list').addEventListener('click', async (event) => {
     const id = event.target.dataset?.domainDel;
     if (!id) return;
     const record = publishState.domains.find((d) => d.id === id);
-    if (!confirm(`Remove ${record?.domain}?\n\nNothing is published on it, so this only takes the name off the list.`)) return;
+    const forget = await askConfirm({
+        title: `Remove ${record?.domain}?`,
+        body: 'Nothing is published on it, so this only takes the name off the list.',
+        confirmLabel: 'Remove',
+        danger: true,
+    });
+    if (!forget) return;
     try {
         await api(`/api/domains/${id}`, { method: 'DELETE' });
         await loadPublish();
@@ -2624,7 +2734,11 @@ $('proxy-form').addEventListener('submit', async (event) => {
             const how = payload.domain.endsWith('.duckdns.org')
                 ? 'It is a DuckDNS name, so this is proved with a DNS record and needs no open port.'
                 : 'Port 80 must already reach this machine.';
-            if (confirm(`Request a Let's Encrypt certificate for ${payload.domain} now?\n\n${how}`)) {
+            if (await askConfirm({
+                title: `Request a Let's Encrypt certificate for ${payload.domain} now?`,
+                body: how,
+                confirmLabel: 'Request it',
+            })) {
                 await api(`/api/proxies/${saved.id}/certificate`, {
                     method: 'POST',
                     body: { email: payload.ssl.email, staging: $('px-staging').checked },
@@ -3177,7 +3291,12 @@ $('password-save').addEventListener('click', async () => {
 
 $('panel-port-save').addEventListener('click', async () => {
     const port = Number($('panel-port').value);
-    if (!confirm(`Move this panel to port ${port}?\n\nIt restarts, and this page will follow it to the new address. Anything you have bookmarked stops working.`)) return;
+    const move = await askConfirm({
+        title: `Move this panel to port ${port}?`,
+        body: 'It restarts, and this page will follow it to the new address. Anything you have bookmarked stops working.',
+        confirmLabel: 'Move it',
+    });
+    if (!move) return;
 
     $('panel-port-save').disabled = true;
     try {
@@ -3206,7 +3325,13 @@ $('panel-port-save').addEventListener('click', async () => {
 });
 
 $('password-clear').addEventListener('click', async () => {
-    if (!confirm('Remove the password?\n\nAnyone who can reach this port will then have full control of the node and of Docker. Only sensible while the panel is on 127.0.0.1.')) {
+    const clear = await askConfirm({
+        title: 'Remove the password?',
+        body: 'Anyone who can reach this port will then have full control of your services and of Docker. Only sensible while the panel is on 127.0.0.1.',
+        confirmLabel: 'Remove it',
+        danger: true,
+    });
+    if (!clear) {
         return;
     }
     $('password-clear').disabled = true;
@@ -3322,7 +3447,12 @@ $('global-update-btn').addEventListener('click', async () => {
     const button = $('global-update-btn');
     const repo = $('global-repo').value.trim();
     const ref = $('global-ref').value.trim();
-    if (!confirm(`Update the panel from ${repo}@${ref}?\n\nIt will go offline for a minute or two while it rebuilds. The node keeps running.`)) return;
+    const update = await askConfirm({
+        title: `Update the panel from ${repo}@${ref}?`,
+        body: 'It will go offline for a minute or two while it rebuilds. Your services keep running.',
+        confirmLabel: 'Update',
+    });
+    if (!update) return;
 
     button.disabled = true;
     try {
@@ -3407,7 +3537,13 @@ $('global-teardown-confirm').addEventListener('input', (event) => {
 });
 
 $('global-teardown-btn').addEventListener('click', async () => {
-    if (!confirm('Remove the node, all its data and this panel?\n\nThis cannot be undone. Docker itself stays installed.')) return;
+    const teardown = await askConfirm({
+        title: 'Remove every service, all its data and this panel?',
+        body: 'This cannot be undone. Docker itself stays installed.',
+        confirmLabel: 'Remove everything',
+        danger: true,
+    });
+    if (!teardown) return;
 
     $('global-teardown-btn').disabled = true;
     const job = await runAction({

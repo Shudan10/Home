@@ -692,6 +692,24 @@ dialog h3 { margin-top: 0; }
 .dialog-close:hover { color: var(--text); background: var(--panel-2); }
 dialog .row label { flex: 1; min-width: 110px; }
 
+/* The confirm dialog is narrower than the editing ones: it asks a question
+   rather than holding a form, and a short question stretched across 560px is
+   harder to read than the same words in a column. */
+#confirm-dialog { width: min(440px, calc(100vw - 32px)); }
+/* pre-line, so the blank line between the question and its consequence
+   survives -- that gap is what stops the two being read as one sentence. */
+.confirm-body { white-space: pre-line; color: var(--muted); margin: 0 0 18px; }
+.confirm-body:empty { display: none; }
+#confirm-typed-wrap { display: block; margin: 0 0 18px; }
+#confirm-typed-wrap code { color: var(--text); }
+.confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+}
+
 /* ----------------------------------------------------------------- toast */
 
 .toast {
