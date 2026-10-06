@@ -23,6 +23,7 @@ import * as certbot from './lib/certbot.js';
 import * as duckdns from './lib/duckdns.js';
 import * as apps from './lib/apps.js';
 import * as backup from './lib/backup.js';
+import * as mountwatch from './lib/mountwatch.js';
 import * as host from './lib/host.js';
 import * as selfservice from './lib/selfservice.js';
 import * as publish from './lib/publish.js';
@@ -2125,6 +2126,13 @@ async function bootstrap() {
     // its own files has no backup source and every tick does nothing.
     await backup.resolveDataVolume();
     backup.scheduleFromConfig(log, enqueueBackup);
+
+    // A bind mount is resolved once, when the container starts. Unplug the
+    // drive Jellyfin reads from and plug it back in and the host is looking at
+    // the drive while Jellyfin is still holding the mount that went away --
+    // reporting an empty library rather than an error. This notices and
+    // restarts it.
+    mountwatch.watch(log, () => jobs.busy);
 
     // Certificates are valid for 90 days; a daily attempt is what certbot's own
     // packaging recommends and is a no-op until one is close to expiry.
