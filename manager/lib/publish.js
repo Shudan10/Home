@@ -42,6 +42,20 @@ export const SERVICES = [
             'Jellyfin is at https://{domain}. Sign in with the account you made when you first opened it — the panel does not hold Jellyfin\'s own credentials.',
     },
     {
+        key: 'mealplan',
+        kind: 'mealplan',
+        // Takes a name of its own, for the same reason Jellyfin does. It is a
+        // PWA: its API calls are absolute, its service worker claims a scope and
+        // its manifest declares a start_url, and all three would be pointing at
+        // the domain root while the app itself sat under a prefix. A phone
+        // would add it to the home screen and then open a blank page.
+        rootOnly: true,
+        label: 'Meal Plan',
+        detail: 'What the family is eating this week.',
+        afterNote:
+            'Meal Plan is at https://{domain}. It has its own family password, which is not the one for this panel. On a phone, open it and use Add to Home Screen.',
+    },
+    {
         key: 'panel',
         kind: 'manager',
         sharedPath: '/panel',

@@ -136,6 +136,37 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ---- Meal Plan ------------------------------------------------------------
+  # Built from its own repository rather than pulled: it is part of this project
+  # but lives separately, so the panel tracks a branch of it the same way it
+  # tracks its own. The override file rewrites this context when the ref is
+  # changed; the value here is the default a bare `docker compose` would use.
+  mealplan:
+    image: quickstart-home/mealplan:1
+    build:
+      context: https://github.com/Shudan10/MealPlan.git#${MEALPLAN_REF:-main}
+    container_name: quickstart-home-mealplan
+    hostname: mealplan
+    profiles: ["mealplan"]
+    restart: unless-stopped
+    environment:
+      # Without a hash there is no password, and anybody who reaches the port
+      # can rewrite the family's week. The panel always sets one.
+      MEALPLAN_PASSWORD_HASH: ${MEALPLAN_PASSWORD_HASH:-}
+      # Its own, never the panel's. Both sign a session as "<expiry>.<nonce>"
+      # with an HMAC, so a shared secret would make the two interchangeable:
+      # a family member could take the Meal Plan cookie everyone is given and
+      # present it to the panel, which holds the Docker socket. Different
+      # cookie names do not prevent that -- the attacker chooses the name.
+      SESSION_SECRET: ${MEALPLAN_SESSION_SECRET:-}
+    volumes:
+      - mealplan-data:/data
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ---- The panel ------------------------------------------------------------
   manager:
     image: quickstart-home/manager:1
@@ -205,3 +236,5 @@ volumes:
     name: quickstart-home-jellyfin-config
   jellyfin-cache:
     name: quickstart-home-jellyfin-cache
+  mealplan-data:
+    name: quickstart-home-mealplan-data

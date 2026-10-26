@@ -35,8 +35,9 @@ const MANAGER_CONTAINER = process.env.MANAGER_CONTAINER || 'quickstart-home-mana
 const PROXY_CONTAINER = process.env.PROXY_CONTAINER || 'quickstart-home-proxy';
 const NEXTCLOUD_CONTAINER = process.env.NEXTCLOUD_CONTAINER || 'quickstart-home-nextcloud';
 const JELLYFIN_CONTAINER = process.env.JELLYFIN_CONTAINER || 'quickstart-home-jellyfin';
+const MEALPLAN_CONTAINER = process.env.MEALPLAN_CONTAINER || 'quickstart-home-mealplan';
 
-export { MANAGER_CONTAINER, PROXY_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER };
+export { MANAGER_CONTAINER, PROXY_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER };
 
 /**
  * Every container this stack can run, in the order worth reading them.
@@ -53,6 +54,7 @@ export const STACK_CONTAINERS = [
     { key: 'nextcloud-redis', label: 'nextcloud redis', name: 'quickstart-home-nextcloud-redis' },
     { key: 'nextcloud-imaginary', label: 'nextcloud previews', name: 'quickstart-home-nextcloud-imaginary' },
     { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
+    { key: 'mealplan', label: 'meal plan', name: MEALPLAN_CONTAINER },
     { key: 'proxy', label: 'nginx proxy', name: PROXY_CONTAINER },
     { key: 'manager', label: 'control panel', name: MANAGER_CONTAINER },
 ];

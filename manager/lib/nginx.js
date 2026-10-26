@@ -35,6 +35,7 @@ export const TARGET_KINDS = {
     manager: { label: 'This control panel', websocket: false },
     nextcloud: { label: 'Nextcloud', websocket: false },
     jellyfin: { label: 'Jellyfin', websocket: true },
+    mealplan: { label: 'Meal Plan', websocket: false },
     custom: { label: 'Custom host:port', websocket: false },
 };
 
@@ -126,7 +127,8 @@ export function upstreamFor(proxy) {
         // internal network, so proxying one never depends on its port being
         // published to the host as well.
         case 'nextcloud':
-        case 'jellyfin': {
+        case 'jellyfin':
+        case 'mealplan': {
             const app = APPS[proxy.target.kind];
             return {
                 scheme: 'http',

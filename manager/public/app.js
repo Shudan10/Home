@@ -1126,6 +1126,9 @@ async function refreshStatus() {
 
 let appsState = null;
 
+/* Loaded once per page load rather than on every poll: see loadApps. */
+let mealPlanRefsLoaded = false;
+
 async function loadApps() {
     const r = await api('/api/apps');
     appsState = r;
@@ -1155,6 +1158,22 @@ async function loadApps() {
     renderSharedPaths();
     renderAppState('jellyfin', r.apps.jellyfin);
 
+    // --- Meal Plan ---
+    $('mealplan-pub-web').checked = c.mealplan?.publish?.web !== false;
+    $('mealplan-port').value = c.mealplan?.hostPort ?? 8083;
+    // Only set when the field is not being typed in, so a reload landing
+    // mid-edit does not overwrite what somebody is halfway through.
+    if (document.activeElement !== $('mealplan-ref')) $('mealplan-ref').value = c.mealplan?.ref ?? 'main';
+    renderAppState('mealplan', r.apps.mealplan);
+    loadMealPlanPassword();
+    // Once per page load. loadApps runs on a timer, and the refs call reaches
+    // GitHub -- cached server side, but there is no reason to ask repeatedly
+    // for a list of branches that changes about never.
+    if (!mealPlanRefsLoaded) {
+        mealPlanRefsLoaded = true;
+        loadMealPlanRefs();
+    }
+
     for (const app of APP_KEYS) {
         const running = Boolean(r.apps[app]?.container?.running);
         setNavHealth(app, !c[app]?.enabled ? 'off' : running ? 'ok' : 'bad');
@@ -1162,7 +1181,7 @@ async function loadApps() {
 }
 
 /** Every app with a tab of its own. The loops below are driven by this. */
-const APP_KEYS = ['nextcloud', 'jellyfin'];
+const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan'];
 
 /**
  * The ways in to an app: the one on this network, and the one from outside.
@@ -1423,6 +1442,34 @@ function renderAppState(name, state) {
             box.disabled = false;
         }
     }
+
+    if (name === 'mealplan') {
+        const link = $('mealplan-link');
+        const cfg = appsState.config.mealplan ?? {};
+        link.hidden = false;
+        if (running && (cfg.publish?.web || state.publicUrl)) {
+            link.className = 'verdict ok';
+            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl);
+        } else if (running) {
+            link.className = 'verdict';
+            link.textContent =
+                'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Proxy and domains.';
+        } else {
+            const note = appStatusNote(state, {
+                absent: 'Not installed yet. Installing builds it and leaves it switched off.',
+                stopped: 'Not running. Its switch in the sidebar starts it.',
+            });
+            link.className = note.bad ? 'verdict bad' : 'verdict';
+            link.textContent = note.text;
+        }
+
+        const build = $('mealplan-build');
+        build.textContent = state.build?.builtAt
+            ? `Built ${new Date(state.build.builtAt).toLocaleString()}${
+                  state.build.ref ? ` from ${state.build.ref}` : ''
+              }.`
+            : 'Not built yet.';
+    }
 }
 
 // --- jellyfin media folders ---
@@ -1539,6 +1586,14 @@ $('jellyfin-media-list').addEventListener('click', (event) => {
 });
 
 function collectAppConfig(name) {
+    if (name === 'mealplan') {
+        return {
+            enabled: Boolean(appsState?.config?.mealplan?.enabled),
+            ref: $('mealplan-ref')?.value.trim() || appsState?.config?.mealplan?.ref || 'main',
+            publish: { web: $('mealplan-pub-web').checked },
+            hostPort: Number($('mealplan-port').value),
+        };
+    }
     if (name === 'jellyfin') {
         return {
             enabled: Boolean(appsState?.config?.jellyfin?.enabled),
@@ -1636,19 +1691,77 @@ for (const name of APP_KEYS) {
     });
 
     $(`${name}-update`).addEventListener('click', async () => {
+        const label = appsState?.apps?.[name]?.label ?? name;
         const go = await askConfirm({
-            title: 'Rebuild Nextcloud on the newest base image?',
-            body: 'It will be unavailable while it rebuilds. Your files are not touched.',
+            title: `Rebuild ${label} on the newest source?`,
+            body: `It will be unavailable while it rebuilds. ${
+                name === 'mealplan' ? 'Your meals and planned weeks are not touched.' : 'Your files are not touched.'
+            }`,
             confirmLabel: 'Rebuild',
         });
         if (!go) return;
         await runAction({
             key: name,
-            title: `Rebuilding ${appsState?.apps?.[name]?.label ?? name}`,
-            note: 'Pulls the newest Nextcloud image and rebuilds on top of it. It is unavailable until this finishes, and a build that fails leaves the running one alone.',
+            title: `Rebuilding ${label}`,
+            note: `Fetches the newest source for ${label} and rebuilds it. It is unavailable until this finishes, and a build that fails leaves the running one alone.`,
             request: () => api(`/api/apps/${name}/update`, { method: 'POST' }),
         });
     });
+}
+
+// --- meal plan: family password and branch list ---
+
+/** Whether a password is set, which is the thing worth knowing here -- the hash
+ *  itself is never sent back out. */
+async function loadMealPlanPassword() {
+    const note = $('mealplan-pass-state');
+    try {
+        const { set } = await api('/api/apps/mealplan/password');
+        note.hidden = false;
+        note.className = set ? 'verdict ok' : 'verdict bad';
+        note.textContent = set
+            ? 'A family password is set.'
+            : 'No password is set, so anyone who can reach Meal Plan can change the week. Set one.';
+    } catch {
+        note.hidden = true;
+    }
+}
+
+$('mealplan-password-save').addEventListener('click', async () => {
+    const field = $('mealplan-password');
+    const err = $('mealplan-password-error');
+    const button = $('mealplan-password-save');
+    err.hidden = true;
+    button.disabled = true;
+    try {
+        const r = await api('/api/apps/mealplan/password', {
+            method: 'POST',
+            body: { password: field.value },
+        });
+        field.value = '';
+        toast(r.restarting ? 'Password set. Meal Plan is restarting.' : 'Password set.');
+        loadMealPlanPassword();
+    } catch (e) {
+        err.textContent = e.message;
+        err.hidden = false;
+    } finally {
+        button.disabled = false;
+    }
+});
+
+/* The branches and tags the repository actually has, offered as a datalist
+   rather than a select: the field still accepts a commit-ish the list does not
+   know about, which is what makes testing a fork possible. */
+async function loadMealPlanRefs() {
+    try {
+        const { branches = [], tags = [] } = await api('/api/apps/mealplan/refs');
+        $('mealplan-refs').innerHTML = [...branches, ...tags]
+            .map((r) => `<option value="${escapeHtml(r)}"></option>`)
+            .join('');
+    } catch {
+        /* GitHub being unreachable or rate limited is not worth a message: the
+           field works perfectly well without suggestions. */
+    }
 }
 
 // Restart, and whatever else gets one of these later. The same container
@@ -2095,6 +2208,7 @@ let serviceState = {};
 const UNINSTALL_COPY = {
     nextcloud: 'every file, photo and calendar stored in it',
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
+    mealplan: 'the meal library and every week that has been planned',
     proxy: 'nothing. Your domains and certificates live in the stack directory and are kept',
 };
 const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';

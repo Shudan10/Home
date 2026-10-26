@@ -77,6 +77,28 @@ export const APPS = {
             web: { port: 8096, label: 'Jellyfin web', hostPort: 8096 },
         },
     },
+
+    mealplan: {
+        label: 'Meal Plan',
+        // Built from its own repository, so the branch pickers and upstream
+        // checks in this file apply to it -- the only app here that they do.
+        tracksRepo: true,
+        repo: 'Shudan10/MealPlan',
+        profile: 'mealplan',
+        services: ['mealplan'],
+        container: 'quickstart-home-mealplan',
+        publish: {
+            hostname: 'mealplan',
+            port: 8080,
+            websocket: false,
+            // A meal with a long method is still a few kilobytes. The default
+            // proxy limit is far above anything this can send.
+            maxBodySize: null,
+        },
+        ports: {
+            web: { port: 8080, label: 'Meal Plan web', hostPort: 8083 },
+        },
+    },
 };
 
 export const DEFAULT_APPS_CONFIG = {
@@ -120,6 +142,12 @@ export const DEFAULT_APPS_CONFIG = {
         // CPU. Off by default: the device does not exist on every machine, and
         // a container asking for one that is not there refuses to start.
         hardwareAcceleration: false,
+    },
+    mealplan: {
+        enabled: false,
+        ref: 'main',
+        publish: { web: true },
+        hostPort: 8083,
     },
 };
 
@@ -365,6 +393,40 @@ export function validateAppsConfig(input) {
 
     cfg.jellyfin.mediaPaths = validateMediaPaths(j.mediaPaths, errors);
 
+    // --- Meal Plan ---
+    const mp = input.mealplan ?? {};
+    cfg.mealplan.enabled = Boolean(mp.enabled);
+    cfg.mealplan.publish = { web: mp.publish?.web !== false };
+
+    // The ref is interpolated into a compose build context, so it has to stay
+    // inside what a git ref can contain.
+    const mpref = String(mp.ref ?? 'main').trim();
+    if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(mpref)) errors.push('That is not a valid branch or tag name.');
+    else cfg.mealplan.ref = mpref;
+
+    const mport = Number(mp.hostPort ?? DEFAULT_APPS_CONFIG.mealplan.hostPort);
+    const mtaken = reservedHostPorts().get(mport);
+    // Checked against both of the other apps rather than just the previous one:
+    // with three of them a single pairwise comparison leaves a pair unchecked,
+    // and the collision only shows up later as a container that will not start.
+    const clash = [
+        cfg.nextcloud.publish.web && mport === Number(cfg.nextcloud.hostPort) ? 'Nextcloud' : null,
+        cfg.jellyfin.publish.web && mport === Number(cfg.jellyfin.hostPort) ? 'Jellyfin' : null,
+    ].find(Boolean);
+
+    if (!Number.isInteger(mport) || mport < 1024 || mport > 65535) {
+        errors.push('Meal Plan port must be between 1024 and 65535.');
+    } else if (clash && cfg.mealplan.publish.web) {
+        errors.push(`Port ${mport} is where ${clash} is published, so Meal Plan cannot take it too.`);
+    } else if (mtaken && cfg.mealplan.publish.web) {
+        errors.push(
+            `Port ${mport} is already used by ${mtaken}, so Meal Plan cannot start on it. Pick another one, ` +
+                `for example ${mport + 1}.`,
+        );
+    } else {
+        cfg.mealplan.hostPort = mport;
+    }
+
     return { cfg, errors };
 }
 
@@ -415,6 +477,9 @@ export function ensureSecrets() {
         NEXTCLOUD_DB_ROOT_PASSWORD: () => randomSecret(24),
         NEXTCLOUD_IMAGINARY_SECRET: () => randomSecret(24),
         NEXTCLOUD_ADMIN_PASSWORD: () => randomSecret(18),
+        // Signs Meal Plan's session cookies. Separate from the panel's on
+        // purpose; see the comment on its SESSION_SECRET in docker-compose.yml.
+        MEALPLAN_SESSION_SECRET: () => randomSecret(32),
     };
     for (const [key, make] of Object.entries(need)) {
         if (!env[key]) updates[key] = make();
@@ -464,7 +529,7 @@ export function renderAppsPortsOverride(cfg) {
         '# mounted, and whether a GPU is passed through.',
     ];
     const blocks = [];
-    const published = { nextcloud: [], jellyfin: [] };
+    const published = { nextcloud: [], jellyfin: [], mealplan: [] };
 
     if (composeDefines('nextcloud')) {
         blocks.push('  nextcloud:');
@@ -523,6 +588,22 @@ export function renderAppsPortsOverride(cfg) {
         if (cfg.jellyfin.hardwareAcceleration) {
             blocks.push('    devices:');
             blocks.push('      - "/dev/dri:/dev/dri"');
+        }
+    }
+
+    if (composeDefines('mealplan')) {
+        blocks.push('  mealplan:');
+        // The branch is part of the build context, so changing it here is what
+        // makes "track this branch" mean anything -- without it the panel would
+        // record a ref and keep rebuilding the same commit.
+        blocks.push('    build:');
+        blocks.push(`      context: https://github.com/${APPS.mealplan.repo}.git#${cfg.mealplan.ref}`);
+        blocks.push('    ports:');
+        if (cfg.mealplan.publish.web) {
+            blocks.push(`      - "0.0.0.0:${cfg.mealplan.hostPort}:8080/tcp"`);
+            published.mealplan = [cfg.mealplan.hostPort];
+        } else {
+            blocks.push('      []');
         }
     }
 

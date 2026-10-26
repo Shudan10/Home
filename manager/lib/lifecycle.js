@@ -62,6 +62,17 @@ export const UNITS = {
         pullable: ['jellyfin'],
         data: 'its library database, artwork and settings. Your media files are untouched: they live on your disk and are only ever mounted read-only',
     },
+    mealplan: {
+        label: 'Meal Plan',
+        profile: 'mealplan',
+        services: ['mealplan'],
+        containers: ['quickstart-home-mealplan'],
+        primary: 'quickstart-home-mealplan',
+        volumes: ['quickstart-home-mealplan-data'],
+        images: ['quickstart-home/mealplan'],
+        buildable: ['mealplan'],
+        data: 'the meal library and every week that has been planned',
+    },
     proxy: {
         label: 'Reverse proxy',
         profile: 'proxy',

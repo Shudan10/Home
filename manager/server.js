@@ -219,7 +219,7 @@ async function applyProxyState(enabled, onLine = () => {}) {
 // The services built from a Dockerfile. The rest are stock images (databases,
 // cache, previews) with nothing to build, and asking compose to build them is
 // an error rather than a no-op.
-const BUILDABLE_SERVICES = new Set(['nextcloud']);
+const BUILDABLE_SERVICES = new Set(['nextcloud', 'mealplan']);
 
 /**
  * Notes when an app's image was built, and from what.
@@ -1500,7 +1500,7 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
     sendJson(res, 200, { config: cfg, apps: state });
 });
 
-route('PUT', /^\/api\/apps\/(nextcloud|jellyfin)$/, async (req, res, match) => {
+route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)$/, async (req, res, match) => {
     const name = match[1];
     const body = await readBody(req);
 
@@ -1578,7 +1578,7 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin)$/, async (req, res, match) => {
     sendJson(res, 202, { ok: true, jobId: job.id, config: cfg });
 });
 
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin)\/refs$/, async (req, res, match, url) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/refs$/, async (req, res, match, url) => {
     try {
         sendJson(res, 200, await apps.listRefs(match[1], { force: url.searchParams.get('force') === '1' }));
     } catch (err) {
@@ -1612,7 +1612,38 @@ route('POST', /^\/api\/apps\/nextcloud\/admin\/password$/, async (req, res) => {
     }
 });
 
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin)\/check$/, async (req, res, match) => {
+/*
+ * Meal Plan's family password, which is not the panel's.
+ *
+ * Deliberately separate: this is the one thing in the stack handed out to
+ * everybody in the house, and sharing the panel's password to get at the dinner
+ * list would hand them the Docker socket with it.
+ */
+route('GET', /^\/api\/apps\/mealplan\/password$/, async (req, res) =>
+    sendJson(res, 200, { set: Boolean((readEnvFile().MEALPLAN_PASSWORD_HASH || '').trim()) }));
+
+route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
+    const body = await readBody(req);
+    const password = String(body.password ?? '');
+    if (password.length < 8) return fail(res, 400, 'Use at least 8 characters.');
+    if (password.length > 200) return fail(res, 400, 'That is longer than 200 characters.');
+
+    updateEnvFile({ MEALPLAN_PASSWORD_HASH: hashPassword(password) });
+
+    // The hash reaches the app as an environment variable, and a running
+    // container cannot be told about a new one -- it has to come back with it.
+    // A stopped one picks it up whenever it is next started, so there is
+    // nothing to do and saying "restarting" would be a lie.
+    const state = await dockerctl.containerState(apps.APPS.mealplan.container);
+    if (!state.running) return sendJson(res, 200, { ok: true, restarting: false });
+
+    const job = jobs.start('Applying the Meal Plan password', async (onLine) => {
+        await lifecycle.setRunning('mealplan', true, onLine);
+    });
+    sendJson(res, 202, { ok: true, jobId: job.id, restarting: true });
+});
+
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/check$/, async (req, res, match) => {
     const name = match[1];
     try {
         const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());
@@ -1631,7 +1662,7 @@ route('GET', /^\/api\/apps\/(nextcloud|jellyfin)\/check$/, async (req, res, matc
     }
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin)\/update$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/update$/, async (req, res, match) => {
     const name = match[1];
     const cfg = apps.loadAppsConfig();
     if (!cfg[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
@@ -1674,7 +1705,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin)\/update$/, async (req, res, ma
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin)\/(start|stop|restart)$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/(start|stop|restart)$/, async (req, res, match) => {
     const [, name, action] = match;
     const app = apps.APPS[name];
     const job = jobs.start(`${action} ${app.label}`, async (onLine) => {

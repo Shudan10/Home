@@ -102,6 +102,17 @@
           <span class="track"></span>
         </label>
       </div>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="mealplan" title="Meal Plan">
+          <span class="nav-dot" data-health="mealplan"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M8 2.5v4M16 2.5v4M3 9.5h18"/></svg>
+          <span class="label">Meal Plan</span>
+        </button>
+        <label class="switch mini" title="Start or stop Meal Plan">
+          <input type="checkbox" data-service="mealplan" aria-label="Start or stop Meal Plan">
+          <span class="track"></span>
+        </label>
+      </div>
 
       <p class="nav-group-title">Network</p>
       <div class="nav-row">
@@ -599,6 +610,126 @@
       <div id="sub-jellyfin-uninstall" class="subtab">
         <div class="grid">
           <article class="card span2 uninstall-card" data-uninstall="jellyfin"></article>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ------------------------------------------------------- meal plan -->
+    <section id="tab-mealplan" class="tab">
+      <nav class="subnav" aria-label="Meal Plan">
+        <button class="subtab-btn active" data-subtab="mealplan-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="mealplan-settings">Settings</button>
+        <button class="subtab-btn" data-subtab="mealplan-updates">Updates</button>
+        <button class="subtab-btn" data-subtab="mealplan-uninstall">Uninstall</button>
+      </nav>
+
+      <div id="sub-mealplan-overview" class="subtab active">
+        <div class="grid">
+          <article class="card">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <strong>Run Meal Plan</strong>
+                <span class="muted">What the family is eating this week.</span>
+              </div>
+              <span id="mealplan-state" class="tag">off</span>
+            </div>
+            <div id="mealplan-notice" class="verdict" hidden></div>
+            <p class="error" id="mealplan-error" hidden></p>
+
+            <div class="node-section">
+              <h3>Open it</h3>
+              <div id="mealplan-link" class="verdict" hidden></div>
+              <p class="hint">
+                On a phone, open it and use Add to Home Screen &mdash; it is built
+                to be used that way, and gets its own icon with no browser
+                chrome around it.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Meal Plan</h3>
+            <p class="muted">
+              Keep the meals your family actually eats, plan a week of breakfast,
+              lunch and dinner from them, and get the shopping list that falls
+              out of it. Or press <strong>Random week</strong> and let it choose.
+            </p>
+            <p class="hint">
+              It has its own family password, set under Settings, which is not
+              the password for this panel. That is deliberate: this panel holds
+              the Docker socket, and the dinner list is the one thing handed out
+              to everybody in the house.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-mealplan-settings" class="subtab">
+        <div class="grid">
+          <article class="card">
+            <h3>Family password</h3>
+            <p class="muted">
+              Everyone who plans meals shares this one. Changing it signs
+              everybody out and restarts Meal Plan, which takes a moment.
+            </p>
+            <div id="mealplan-pass-state" class="verdict" hidden></div>
+            <label class="inline">New password
+              <input type="password" id="mealplan-password" autocomplete="new-password" placeholder="at least 8 characters">
+            </label>
+            <div class="row end">
+              <button type="button" id="mealplan-password-save" class="primary">Set password</button>
+            </div>
+            <p class="error" id="mealplan-password-error" hidden></p>
+          </article>
+
+          <article class="card">
+            <h3>Where it listens</h3>
+            <p class="muted">
+              Publishing it on the host is what lets phones on this network reach
+              it directly. A domain under Proxy and domains works whether or not
+              this is ticked.
+            </p>
+            <label class="check"><input type="checkbox" id="mealplan-pub-web"> Publish on the host</label>
+            <label class="inline">Port <input type="number" id="mealplan-port" min="1024" max="65535"></label>
+
+            <div class="row end">
+              <button type="button" id="mealplan-save" class="primary">Apply settings</button>
+              <button type="button" class="ghost" data-app-action="mealplan/restart">Restart</button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-mealplan-updates" class="subtab">
+        <div class="grid">
+          <article class="card">
+            <h3>Source</h3>
+            <p class="muted">
+              Meal Plan is built from its own repository,
+              <code>Shudan10/MealPlan</code>. Pick the branch or tag to build
+              from; <code>main</code> is the one to stay on unless you are
+              testing something.
+            </p>
+            <label class="inline">Branch or tag
+              <input id="mealplan-ref" list="mealplan-refs" autocomplete="off" placeholder="main">
+            </label>
+            <datalist id="mealplan-refs"></datalist>
+            <div id="mealplan-build" class="verdict"></div>
+            <div class="row end">
+              <button type="button" id="mealplan-update" class="primary">Update Meal Plan</button>
+            </div>
+            <p class="hint">
+              Your meals and planned weeks live in a Docker volume, so a rebuild
+              never touches them.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-mealplan-uninstall" class="subtab">
+        <div class="grid">
+          <article class="card span2 uninstall-card" data-uninstall="mealplan"></article>
         </div>
       </div>
 
