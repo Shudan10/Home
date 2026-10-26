@@ -1853,3 +1853,118 @@ main {
         overscroll-behavior-y: none;
     }
 }
+
+/* ------------------------------------------- topbar system screens ------- */
+/* All logs, the Update Queue and Global settings sit in the top banner on
+   every page. They used to be a sidebar group, which meant opening the menu
+   and leaving the page you were on to look at a log or check what is building. */
+
+.topbar-sys { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+
+.topbar-sys .sys-item {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 36px;
+    padding: 0 11px;
+    margin: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.topbar-sys .sys-item:hover { background: var(--panel-2); color: var(--text); }
+.topbar-sys .sys-item.active { background: var(--panel-2); color: var(--accent); border-color: var(--line); }
+.topbar-sys .sys-item svg { width: 19px; height: 19px; stroke-width: 1.8; }
+.topbar-sys .sys-label { white-space: nowrap; }
+
+.nav-count {
+    min-width: 19px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent, #fff);
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.5;
+}
+.topbar-sys .nav-count { position: absolute; top: -5px; right: -5px; }
+
+/* Named buttons need room; when there is none, the icons alone say the same. */
+@media (max-width: 1100px) {
+    .topbar-sys .sys-label { display: none; }
+    .topbar-sys .sys-item { padding: 0 9px; }
+}
+@media (max-width: 520px) {
+    .topbar-sys { gap: 0; }
+    .topbar-sys .sys-item { padding: 0 7px; }
+    #page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+}
+
+/* -------------------------------------------------------- update queue -- */
+
+.queue-current-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+.queue-current-head strong { font-size: 15px; }
+.queue-current-head .muted { font-size: 12px; font-variant-numeric: tabular-nums; }
+.queue-current-head button { margin-left: auto; }
+.queue-log { height: min(40vh, 360px); }
+
+.queue-list { list-style: none; margin: 0; padding: 0; }
+.queue-item {
+    display: flex;
+    /* Wraps so the expanded log drops onto its own line instead of becoming a
+       fourth column squeezed in beside the name, the status and the time. */
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--panel-2);
+}
+.queue-item .queue-name { font-weight: 600; }
+.queue-item .queue-when { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.queue-item.is-clickable { cursor: pointer; }
+.queue-item.is-clickable:hover { border-color: var(--accent-dim, var(--accent)); }
+.queue-status { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.queue-status.succeeded { color: var(--ok, #2e9e5b); }
+.queue-status.failed { color: var(--danger); }
+.queue-status.cancelled { color: var(--muted); }
+.queue-item-log { flex: 0 0 100%; margin-top: 8px; max-height: 260px; }
+
+/* ---------------------------------------------------------- queue peek -- */
+/* Not a modal. The queue exists so the panel stays usable while work runs, and
+   a box that blocks the page would undo exactly that. */
+
+.queue-peek {
+    position: fixed;
+    right: 20px;
+    bottom: 24px;
+    width: min(380px, calc(100vw - 32px));
+    z-index: 61;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--glow-1, 0 10px 30px rgba(0, 0, 0, 0.35));
+    padding: 12px 14px;
+    cursor: pointer;
+    animation: peek-in 0.18s ease-out;
+}
+@keyframes peek-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.queue-peek-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.queue-peek-head strong { font-size: 14px; }
+.queue-peek-head .muted { font-size: 12px; white-space: nowrap; }
+.queue-peek-log { height: 96px; font-size: 11px; }
+.queue-peek-log:empty::before { content: 'Waiting for the first lines of the log…'; color: var(--muted); }
+.queue-peek-foot { font-size: 11px; margin-top: 8px; text-align: right; }
+
+@media (prefers-reduced-motion: reduce) {
+    .queue-peek { animation: none; }
+}

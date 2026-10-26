@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { jobContext } from './jobcontext.js';
 import { killJob } from './dockerctl.js';
@@ -13,6 +14,17 @@ import { killJob } from './dockerctl.js';
  * with a "Busy" error for trying -- and the only thing wrong with asking was
  * the timing, which a queue knows how to fix.
  */
+/**
+ * What the request that started a job asked for.
+ *
+ * Update and Rebuild send their work to the Update Queue instead of a
+ * full-screen log: the page stays usable, several can be lined up, and the
+ * queue page shows the one running and what waits behind it. The server wraps
+ * every route in this store, so `start` knows which kind it is without every
+ * route having to pass it along.
+ */
+export const requestContext = new AsyncLocalStorage();
+
 class JobRunner extends EventEmitter {
     current = null;
     queue = [];
@@ -25,16 +37,47 @@ class JobRunner extends EventEmitter {
 
     /** Everything asked for and not yet finished, in the order it will run. */
     get pending() {
-        return this.queue.map(({ job }) => ({ id: job.id, name: job.name, status: job.status }));
+        return this.queue.map(({ job }) => ({
+            id: job.id,
+            name: job.name,
+            status: job.status,
+            queued: job.queued,
+            queuedAt: job.queuedAt,
+        }));
     }
 
     start(name, fn) {
+        const asked = requestContext.getStore();
+        const queued = asked?.queued === true;
+        // Some jobs have to run to the end once they start -- uninstalling is
+        // the one that matters. They can still be dropped while they wait.
+        const noCancel = asked?.noCancel === true;
+        if (queued && asked.title) name = asked.title;
+
+        // The same thing asked for again while it is the last one waiting is
+        // one job, and the latest click wins: its function replaces the waiting
+        // one, because routes save new settings and then capture them in `fn`.
+        // Only when it is last, though -- anything queued behind it means the
+        // order matters, and "stop, start, stop" has to end stopped. Once it is
+        // running, asking again lines up a genuine second run, which is how to
+        // pick up a commit pushed while the first one was building.
+        const last = this.queue[this.queue.length - 1];
+        if (last && last.job.name === name) {
+            last.fn = fn;
+            last.job.noCancel = noCancel;
+            return last.job;
+        }
+
         const job = {
             // Two clicks in the same millisecond used to collide, which nothing
             // noticed while only one job could exist at a time.
             id: `${Date.now().toString(36)}-${(this.#seq += 1).toString(36)}`,
             name,
             status: 'queued',
+            // Watched on the Update Queue page rather than in the overlay.
+            queued,
+            noCancel,
+            queuedAt: new Date().toISOString(),
             startedAt: null,
             finishedAt: null,
             lines: [],
@@ -116,12 +159,21 @@ class JobRunner extends EventEmitter {
             job.status = 'cancelled';
             job.error = 'Cancelled before it started.';
             job.finishedAt = new Date().toISOString();
+            // Into the history as well. The queue page's Finished list is the
+            // only place a dropped job is accounted for; without this it simply
+            // vanishes off Waiting, which reads as the panel losing it.
+            this.history.unshift({ ...job, lines: [job.error] });
+            this.history = this.history.slice(0, 10);
             this.emit('end', { ...job, pending: this.pending });
             return { cancelled: true, started: false };
         }
 
         if (this.current?.id !== id || this.current.status !== 'running') {
             return { cancelled: false, reason: 'That job is not running.' };
+        }
+
+        if (this.current.noCancel) {
+            return { cancelled: false, reason: 'This one cannot be stopped partway: it would leave half of it behind.' };
         }
 
         // Marked first: whichever way the function ends after its processes
@@ -141,8 +193,20 @@ class JobRunner extends EventEmitter {
 
     snapshot() {
         if (!this.current) return null;
-        const { id, name, status, startedAt, finishedAt, error, lines } = this.current;
-        return { id, name, status, startedAt, finishedAt, error, lines: lines.slice(-400), pending: this.pending };
+        const { id, name, status, queued, noCancel, queuedAt, startedAt, finishedAt, error, lines } = this.current;
+        return {
+            id,
+            name,
+            status,
+            queued,
+            noCancel,
+            queuedAt,
+            startedAt,
+            finishedAt,
+            error,
+            lines: lines.slice(-400),
+            pending: this.pending,
+        };
     }
 
     /**
@@ -165,6 +229,27 @@ class JobRunner extends EventEmitter {
             return { id, name, status, startedAt, finishedAt, error, lines: lines.slice(-400) };
         }
         return this.history.find((job) => job.id === id) ?? null;
+    }
+
+    /** Everything the Update Queue page shows: running, waiting, and the last ten finished. */
+    view() {
+        return {
+            current: this.busy ? this.snapshot() : null,
+            pending: this.pending,
+            history: this.history.map(
+                ({ id, name, status, queued, queuedAt, startedAt, finishedAt, error, lines }) => ({
+                    id,
+                    name,
+                    status,
+                    queued,
+                    queuedAt,
+                    startedAt,
+                    finishedAt,
+                    error,
+                    lines,
+                }),
+            ),
+        };
     }
 }
 

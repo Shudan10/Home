@@ -3,10 +3,10 @@ const el = (sel, root = document) => root.querySelector(sel);
 
 // ------------------------------------------------------------------- api ---
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body, headers = {} } = {}) {
     const res = await fetch(path, {
         method,
-        headers: body ? { 'Content-Type': 'application/json' } : {},
+        headers: body ? { 'Content-Type': 'application/json', ...headers } : headers,
         body: body ? JSON.stringify(body) : undefined,
     });
     let data = {};
@@ -179,7 +179,10 @@ function showApp() {
     $('app').classList.remove('hidden');
     // The heading is static markup until something navigates; seed it from
     // whichever entry starts active so it is not stale on first paint.
-    $('page-title').textContent = document.querySelector('.nav-item.active .label').textContent;
+    $('page-title').textContent =
+        document.querySelector('.nav-item.active .label')?.textContent ??
+        document.querySelector('.sys-item.active .sys-label')?.textContent ??
+        'Overview';
     startPolling();
     loadProxies();
     loadApps();
@@ -225,17 +228,27 @@ function selectTab(name) {
         item.closest('.nav-row')?.classList.toggle('active', active);
         if (active) title = el('.label', item).textContent;
     }
+    // The System screens live in the top banner rather than the sidebar, so
+    // they carry their own highlight and their own name for the heading.
+    for (const item of document.querySelectorAll('.sys-item')) {
+        const active = item.dataset.tab === name;
+        item.classList.toggle('active', active);
+        if (active) title = el('.sys-label', item).textContent;
+    }
     for (const tab of document.querySelectorAll('.tab')) {
         tab.classList.toggle('active', tab.id === `tab-${name}`);
     }
     $('page-title').textContent = title;
     // Read on arrival rather than polled: nothing on it changes by itself.
     if (name === 'global') loadGlobal().catch(() => {});
+    // This one does change by itself, but the stream pushes those changes --
+    // this is the first paint.
+    if (name === 'queue') loadQueue();
     // On the drawer layout, picking a destination should get out of the way.
     if (MOBILE()) closeDrawer();
 }
 
-for (const item of document.querySelectorAll('.nav-item')) {
+for (const item of document.querySelectorAll('.nav-item, .sys-item')) {
     item.addEventListener('click', () => selectTab(item.dataset.tab));
 }
 
@@ -881,8 +894,8 @@ const ACTION_VERBS = { start: 'Starting', stop: 'Stopping', restart: 'Restarting
  * duplicating a list that is authoritative elsewhere. Now a new switch works
  * the moment its markup exists.
  */
-const setRunning = (key, on) =>
-    api(`/api/services/${key}/${on ? 'start' : 'stop'}`, { method: 'POST' });
+const setRunning = (key, on, headers) =>
+    api(`/api/services/${key}/${on ? 'start' : 'stop'}`, { method: 'POST', headers });
 
 /* Display names only. A missing entry falls back to the key, which reads badly
    but still works -- unlike the map above, this one cannot break anything. */
@@ -903,13 +916,13 @@ for (const input of document.querySelectorAll('[data-service]')) {
         input.dataset.busy = '1';
         input.disabled = true;
 
-        const job = await runAction({
-            key: service,
+        // Queued rather than taking the screen. The switch still waits for the
+        // real answer -- queueAction resolves when the job finishes, not when
+        // it is accepted -- so it can go back if the container refused to
+        // start, while the rest of the panel stays usable meanwhile.
+        const job = await queueAction({
             title: `${wanted ? 'Starting' : 'Stopping'} ${name}`,
-            note: wanted
-                ? 'Starting a container that already exists is quick. Nothing is rebuilt.'
-                : 'The container stops and keeps everything: its data, its image, and the container itself.',
-            request: () => setRunning(service, wanted),
+            request: (headers) => setRunning(service, wanted, headers),
         });
 
         // Setting .checked does not fire change, so putting the switch back is
@@ -1700,11 +1713,12 @@ for (const name of APP_KEYS) {
             confirmLabel: 'Rebuild',
         });
         if (!go) return;
-        await runAction({
-            key: name,
+        // A build is the longest thing this panel does, and the one with least
+        // worth watching line by line. It goes to the queue so three of them
+        // can be asked for at once.
+        await queueAction({
             title: `Rebuilding ${label}`,
-            note: `Fetches the newest source for ${label} and rebuilds it. It is unavailable until this finishes, and a build that fails leaves the running one alone.`,
-            request: () => api(`/api/apps/${name}/update`, { method: 'POST' }),
+            request: (headers) => api(`/api/apps/${name}/update`, { method: 'POST', headers }),
         });
     });
 }
@@ -1770,11 +1784,9 @@ for (const button of document.querySelectorAll('[data-app-action]')) {
     button.addEventListener('click', async () => {
         const [name, action] = button.dataset.appAction.split('/');
         const verb = ACTION_VERBS[action] ?? action;
-        await runAction({
-            key: name,
+        await queueAction({
             title: `${verb} ${appsState?.apps?.[name]?.label ?? name}`,
-            note: 'Nothing is rebuilt and nothing is removed.',
-            request: () => api(`/api/apps/${button.dataset.appAction}`, { method: 'POST' }),
+            request: (headers) => api(`/api/apps/${button.dataset.appAction}`, { method: 'POST', headers }),
         });
     });
 }
@@ -2961,12 +2973,6 @@ document.addEventListener('click', (event) => {
 // Log tiles are built as containers appear and each restores its own text size
 // then (see connectLogs), so there is nothing static to restore here.
 
-// None of these is a service, so their dots stay hollow rather than implying a
-// state they cannot have.
-setNavHealth('logs', 'none');
-setNavHealth('global', 'none');
-setNavHealth('support', 'none');
-
 // One tile per container, all fed by a single multiplexed EventSource. Per-tile
 // streams would need one connection each, and browsers cap concurrent
 // HTTP/1.1 connections per origin at about six -- which the status poll and the
@@ -3159,15 +3165,17 @@ let jobStream = null;
  * What is waiting behind the job on screen. The console shows one job at a
  * time, so without this a queue of three looks like one.
  */
-/** What is waiting, now that there is no console head to put it in. */
-let lastQueueNote = '';
+/*
+ * How much work is outstanding, as a count on the Update Queue button.
+ *
+ * This used to raise a toast listing what was waiting, on every job event. The
+ * queued event already says a job was accepted, so that was the same news
+ * twice -- and a toast is gone a moment later, which is the wrong shape for a
+ * number that stays true until the work is done.
+ */
+let queueBusy = false;
 function renderQueue(pending) {
-    const list = pending ?? [];
-    const note = list.length ? `then: ${list.map((j) => j.name).join(', ')}` : '';
-    // Only when it changes: this runs on every job event, and a toast repeating
-    // itself is worse than no toast at all.
-    if (note && note !== lastQueueNote) toast(note);
-    lastQueueNote = note;
+    setQueueBadge((pending ?? []).length + (queueBusy ? 1 : 0));
 }
 
 const refreshQueueSoon = debounce(async () => {
@@ -3178,6 +3186,277 @@ const refreshQueueSoon = debounce(async () => {
         /* the console is cosmetic */
     }
 }, 250);
+
+// ------------------------------------------------------- the update queue --
+
+/*
+ * Work that does not take the screen away.
+ *
+ * Updating and rebuilding used to open the blocking overlay, which refused a
+ * second request outright -- so lining up "update the panel" and "rebuild
+ * Nextcloud" meant sitting through the first with nothing else usable. These
+ * now go to the queue instead: the server runs them one at a time as it always
+ * did, the panel stays usable, and the Update Queue page shows what is running
+ * and what is behind it.
+ */
+
+/** id -> resolve, for callers waiting on a job they sent to the queue. */
+const queueEnds = new Map();
+/*
+ * Jobs that ended before anyone was waiting on them.
+ *
+ * A short job can finish -- and its `end` arrive on the stream -- before its
+ * own HTTP response gets back to the caller that would have registered a
+ * waiter. Without somewhere to put that ending, the caller waits for an event
+ * that has already been and gone. Capped, because this is a safety net and not
+ * a record of anything.
+ */
+const queueEnded = new Map();
+
+function settleQueueJob(job) {
+    const waiter = queueEnds.get(job.id);
+    if (waiter) {
+        queueEnds.delete(job.id);
+        waiter(job);
+        return;
+    }
+    queueEnded.set(job.id, job);
+    if (queueEnded.size > 50) queueEnded.delete(queueEnded.keys().next().value);
+}
+
+/**
+ * Sends one piece of work to the queue and resolves once it has finished.
+ *
+ * Resolving with the finished job rather than on acceptance is what lets a
+ * caller hold a button disabled until it is really done, and put it back on
+ * failure. `noCancel` marks the few that must run to the end once started.
+ */
+async function queueAction({ title, request, onEnd, noCancel = false }) {
+    const headers = { 'X-QSH-Queue': '1', 'X-QSH-Queue-Title': encodeURIComponent(title) };
+    if (noCancel) headers['X-QSH-No-Cancel'] = '1';
+
+    let response;
+    try {
+        response = await request(headers);
+    } catch (e) {
+        toast(`${title}: ${e.message}`, 'bad');
+        return { ok: false, status: 'failed', error: e.message };
+    }
+
+    // Finished inside the request, with no job to watch. "Already on the newest
+    // version" is a real answer, and treating it as a failure would be wrong.
+    if (!response?.jobId) {
+        toast(response?.message ?? `${title}: nothing to do.`);
+        return { ok: true, status: 'succeeded' };
+    }
+
+    showPeek({ id: response.jobId, name: title, state: 'Queued' });
+    refreshQueueSoon();
+
+    return new Promise((resolve) => {
+        const finish = (job) => {
+            const result = { ...job, ok: job.status === 'succeeded' };
+            Promise.resolve()
+                .then(() => onEnd?.(result))
+                .catch(() => {});
+            resolve(result);
+        };
+        const early = queueEnded.get(response.jobId);
+        if (early) {
+            queueEnded.delete(response.jobId);
+            finish(early);
+        } else {
+            queueEnds.set(response.jobId, finish);
+        }
+    });
+}
+
+// --- the peek: a glance at queued work, not a modal ---
+
+let peekJobId = null;
+let peekHideTimer = null;
+
+function showPeek({ id, name, state }) {
+    peekJobId = id;
+    clearTimeout(peekHideTimer);
+    $('queue-peek-title').textContent = name;
+    $('queue-peek-state').textContent = state;
+    $('queue-peek-log').textContent = '';
+    $('queue-peek').hidden = false;
+}
+
+function peekLine(jobId, line) {
+    if (!peekJobId || jobId !== peekJobId) return;
+    const log = $('queue-peek-log');
+    log.textContent += `${line}\n`;
+    // Only the tail is worth keeping here; the whole log is on the queue page.
+    const lines = log.textContent.split('\n');
+    if (lines.length > 60) log.textContent = lines.slice(-60).join('\n');
+    log.scrollTop = log.scrollHeight;
+}
+
+function peekEnded(job) {
+    if (!peekJobId || job.id !== peekJobId) return;
+    $('queue-peek-state').textContent =
+        { succeeded: 'Done', cancelled: 'Cancelled' }[job.status] ?? `Failed: ${job.error ?? 'unknown'}`;
+    // A failure is worth leaving on screen longer than a success.
+    clearTimeout(peekHideTimer);
+    peekHideTimer = setTimeout(hidePeek, job.status === 'succeeded' ? 4000 : 12000);
+}
+
+function hidePeek() {
+    clearTimeout(peekHideTimer);
+    peekJobId = null;
+    $('queue-peek').hidden = true;
+}
+
+$('queue-peek').addEventListener('click', () => {
+    hidePeek();
+    selectTab('queue');
+});
+
+// --- the badge ---
+
+function setQueueBadge(count) {
+    const badge = $('queue-count');
+    if (!badge) return;
+    badge.textContent = String(count);
+    badge.hidden = count <= 0;
+}
+
+// --- the page ---
+
+let queueElapsedTimer = null;
+
+const fmtClock = (ms) => {
+    const secs = Math.max(0, Math.round(ms / 1000));
+    const m = Math.floor(secs / 60);
+    return m ? `${m}m ${String(secs % 60).padStart(2, '0')}s` : `${secs}s`;
+};
+
+function queueRow(job, { clickable = false } = {}) {
+    const li = document.createElement('li');
+    li.className = `queue-item${clickable ? ' is-clickable' : ''}`;
+
+    const name = document.createElement('span');
+    name.className = 'queue-name';
+    name.textContent = job.name;
+    li.append(name);
+
+    if (job.status && job.status !== 'queued') {
+        const status = document.createElement('span');
+        status.className = `queue-status ${job.status}`;
+        status.textContent = job.status;
+        li.append(status);
+    }
+
+    const when = document.createElement('span');
+    when.className = 'queue-when';
+    const stamp = job.finishedAt ?? job.startedAt ?? job.queuedAt;
+    when.textContent = stamp ? new Date(stamp).toLocaleTimeString() : '';
+    li.append(when);
+
+    if (clickable && job.lines?.length) {
+        li.addEventListener('click', () => {
+            const open = li.querySelector('.queue-item-log');
+            if (open) return open.remove();
+            const log = document.createElement('pre');
+            log.className = 'logview queue-item-log';
+            log.textContent = job.lines.join('\n');
+            li.append(log);
+        });
+    }
+    return li;
+}
+
+function renderQueuePage(view) {
+    const current = view.current;
+    $('queue-current').hidden = !current;
+    $('queue-current-empty').hidden = Boolean(current);
+
+    if (current) {
+        $('queue-current-name').textContent = current.name;
+        $('queue-current-log').textContent = (current.lines ?? []).join('\n');
+        $('queue-current-log').scrollTop = $('queue-current-log').scrollHeight;
+        const cancel = $('queue-current-cancel');
+        // The few that cannot be stopped say so rather than offering a button
+        // that answers no.
+        cancel.disabled = Boolean(current.noCancel);
+        cancel.title = current.noCancel
+            ? 'This one cannot be stopped partway: it would leave half of it behind.'
+            : '';
+        cancel.dataset.jobId = current.id;
+    }
+
+    const pending = view.pending ?? [];
+    $('queue-pending-empty').hidden = pending.length > 0;
+    const pendingList = $('queue-pending');
+    pendingList.innerHTML = '';
+    for (const job of pending) pendingList.append(queueRow(job));
+
+    const history = view.history ?? [];
+    $('queue-history-empty').hidden = history.length > 0;
+    const historyList = $('queue-history');
+    historyList.innerHTML = '';
+    for (const job of history) historyList.append(queueRow(job, { clickable: true }));
+
+    setQueueBadge(pending.length + (current ? 1 : 0));
+    tickQueueElapsed(current);
+}
+
+function tickQueueElapsed(current) {
+    clearInterval(queueElapsedTimer);
+    if (!current?.startedAt) return;
+    const started = new Date(current.startedAt).getTime();
+    const paint = () => {
+        $('queue-current-elapsed').textContent = fmtClock(Date.now() - started);
+    };
+    paint();
+    queueElapsedTimer = setInterval(paint, 1000);
+}
+
+async function loadQueue() {
+    try {
+        renderQueuePage(await api('/api/jobs/queue'));
+    } catch {
+        /* the page is a view of something the server owns; a failed read is
+           not worth an error on screen */
+    }
+}
+
+/** Re-read, but only when somebody is looking at it. */
+const refreshQueueIfOpen = debounce(() => {
+    if ($('tab-queue')?.classList.contains('active')) loadQueue();
+}, 200);
+
+/*
+ * The running job's log, line by line, while the page is open.
+ *
+ * Appended rather than re-fetched: the lines arrive on the stream anyway, and
+ * asking the server again for a log that just grew by one line is a round trip
+ * to learn what was already in hand.
+ */
+function appendQueuePageLine(jobId, line) {
+    const pane = $('queue-current-log');
+    if (!pane || $('queue-current').hidden) return;
+    if ($('queue-current-cancel').dataset.jobId !== jobId) return;
+    const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40;
+    pane.textContent += `${line}\n`;
+    // Only follow along if they had not scrolled up to read something.
+    if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+$('queue-current-cancel').addEventListener('click', async () => {
+    const id = $('queue-current-cancel').dataset.jobId;
+    if (!id) return;
+    try {
+        const r = await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
+        if (r?.reason) toast(r.reason, 'bad');
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    loadQueue();
+});
 
 /**
  * A job that renders on its own page rather than in the console overlay.
@@ -3265,8 +3544,15 @@ function connectJobs() {
     jobStream.addEventListener('snapshot', (event) => {
         const job = JSON.parse(event.data);
         if (job.status !== 'running') return;
+        queueBusy = true;
         for (const line of job.lines ?? []) pushJobLine(line);
         renderQueue(job.pending);
+        // Queued work was never the overlay's to adopt: it is watched on its
+        // own page, which the badge points at.
+        if (job.queued) {
+            refreshQueueIfOpen();
+            return;
+        }
         adoptRunningJob(
             job,
             'This was already running when the page loaded. It runs in the manager, not in the browser, so refreshing or closing the tab never interrupted it.',
@@ -3274,8 +3560,16 @@ function connectJobs() {
     });
     jobStream.addEventListener('start', (event) => {
         const job = JSON.parse(event.data);
+        queueBusy = true;
         renderQueue(job.pending);
         pushJobLine(`\n> ${job.name}`);
+
+        // Queued work belongs to the peek and the queue page, never the overlay.
+        if (job.queued) {
+            showPeek({ id: job.id, name: job.name, state: 'Running' });
+            refreshQueueIfOpen();
+            return;
+        }
 
         // The overlay is open on a job that has finished, and another was
         // waiting behind it. Follow that one rather than leaving it to run with
@@ -3291,6 +3585,15 @@ function connectJobs() {
     // between a queue and a click that appeared to do nothing.
     jobStream.addEventListener('queued', (event) => {
         const job = JSON.parse(event.data);
+        refreshQueueIfOpen();
+        if (job.queued) {
+            // Its own page says where it is in the line; a toast behind the
+            // peek would be the same thing said twice.
+            if (job.id === peekJobId) {
+                $('queue-peek-state').textContent = job.running ? `Waiting for ${job.running}` : 'Queued';
+            }
+            return;
+        }
         if (job.ahead === 0 && !job.running) return;
         const waiting = `Waiting for ${job.running ?? 'the job running now'} to finish first.`;
         // If this is the overlay's own job, it belongs in its log rather than
@@ -3303,6 +3606,8 @@ function connectJobs() {
     jobStream.addEventListener('line', (event) => {
         const { line, jobId } = JSON.parse(event.data);
         pushJobLine(line);
+        peekLine(jobId, line);
+        appendQueuePageLine(jobId, line);
         // The overlay shows the action it started; a tab watching its own job
         // shows that one. Everything is in All logs either way.
         actionLine(jobId, line);
@@ -3310,7 +3615,21 @@ function connectJobs() {
     });
     jobStream.addEventListener('end', (event) => {
         const job = JSON.parse(event.data);
+        queueBusy = false;
         renderQueue(job.pending);
+        refreshQueueIfOpen();
+
+        // Anyone holding a button until this finished hears about it first --
+        // before the early returns below, which are about the overlay.
+        settleQueueJob(job);
+        if (job.queued) {
+            peekEnded(job);
+            loadServices().catch(() => {});
+            refreshStatus();
+            loadApps();
+            return;
+        }
+
         const wasOurs = pendingAction?.jobId === job.id;
         actionJobEnded(job);
         // Whether a service exists changes when a job finishes, and nothing

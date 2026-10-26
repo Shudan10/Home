@@ -127,21 +127,6 @@
         </label>
       </div>
 
-      <p class="nav-group-title">System</p>
-      <div class="nav-row">
-        <button class="nav-item" data-tab="logs" title="All logs">
-          <span class="nav-dot" data-health="logs"></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h4"/></svg>
-          <span class="label">All logs</span>
-        </button>
-      </div>
-      <div class="nav-row">
-        <button class="nav-item" data-tab="global" title="Global settings">
-          <span class="nav-dot" data-health="global"></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.6 1.7 1.7 0 00-1.9.4l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.7 9a1.7 1.7 0 00-.4-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
-          <span class="label">Global settings</span>
-        </button>
-      </div>
     </nav>
 
     <div class="sidebar-foot">
@@ -160,6 +145,25 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
       <h1 id="page-title">Overview</h1>
+
+      <!-- The System screens. They used to be a sidebar group, which meant
+           going back to the menu to look at a log or check what is building;
+           up here they are one click from wherever you already are. -->
+      <nav class="topbar-sys" aria-label="System">
+        <button type="button" class="sys-item" data-tab="logs" title="All logs" aria-label="All logs">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h4"/></svg>
+          <span class="sys-label">All logs</span>
+        </button>
+        <button type="button" class="sys-item" data-tab="queue" title="Update Queue" aria-label="Update Queue">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11M4 12h11M4 18h7M18 14v6M15 17l3 3 3-3"/></svg>
+          <span class="nav-count" id="queue-count" hidden>0</span>
+          <span class="sys-label">Update Queue</span>
+        </button>
+        <button type="button" class="sys-item" data-tab="global" title="Global settings" aria-label="Global settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.6 1.7 1.7 0 00-1.9.4l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.7 9a1.7 1.7 0 00-.4-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
+          <span class="sys-label">Global settings</span>
+        </button>
+      </nav>
     </header>
 
     <main>
@@ -922,6 +926,41 @@
     </section>
 
     <!-- -------------------------------------------------- global settings -->
+    <!-- ----------------------------------------------------- update queue -->
+    <section id="tab-queue" class="tab">
+      <div class="grid">
+        <article class="card span2">
+          <h3>Running now</h3>
+          <p class="muted" id="queue-current-empty">
+            Nothing is running. Updates and rebuilds line up here, one at a time,
+            and you can keep using the panel while they work.
+          </p>
+          <div id="queue-current" hidden>
+            <div class="queue-current-head">
+              <strong id="queue-current-name"></strong>
+              <span class="muted" id="queue-current-elapsed"></span>
+              <button class="ghost" id="queue-current-cancel">Cancel</button>
+            </div>
+            <pre class="queue-log" id="queue-current-log"></pre>
+          </div>
+        </article>
+
+        <article class="card span2">
+          <h3>Waiting</h3>
+          <p class="muted">Each one starts by itself when the one before it finishes.</p>
+          <p class="muted" id="queue-pending-empty">Nothing is waiting.</p>
+          <ol class="queue-list" id="queue-pending"></ol>
+        </article>
+
+        <article class="card span2">
+          <h3>Finished</h3>
+          <p class="muted">The last ten, newest first. Click one to read its log.</p>
+          <p class="muted" id="queue-history-empty">Nothing has finished since the panel started.</p>
+          <ol class="queue-list" id="queue-history"></ol>
+        </article>
+      </div>
+    </section>
+
     <section id="tab-global" class="tab">
       <nav class="subnav" aria-label="Global settings">
         <button class="subtab-btn active" data-subtab="global-password">Password</button>
@@ -1248,6 +1287,18 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+<!-- A glance at work just sent to the Update Queue: its first lines, then it
+     takes itself away. The badge in the top banner keeps the count, and this is
+     a click through to the full page. Deliberately not a modal -- the whole
+     point of the queue is that the panel stays usable while it runs. -->
+<div id="queue-peek" class="queue-peek" hidden role="status" aria-live="polite">
+  <div class="queue-peek-head">
+    <strong id="queue-peek-title"></strong>
+    <span class="muted" id="queue-peek-state"></span>
+  </div>
+  <pre class="queue-peek-log" id="queue-peek-log"></pre>
+  <div class="muted queue-peek-foot">Click to open the Update Queue</div>
+</div>
 
 <script type="module" src="/app.js"></script>
 </body>
