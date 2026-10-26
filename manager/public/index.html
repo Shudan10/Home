@@ -720,9 +720,11 @@
             </label>
             <datalist id="mealplan-refs"></datalist>
             <div id="mealplan-build" class="verdict"></div>
-            <div class="row end">
-              <button type="button" id="mealplan-update" class="primary">Update Meal Plan</button>
+            <div class="row">
+              <button type="button" id="mealplan-check" class="ghost">Check for update</button>
+              <button type="button" id="mealplan-update" class="primary" disabled>Update Meal Plan</button>
             </div>
+            <p class="status-line" id="mealplan-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub when you ask, never on its own.</span></span></p>
             <p class="hint">
               Your meals and planned weeks live in a Docker volume, so a rebuild
               never touches them.
@@ -963,13 +965,47 @@
 
     <section id="tab-global" class="tab">
       <nav class="subnav" aria-label="Global settings">
-        <button class="subtab-btn active" data-subtab="global-password">Password</button>
+        <button class="subtab-btn active" data-subtab="global-updates">Updates</button>
+        <button class="subtab-btn" data-subtab="global-password">Password</button>
         <button class="subtab-btn" data-subtab="global-address">Panel address</button>
-        <button class="subtab-btn" data-subtab="global-updates">Updates</button>
         <button class="subtab-btn" data-subtab="global-remove">Remove everything</button>
       </nav>
 
-      <div id="sub-global-password" class="subtab active">
+      <div id="sub-global-updates" class="subtab active">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Update the control panel</h3>
+            <p class="muted">
+              This updates the panel itself, not the apps it runs. It downloads the
+              latest files, rebuilds the panel image and restarts it. Your
+              settings, certificates and app data are untouched, and everything
+              else keeps running throughout.
+            </p>
+            <dl class="kv">
+              <div><dt>Installed</dt><dd id="global-panel-version">–</dd></div>
+              <div><dt>Install directory</dt><dd id="global-stack-dir">–</dd></div>
+            </dl>
+            <label class="inline">Source
+              <input id="global-repo" value="Shudan10/Home" size="30">
+            </label>
+            <label class="inline">Branch or tag
+              <input id="global-ref" value="main" size="16">
+            </label>
+            <div class="row">
+              <button id="global-check-btn" class="ghost">Check for update</button>
+              <button id="global-update-btn" class="primary">Update the panel</button>
+            </div>
+            <p class="status-line" id="global-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub when you ask, never on its own.</span></span></p>
+            <p class="hint">
+              The panel goes offline for a minute or two while it rebuilds. This
+              page will say so and come back on its own.
+            </p>
+            <div id="global-update-result" class="verdict" hidden></div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-global-password" class="subtab">
         <div class="grid">
           <article class="card span2" id="password-card">
             <h3>Admin password</h3>
@@ -1011,40 +1047,6 @@
               else is affected.
             </p>
             <p class="hint" id="panel-port-result" hidden></p>
-          </article>
-        </div>
-      </div>
-
-      <div id="sub-global-updates" class="subtab">
-        <div class="grid">
-          <article class="card span2">
-            <h3>Update the control panel</h3>
-            <p class="muted">
-              This updates the panel itself, not the apps it runs. It downloads the
-              latest files, rebuilds the panel image and restarts it. Your
-              settings, certificates and app data are untouched, and everything
-              else keeps running throughout.
-            </p>
-            <dl class="kv">
-              <div><dt>Installed</dt><dd id="global-panel-version">–</dd></div>
-              <div><dt>Install directory</dt><dd id="global-stack-dir">–</dd></div>
-            </dl>
-            <label class="inline">Source
-              <input id="global-repo" value="Shudan10/Home" size="30">
-            </label>
-            <label class="inline">Branch or tag
-              <input id="global-ref" value="main" size="16">
-            </label>
-            <div class="row">
-              <button id="global-check-btn" class="ghost">Check for update</button>
-              <button id="global-update-btn" class="primary">Update the panel</button>
-            </div>
-            <p class="status-line" id="global-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub when you ask, never on its own.</span></span></p>
-            <p class="hint">
-              The panel goes offline for a minute or two while it rebuilds. This
-              page will say so and come back on its own.
-            </p>
-            <div id="global-update-result" class="verdict" hidden></div>
           </article>
         </div>
       </div>
