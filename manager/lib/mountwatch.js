@@ -20,7 +20,7 @@ const COOLDOWN_MS = 5 * 60_000;
  * Reads an identity for each path: which filesystem it is on, and which inode.
  *
  * Paths arrive as arguments rather than interpolated into the script, because
- * they contain spaces -- "/media/<user>/1TB Storage" being the specific one
+ * they contain spaces -- "/media/<user>/1TB Storage" being the shape of the one
  * this exists for -- and a quoted path inside a generated shell string is a
  * quoting bug waiting to happen.
  */
