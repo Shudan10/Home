@@ -1705,21 +1705,28 @@ for (const name of APP_KEYS) {
 
     $(`${name}-update`).addEventListener('click', async () => {
         const label = appsState?.apps?.[name]?.label ?? name;
-        const go = await askConfirm({
-            title: `Rebuild ${label} on the newest source?`,
-            body: `It will be unavailable while it rebuilds. ${
-                name === 'mealplan' ? 'Your meals and planned weeks are not touched.' : 'Your files are not touched.'
-            }`,
-            confirmLabel: 'Rebuild',
-        });
-        if (!go) return;
-        // A build is the longest thing this panel does, and the one with least
-        // worth watching line by line. It goes to the queue so three of them
-        // can be asked for at once.
-        await queueAction({
+        /*
+         * No confirmation here.
+         *
+         * A rebuild is not destructive -- the data is in a volume, and a build
+         * that fails leaves the running container alone -- so a dialog in front
+         * of it only asks the question the button already asked. For the app
+         * updates it also came after a Check, which is where the decision was
+         * actually made. The peek in the corner is the acknowledgement instead,
+         * and the queue page is where it can be watched or cancelled.
+         */
+        const result = await queueAction({
             title: `Rebuilding ${label}`,
             request: (headers) => api(`/api/apps/${name}/update`, { method: 'POST', headers }),
         });
+
+        // Built, so the answer the check gave is spent: the button goes back to
+        // needing a fresh one rather than staying lit over a commit that is now
+        // the installed one.
+        if (name === 'mealplan' && result?.ok) {
+            $('mealplan-update').disabled = true;
+            setMealPlanStatus('current', 'Built from the newest commit', 'Check again whenever you want to know if it has moved on.');
+        }
     });
 }
 
@@ -1761,6 +1768,56 @@ $('mealplan-password-save').addEventListener('click', async () => {
     } finally {
         button.disabled = false;
     }
+});
+
+/*
+ * Check first, then update -- the same two steps as the panel's own.
+ *
+ * The Update button starts disabled and only opens once a check has found
+ * something, so pressing it is always a decision about a known commit rather
+ * than a rebuild on the off chance. Editing the branch re-opens it too: moving
+ * to another branch is a reason to rebuild even when the current one is level.
+ */
+function setMealPlanStatus(state, head, detail) {
+    setUpdateStatus(state, head, detail, 'mealplan-check-status');
+}
+
+$('mealplan-check').addEventListener('click', async () => {
+    const button = $('mealplan-check');
+    button.disabled = true;
+    setMealPlanStatus('checking', 'Checking…');
+    try {
+        const r = await api('/api/apps/mealplan/check');
+        const when = r.date ? new Date(r.date).toLocaleString() : 'unknown date';
+        if (r.neverBuilt) {
+            // Nothing recorded to compare against, which is every install that
+            // has not built it yet. "Up to date" here would be a guess.
+            setMealPlanStatus(null, `${r.ref} is at ${r.shortSha} (${when}).`,
+                'This install has not built Meal Plan yet, so there is nothing to compare it against.');
+            $('mealplan-update').disabled = false;
+        } else if (r.updateAvailable) {
+            setMealPlanStatus('update', 'Update available', `${r.shortSha}\n${r.message}`);
+            $('mealplan-update').disabled = false;
+        } else {
+            setMealPlanStatus('current', 'Up to date', `${r.ref} · ${r.shortSha} · ${when}`);
+            $('mealplan-update').disabled = true;
+        }
+    } catch (e) {
+        setMealPlanStatus('error', 'Could not check', e.message);
+    } finally {
+        button.disabled = false;
+    }
+});
+
+// A different branch is a different question, so the last answer no longer
+// applies and the button goes back to needing a check -- unless the branch is
+// being moved to, which is itself a reason to rebuild.
+$('mealplan-ref').addEventListener('input', () => {
+    const changed = $('mealplan-ref').value.trim() !== (appsState?.config?.mealplan?.ref ?? 'main');
+    $('mealplan-update').disabled = !changed;
+    setMealPlanStatus(null, changed
+        ? 'Branch changed. Updating will build from it.'
+        : 'Checked against GitHub when you ask, never on its own.');
 });
 
 /* The branches and tags the repository actually has, offered as a datalist
@@ -3819,8 +3876,9 @@ async function loadGlobal() {
  * `detail` carry a commit subject straight from GitHub, and that is somebody
  * else's text going into our page.
  */
-function setUpdateStatus(state, head, detail) {
-    const el = $('global-check-status');
+function setUpdateStatus(state, head, detail, id = 'global-check-status') {
+    const el = $(id);
+    if (!el) return;
     el.className = state ? `status-line is-${state}` : 'status-line';
     el.replaceChildren();
 

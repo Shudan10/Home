@@ -700,6 +700,16 @@ dialog .row label { flex: 1; min-width: 110px; }
    survives -- that gap is what stops the two being read as one sentence. */
 .confirm-body { white-space: pre-line; color: var(--muted); margin: 0 0 18px; }
 .confirm-body:empty { display: none; }
+/*
+ * `hidden` has to win over the rules below.
+ *
+ * The UA stylesheet's [hidden] { display: none } is an attribute selector, so
+ * any id or class rule here that sets display outranks it -- which is why the
+ * typed-phrase field, hidden by script for every question except uninstalling,
+ * turned up inside a Rebuild dialog asking for a name it did not want.
+ */
+[hidden] { display: none !important; }
+
 #confirm-typed-wrap { display: block; margin: 0 0 18px; }
 #confirm-typed-wrap code { color: var(--text); }
 .confirm-actions {
