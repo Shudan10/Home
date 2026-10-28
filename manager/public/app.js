@@ -2714,9 +2714,13 @@ $('setup-next').addEventListener('click', () => {
                 return toast(`Enter one word to put in front of ${setupState.account}.duckdns.org, like media.`, 'bad');
             }
             $('setup-subdomain').value = name;
-            // Nothing to ask about the token: this account is already saved and
-            // already being kept pointed here, which is why it was offered.
-            setupState.step = 3;
+            // The token is skipped only when one is actually saved. Being on the
+            // list is not the same thing: a name stays listed for as long as a
+            // proxy host uses it, and the token can be gone underneath it -- as
+            // it was here, after the stack directory had to be recovered. Taking
+            // the shortcut anyway walked straight into the server refusing to
+            // publish for want of the token it had never been asked for.
+            setupState.step = setupState.plan?.duckdns?.hasToken ? 3 : 2;
             renderSetupStep();
             return;
         }
@@ -2748,10 +2752,13 @@ $('setup-back').addEventListener('click', () => {
     // chosen from, not on the DuckDNS steps it never saw.
     // Both of the shortcuts into the plan came from the list, so both come back
     // to it rather than into DuckDNS steps they skipped.
+    const cameViaToken = mode === 'subdomain' && !setupState.plan?.duckdns?.hasToken;
     setupState.step =
         step === 3 && (mode === 'existing' || mode === 'subdomain')
             ? mode === 'subdomain'
-                ? 1
+                ? cameViaToken
+                    ? 2
+                    : 1
                 : 0
             : Math.max(publishState.domains.length ? 0 : 1, step - 1);
     renderSetupStep();
