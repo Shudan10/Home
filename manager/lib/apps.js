@@ -850,14 +850,11 @@ async function upstreamImage(name, docker) {
         return 'nextcloud:stable';
     }
     if (name === 'jellyfin') {
-        // What the container was actually created from is the honest answer;
-        // the .env pin is what it would be created from next time.
-        try {
-            const { stdout } = await docker(['inspect', '-f', '{{.Config.Image}}', APPS.jellyfin.container], { timeoutMs: 15_000 });
-            if (stdout.trim()) return stdout.trim();
-        } catch {
-            /* not created yet */
-        }
+        // The tag an Update would fetch, which is the .env pin -- the same
+        // expression compose itself uses. Not the tag the container happens to
+        // have been created from: after pinning `latest` back to `10.11`, that
+        // still says `latest`, and the check went on offering a major upgrade
+        // the pin exists to refuse.
         return `jellyfin/jellyfin:${readEnvFile().JELLYFIN_VERSION || 'latest'}`;
     }
     throw new Error(`${APPS[name]?.label ?? name} is not made from a Docker Hub image.`);
