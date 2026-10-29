@@ -146,7 +146,7 @@ const REF_RE = /^(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/;
 // Exactly the set install.sh replaces on a re-install. conf/ holds generated
 // state and proxy/ holds issued certificates, so neither is listed: wiping
 // either would cost real work to get back.
-const CODE_ITEMS = ['docker-compose.yml', 'manager', 'nextcloud', 'uninstall.sh', 'dev.sh', 'README.md'];
+const CODE_ITEMS = ['docker-compose.yml', 'manager', 'nextcloud', 'cleanframe-watcher', 'uninstall.sh', 'dev.sh', 'README.md'];
 
 const ghHeaders = {
     Accept: 'application/vnd.github+json',
