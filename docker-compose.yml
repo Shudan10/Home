@@ -169,9 +169,9 @@ services:
 
   # ---- CleanFrame Watcher (TV Launcher) -------------------------------------
   #
-  # Behind the "cleanframe-watcher" profile. Built from the local
-  # cleanframe-watcher/ folder in this repo, like Nextcloud -- so it updates
-  # with the stack itself and has no separate branch to track.
+  # Behind the "cleanframe-watcher" profile. Built from its own repository,
+  # Shudan10/CleanFrameWatcher, like Meal Plan -- so it tracks a branch and
+  # updates through the panel's normal Check/Update flow.
   #
   # It watches the TV's developer port and launches CleanFrame over SDB when the
   # TV powers on. It never writes to the TV. Two things are machine-specific and
@@ -183,7 +183,7 @@ services:
   cleanframe-watcher:
     image: quickstart-home/cleanframe-watcher:1
     build:
-      context: ./cleanframe-watcher
+      context: https://github.com/Shudan10/CleanFrameWatcher.git#${CLEANFRAME_WATCHER_REF:-main}
     container_name: quickstart-home-cleanframe-watcher
     hostname: cleanframe-watcher
     profiles: ["cleanframe-watcher"]

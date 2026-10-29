@@ -757,7 +757,7 @@
       <nav class="subnav" aria-label="TV Launcher">
         <button class="subtab-btn active" data-subtab="cleanframe-watcher-overview">Overview</button>
         <button class="subtab-btn" data-subtab="cleanframe-watcher-settings">Settings</button>
-        <button class="subtab-btn" data-subtab="cleanframe-watcher-updates">Rebuild</button>
+        <button class="subtab-btn" data-subtab="cleanframe-watcher-updates">Updates</button>
         <button class="subtab-btn" data-subtab="cleanframe-watcher-uninstall">Uninstall</button>
       </nav>
 
@@ -829,16 +829,23 @@
       <div id="sub-cleanframe-watcher-updates" class="subtab">
         <div class="grid">
           <article class="card">
-            <h3>Rebuild</h3>
+            <h3>Source</h3>
             <p class="muted">
-              TV Launcher is built from this stack's own
-              <code>cleanframe-watcher/</code> folder, so it updates with the
-              panel itself. Rebuild it after a panel update to pick up changes.
+              TV Launcher is built from its own repository,
+              <code>Shudan10/CleanFrameWatcher</code>. Pick the branch or tag to
+              build from; <code>main</code> is the one to stay on unless you are
+              testing something.
             </p>
+            <label class="inline">Branch or tag
+              <input id="cleanframe-watcher-ref" list="cleanframe-watcher-refs" autocomplete="off" placeholder="main">
+            </label>
+            <datalist id="cleanframe-watcher-refs"></datalist>
             <div id="cleanframe-watcher-build" class="verdict"></div>
             <div class="row">
-              <button type="button" id="cleanframe-watcher-update" class="primary">Rebuild TV Launcher</button>
+              <button type="button" id="cleanframe-watcher-check" class="ghost">Check for update</button>
+              <button type="button" id="cleanframe-watcher-update" class="primary" disabled>Update TV Launcher</button>
             </div>
+            <p class="status-line" id="cleanframe-watcher-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub when you ask, never on its own.</span></span></p>
             <p class="hint">
               A rebuild never touches the TV. If it is running, it restarts onto
               the new image.

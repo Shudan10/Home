@@ -1590,7 +1590,7 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|cleanframe-watcher)$/, 
     sendJson(res, 202, { ok: true, jobId: job.id, config: cfg });
 });
 
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/refs$/, async (req, res, match, url) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|cleanframe-watcher)\/refs$/, async (req, res, match, url) => {
     try {
         sendJson(res, 200, await apps.listRefs(match[1], { force: url.searchParams.get('force') === '1' }));
     } catch (err) {
@@ -1655,7 +1655,7 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
     sendJson(res, 202, { ok: true, jobId: job.id, restarting: true });
 });
 
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/check$/, async (req, res, match) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|cleanframe-watcher)\/check$/, async (req, res, match) => {
     const name = match[1];
     try {
         const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());

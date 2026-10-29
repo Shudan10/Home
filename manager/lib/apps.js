@@ -102,10 +102,10 @@ export const APPS = {
 
     'cleanframe-watcher': {
         label: 'TV Launcher',
-        // Built from the local cleanframe-watcher/ folder, like Nextcloud, so
-        // there is no git ref behind it and "commits behind" has no answer.
-        tracksRepo: false,
-        repo: null,
+        // Built from its own repository, like Meal Plan, so the branch pickers
+        // and upstream checks apply to it.
+        tracksRepo: true,
+        repo: 'Shudan10/CleanFrameWatcher',
         profile: 'cleanframe-watcher',
         services: ['cleanframe-watcher'],
         container: 'quickstart-home-cleanframe-watcher',
@@ -664,9 +664,11 @@ export function renderAppsPortsOverride(cfg) {
     }
 
     if (composeDefines('cleanframe-watcher')) {
-        // Built locally, so no build context is written here (unlike Meal Plan):
-        // only whether its status page is published on the host.
         blocks.push('  cleanframe-watcher:');
+        // The branch is part of the build context, so writing it here is what
+        // makes "track this branch" mean anything.
+        blocks.push('    build:');
+        blocks.push(`      context: https://github.com/${APPS['cleanframe-watcher'].repo}.git#${cfg['cleanframe-watcher'].ref}`);
         blocks.push('    ports:');
         if (cfg['cleanframe-watcher'].publish.web) {
             blocks.push(`      - "0.0.0.0:${cfg['cleanframe-watcher'].hostPort}:8080/tcp"`);
