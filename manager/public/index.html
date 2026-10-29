@@ -197,22 +197,19 @@
           <p class="hint" id="ov-mem-detail">–</p>
         </article>
 
+        <!--
+          Every container this stack can run, folded behind its counts: each
+          count is a filter, and only a clicked one's tiles show. Collapsed, the
+          card is one line -- which is all it needs to be on the days when
+          everything is running, which is most of them.
+        -->
         <article class="card span2">
-          <h3>Services</h3>
-          <p class="muted">
-            Every container this stack can run. Anything not installed is simply
-            not installed: it is not a fault, and switching it on is done from
-            its own tab.
-          </p>
-          <!-- Scrolls itself on a narrow screen rather than widening the page. -->
-          <div class="scroll-x">
-            <table class="proxies">
-              <thead>
-                <tr><th>Service</th><th>Status</th><th>Uptime</th></tr>
-              </thead>
-              <tbody id="ov-containers"></tbody>
-            </table>
+          <div class="node-head">
+            <h3>Services</h3>
+            <div class="svc-filters" id="svc-filters"><span class="muted">Reading the stack…</span></div>
           </div>
+          <div class="services-grid compact" id="ov-services" hidden></div>
+          <p class="hint" id="ov-services-hint" hidden>Not installed is not a fault: each app is switched on from its own tab.</p>
         </article>
 
         <article class="card span2">

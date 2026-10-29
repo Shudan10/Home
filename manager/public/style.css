@@ -1978,3 +1978,84 @@ main {
 @media (prefers-reduced-motion: reduce) {
     .queue-peek { animation: none; }
 }
+
+/* --------------------------------------------- overview services, folded -- */
+/* From Kaspa Quick Start. The counts are the card: each one a filter, and only
+   a clicked one's tiles show. Appended after the theme layer on purpose -- rules
+   earlier in this file have been silently overridden by it before. */
+
+.node-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+}
+.node-head h3 { margin: 0; flex: 0 0 auto; }
+
+.svc-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.svc-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: none;
+}
+.svc-filter:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.svc-filter.active { background: var(--panel-2); color: var(--accent); border-color: var(--accent-dim); }
+.svc-filter:disabled { opacity: 0.45; cursor: default; }
+
+/* The status dot, on the chips and on the tiles. Lit, so a glance is enough. */
+.svc-dot {
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--line);
+}
+.svc-dot.ok { background: var(--ok); box-shadow: 0 0 9px 2px color-mix(in srgb, var(--ok) 75%, transparent); }
+.svc-dot.warn { background: var(--warn); box-shadow: 0 0 9px 2px color-mix(in srgb, var(--warn) 75%, transparent); }
+.svc-dot.bad { background: var(--danger); box-shadow: 0 0 9px 2px color-mix(in srgb, var(--danger) 80%, transparent); }
+
+/* Many small tiles, so every container fits without scrolling. */
+.services-grid.compact {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 6px;
+    margin: 14px 0 4px;
+}
+.services-grid.compact .svc-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+.services-grid.compact .svc-card.absent { opacity: 0.6; }
+.svc-meta { min-width: 0; }
+.services-grid.compact .svc-meta strong {
+    display: block;
+    font-size: 12px;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.services-grid.compact .svc-meta small {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#ov-services-hint { margin-top: 8px; }

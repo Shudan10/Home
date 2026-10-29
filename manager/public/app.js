@@ -1078,30 +1078,95 @@ function renderMeter(prefix, stats, label) {
     detail.textContent = `${humanBytes(stats.free)} free of ${humanBytes(stats.total)}`;
 }
 
-function renderContainers(list) {
-    const body = $('ov-containers');
-    if (!body) return;
+// --- Overview: the Services card, folded behind its counts ---
 
-    if (!list?.length) {
-        body.innerHTML = '<tr><td colspan="3" class="muted">Nothing installed yet.</td></tr>';
+/**
+ * Collapsed, the card is one line: "N running, N stopped, N not installed", each
+ * count a filter. Clicking one shows that status's tiles; clicking it again
+ * folds the card. The choice holds while the page lives -- the status poll
+ * redraws this every few seconds and must not snap it shut -- and starts
+ * folded on a fresh load.
+ *
+ * Taken from Kaspa Quick Start, where the same table had grown long enough that
+ * the one fact worth knowing at a glance -- is anything down -- was a scroll
+ * away. A count answers that without reading anything.
+ */
+let svcFilter = null;
+let ovContainers = [];
+
+// running, degraded (restarting, dead, or running but failing its healthcheck),
+// stopped, not installed -- the order the chips and the tiles both go in.
+const svcDegraded = (c) => c.exists && (c.health === 'unhealthy' || c.status === 'restarting' || c.status === 'dead');
+const svcGroup = (c) => (!c.exists ? 3 : svcDegraded(c) ? 1 : c.running ? 0 : 2);
+
+function renderContainers(list) {
+    if (list) ovContainers = [...list].sort((a, b) => svcGroup(a) - svcGroup(b));
+    const box = $('svc-filters');
+    const grid = $('ov-services');
+    const hint = $('ov-services-hint');
+    if (!box || !grid) return;
+
+    if (!ovContainers.length) {
+        box.innerHTML = '<span class="muted">Nothing on this machine yet.</span>';
+        grid.hidden = true;
+        hint.hidden = true;
         return;
     }
 
-    body.innerHTML = list
+    // Each chip carries the same dot its tiles do: green running, red degraded,
+    // amber stopped, grey absent. Degraded only appears while something is --
+    // a permanent "0 degraded" would teach the eye to skip the red one.
+    const groups = [
+        [0, 'running', 'ok'],
+        [1, 'degraded', 'bad'],
+        [2, 'stopped', 'warn'],
+        [3, 'not installed', ''],
+    ];
+    box.innerHTML = groups
+        .map(([n, word, dot]) => {
+            const count = ovContainers.filter((c) => svcGroup(c) === n).length;
+            // A filter whose group has emptied since it was picked folds the
+            // card rather than leaving it open on nothing. Checked before the
+            // degraded chip is dropped, not after: degraded is the group most
+            // likely to empty while open -- something recovers -- and returning
+            // first left the card open on an empty grid with no chip lit.
+            if (!count && svcFilter === n) svcFilter = null;
+            if (!count && n === 1) return '';
+            return `<button type="button" class="svc-filter${svcFilter === n ? ' active' : ''}" data-svc-filter="${n}" ${
+                count ? '' : 'disabled'
+            }><span class="svc-dot ${dot}"></span>${count} ${word}</button>`;
+        })
+        .join('');
+
+    grid.hidden = svcFilter === null;
+    hint.hidden = svcFilter !== 3;
+    grid.innerHTML = ovContainers
+        .filter((c) => svcFilter !== null && svcGroup(c) === svcFilter)
         .map((c) => {
-            const word = !c.exists ? 'not installed' : c.running ? 'running' : c.status === 'restarting' ? 'restarting' : 'stopped';
-            const tone = !c.exists ? 'off' : c.running ? 'ok' : 'bad';
-            // A container with no HEALTHCHECK reports null, which is not a
-            // problem and should not read as one.
-            const health = c.running && c.health && c.health !== 'healthy' ? ` (${escapeHtml(c.health)})` : '';
-            return `<tr>
-                <td>${escapeHtml(c.label)}</td>
-                <td><span class="tag ${tone}">${word}${health}</span></td>
-                <td class="muted">${c.running && c.startedAt ? `up ${fmtDuration(c.startedAt)}` : '–'}</td>
-            </tr>`;
+            const [dot, word] = !c.exists
+                ? ['', 'not installed']
+                : svcDegraded(c)
+                  ? ['bad', c.health === 'unhealthy' ? 'running, failing its health check' : c.status]
+                  : c.running
+                    ? ['ok', 'running']
+                    : ['warn', c.status || 'stopped'];
+            const uptime = c.running && c.startedAt ? `, up ${fmtDuration(c.startedAt)}` : '';
+            // The whole line as a tooltip: a tile is narrow, and the status that
+            // gets cut short is the long one -- which is the one worth reading.
+            return `<div class="svc-card${c.exists ? '' : ' absent'}" title="${escapeHtml(`${c.label}: ${word}${uptime}`)}"><span class="svc-dot ${dot}"></span><div class="svc-meta"><strong>${escapeHtml(
+                c.label,
+            )}</strong><small>${escapeHtml(word + uptime)}</small></div></div>`;
         })
         .join('');
 }
+
+$('svc-filters')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-svc-filter]');
+    if (!chip) return;
+    const n = Number(chip.dataset.svcFilter);
+    svcFilter = svcFilter === n ? null : n;
+    renderContainers();
+});
 
 /* The last host payload, kept so the app links can use the LAN address the
    server discovered. Null until the first status poll lands. */
