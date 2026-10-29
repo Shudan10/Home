@@ -1788,9 +1788,11 @@ for (const name of APP_KEYS) {
         // Built, so the answer the check gave is spent: the button goes back to
         // needing a fresh one rather than staying lit over a commit that is now
         // the installed one.
-        if (name === 'mealplan' && result?.ok) {
-            $('mealplan-update').disabled = true;
-            setMealPlanStatus('current', 'Built from the newest commit', 'Check again whenever you want to know if it has moved on.');
+        if (result?.ok) {
+            $(`${name}-update`).disabled = true;
+            setAppStatus(name, 'current',
+                name === 'mealplan' ? 'Built from the newest commit' : 'Updated to the newest image',
+                'Check again whenever you want to know if it has moved on.');
         }
     });
 }
@@ -1836,43 +1838,87 @@ $('mealplan-password-save').addEventListener('click', async () => {
 });
 
 /*
- * Check first, then update -- the same two steps as the panel's own.
+ * Check first, then update -- the same two steps as the panel's own, for every
+ * app.
  *
  * The Update button starts disabled and only opens once a check has found
- * something, so pressing it is always a decision about a known commit rather
- * than a rebuild on the off chance. Editing the branch re-opens it too: moving
- * to another branch is a reason to rebuild even when the current one is level.
+ * something, so pressing it is always a decision about a known change rather
+ * than a rebuild on the off chance. Meal Plan is checked against its
+ * repository; Nextcloud and Jellyfin against the Docker Hub tag they are made
+ * from, which is the part that used to go unwatched -- Nextcloud's button
+ * looked the same with a PHP security fix waiting upstream as without one.
  */
-function setMealPlanStatus(state, head, detail) {
-    setUpdateStatus(state, head, detail, 'mealplan-check-status');
+function setAppStatus(name, state, head, detail) {
+    setUpdateStatus(state, head, detail, `${name}-check-status`);
+}
+const setMealPlanStatus = (state, head, detail) => setAppStatus('mealplan', state, head, detail);
+
+function renderImageCheck(name, r) {
+    const label = appsState?.apps?.[name]?.label ?? name;
+    const update = $(`${name}-update`);
+    const now = (r.versions ?? []).filter((v) => v.latest).map((v) => `${v.label} ${v.latest}`).join(' · ');
+
+    if (r.neverBuilt) {
+        setAppStatus(name, null, `${r.image} is ${now || r.shortSha}.`,
+            `${label} is not installed yet, so there is nothing to compare it against. Installing it fetches this.`);
+        update.disabled = true;
+        return;
+    }
+    if (!r.updateAvailable) {
+        setAppStatus(name, 'current', 'Up to date', `${now ? `${now} · ` : ''}${r.image}`);
+        update.disabled = true;
+        return;
+    }
+
+    const changed = (r.versions ?? []).filter((v) => v.running && v.latest && v.running !== v.latest);
+    // Same version numbers, new image: the tag was rebuilt -- usually security
+    // fixes to the operating system underneath, which never change the
+    // headline version and are exactly the ones worth not sitting on.
+    const what = changed.length
+        ? changed.map((v) => `${v.label} ${v.running} → ${v.latest}`).join(' · ')
+        : `${r.image} has been rebuilt upstream with the same version numbers, usually for security fixes underneath.`;
+    const major = r.majorChanges?.length
+        ? `\n${r.majorChanges.join(' and ')} would move to a new major version. It upgrades its database on the first start and cannot be rolled back, so read the release notes first.`
+        : '';
+    setAppStatus(name, 'update', major ? 'Major update available' : 'Update available', what + major);
+    update.disabled = false;
 }
 
-$('mealplan-check').addEventListener('click', async () => {
-    const button = $('mealplan-check');
-    button.disabled = true;
-    setMealPlanStatus('checking', 'Checking…');
-    try {
-        const r = await api('/api/apps/mealplan/check');
-        const when = r.date ? new Date(r.date).toLocaleString() : 'unknown date';
-        if (r.neverBuilt) {
-            // Nothing recorded to compare against, which is every install that
-            // has not built it yet. "Up to date" here would be a guess.
-            setMealPlanStatus(null, `${r.ref} is at ${r.shortSha} (${when}).`,
-                'This install has not built Meal Plan yet, so there is nothing to compare it against.');
-            $('mealplan-update').disabled = false;
-        } else if (r.updateAvailable) {
-            setMealPlanStatus('update', 'Update available', `${r.shortSha}\n${r.message}`);
-            $('mealplan-update').disabled = false;
-        } else {
-            setMealPlanStatus('current', 'Up to date', `${r.ref} · ${r.shortSha} · ${when}`);
-            $('mealplan-update').disabled = true;
-        }
-    } catch (e) {
-        setMealPlanStatus('error', 'Could not check', e.message);
-    } finally {
-        button.disabled = false;
+function renderRepoCheck(name, r) {
+    const label = appsState?.apps?.[name]?.label ?? name;
+    const update = $(`${name}-update`);
+    const when = r.date ? new Date(r.date).toLocaleString() : 'unknown date';
+    if (r.neverBuilt) {
+        // Nothing recorded to compare against, which is every install that has
+        // not built it yet. "Up to date" here would be a guess.
+        setAppStatus(name, null, `${r.ref} is at ${r.shortSha} (${when}).`,
+            `This install has not built ${label} yet, so there is nothing to compare it against.`);
+        update.disabled = false;
+    } else if (r.updateAvailable) {
+        setAppStatus(name, 'update', 'Update available', `${r.shortSha}\n${r.message}`);
+        update.disabled = false;
+    } else {
+        setAppStatus(name, 'current', 'Up to date', `${r.ref} · ${r.shortSha} · ${when}`);
+        update.disabled = true;
     }
-});
+}
+
+for (const name of APP_KEYS) {
+    $(`${name}-check`)?.addEventListener('click', async () => {
+        const button = $(`${name}-check`);
+        button.disabled = true;
+        setAppStatus(name, 'checking', 'Checking…');
+        try {
+            const r = await api(`/api/apps/${name}/check`);
+            if (r.kind === 'image') renderImageCheck(name, r);
+            else renderRepoCheck(name, r);
+        } catch (e) {
+            setAppStatus(name, 'error', 'Could not check', e.message);
+        } finally {
+            button.disabled = false;
+        }
+    });
+}
 
 // A different branch is a different question, so the last answer no longer
 // applies and the button goes back to needing a check -- unless the branch is

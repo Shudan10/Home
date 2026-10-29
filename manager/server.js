@@ -1658,6 +1658,11 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
 route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/check$/, async (req, res, match) => {
     const name = match[1];
     try {
+        // Nextcloud and Jellyfin come from a Docker Hub tag, not a repository:
+        // for them "up to date" means built on what that tag points at now.
+        if (!apps.APPS[name].tracksRepo) {
+            return sendJson(res, 200, { kind: 'image', ...(await apps.checkBaseImage(name, dockerctl.docker)) });
+        }
         const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());
         const built = apps.readBuildRecord(name);
         sendJson(res, 200, {

@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { COMPOSE_FILE, CONF_DIR } from './paths.js';
 import { readJson, writeJson, updateEnvFile, readEnvFile } from './store.js';
+import { builtOn, envMap, resolveTag } from './registry.js';
 
 /**
  * The applications this home server can run.
@@ -826,6 +827,111 @@ export async function syncTrustedDomains(docker, cfg, onLine = () => {}) {
  * Only answerable while the container is up. A stopped one returns null and the
  * panel falls back to saying when the image was built.
  */
+/*
+ * Base-image checks, for the apps that come from a Docker Hub tag rather than a
+ * repository: Nextcloud is built FROM `nextcloud:stable`, Jellyfin is
+ * `jellyfin/jellyfin:<tag>` as published. Their Update buttons used to stay lit
+ * whether or not anything had changed upstream, which is how a PHP security fix
+ * went unnoticed for a week.
+ */
+
+/** The Docker Hub tag an app is made from. */
+async function upstreamImage(name, docker) {
+    if (name === 'nextcloud') {
+        // Read from the Dockerfile rather than written down here a second time,
+        // so the check follows the FROM if it is ever changed.
+        try {
+            const file = path.join(path.dirname(COMPOSE_FILE), 'nextcloud', 'Dockerfile');
+            const from = fs.readFileSync(file, 'utf8').match(/^\s*FROM\s+(\S+)/im)?.[1];
+            if (from && !from.includes('$')) return from;
+        } catch {
+            /* fall through */
+        }
+        return 'nextcloud:stable';
+    }
+    if (name === 'jellyfin') {
+        // What the container was actually created from is the honest answer;
+        // the .env pin is what it would be created from next time.
+        try {
+            const { stdout } = await docker(['inspect', '-f', '{{.Config.Image}}', APPS.jellyfin.container], { timeoutMs: 15_000 });
+            if (stdout.trim()) return stdout.trim();
+        } catch {
+            /* not created yet */
+        }
+        return `jellyfin/jellyfin:${readEnvFile().JELLYFIN_VERSION || 'latest'}`;
+    }
+    throw new Error(`${APPS[name]?.label ?? name} is not made from a Docker Hub image.`);
+}
+
+/** The versions worth showing for an app, read from an image's env and labels. */
+function imageVersions(name, env, labels) {
+    if (name === 'nextcloud') return [['PHP', env.PHP_VERSION], ['Nextcloud', env.NEXTCLOUD_VERSION]];
+    if (name === 'jellyfin') return [['Jellyfin', labels['org.opencontainers.image.version']]];
+    return [];
+}
+
+const major = (v) => String(v ?? '').match(/^\d+/)?.[0] ?? null;
+
+/**
+ * Whether the running container is built on the version of its base tag that
+ * Docker Hub has now.
+ *
+ * Compared by layers rather than by a recorded digest. The build pulls the base
+ * without tagging it locally, so there is no digest to record -- but an image
+ * built FROM a base starts with exactly that base's layers, and a pulled image
+ * is those layers. So "is the tag's current layer list the start of the running
+ * image's?" answers the question for both, needs nothing written at build time,
+ * and is right for an image rebuilt by hand outside the panel too.
+ */
+export async function checkBaseImage(name, docker) {
+    const app = APPS[name];
+    const image = await upstreamImage(name, docker);
+    const upstream = await resolveTag(image);
+
+    let local = null;
+    try {
+        const { stdout: id } = await docker(['inspect', '-f', '{{.Image}}', app.container], { timeoutMs: 15_000 });
+        const { stdout } = await docker(['image', 'inspect', id.trim(), '-f', '{{json .}}'], { timeoutMs: 15_000 });
+        local = JSON.parse(stdout);
+    } catch {
+        local = null;
+    }
+
+    const upVersions = imageVersions(name, upstream.env, upstream.labels);
+    const base = {
+        image,
+        digest: upstream.digest,
+        shortSha: (upstream.digest ?? '').replace(/^sha256:/, '').slice(0, 12),
+        date: upstream.created,
+    };
+    if (!local) {
+        return {
+            ...base,
+            neverBuilt: true,
+            updateAvailable: false,
+            versions: upVersions.map(([label, latest]) => ({ label, running: null, latest: latest ?? null })),
+        };
+    }
+
+    const runVersions = imageVersions(name, envMap(local.Config?.Env), local.Config?.Labels ?? {});
+    const versions = upVersions.map(([label, latest], i) => ({
+        label,
+        running: runVersions[i]?.[1] ?? null,
+        latest: latest ?? null,
+    }));
+    // A major version change is called out rather than presented like a patch:
+    // both apps migrate their database on the way up, and neither comes back.
+    const majorChanges = versions.filter((v) => v.running && v.latest && major(v.running) !== major(v.latest));
+
+    return {
+        ...base,
+        neverBuilt: false,
+        updateAvailable: !builtOn(local.RootFS?.Layers ?? [], upstream.diffIds),
+        versions,
+        majorChanges: majorChanges.map((v) => v.label),
+    };
+}
+
 export async function nextcloudVersion(docker) {
     try {
         const { stdout } = await docker(

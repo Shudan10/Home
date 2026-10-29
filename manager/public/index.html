@@ -454,8 +454,10 @@
             </p>
             <div id="nextcloud-build" class="verdict"></div>
             <div class="row">
-              <button type="button" id="nextcloud-update" class="primary">Update Nextcloud</button>
+              <button type="button" id="nextcloud-check" class="ghost">Check for update</button>
+              <button type="button" id="nextcloud-update" class="primary" disabled>Update Nextcloud</button>
             </div>
+            <p class="status-line" id="nextcloud-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub when you ask, never on its own.</span></span></p>
             <p class="hint">
               Nextcloud upgrades its own database schema on first start after an
               image change, so give it a minute before signing in. It is worth
@@ -598,8 +600,10 @@
             </p>
             <div id="jellyfin-build" class="verdict"></div>
             <div class="row">
-              <button type="button" id="jellyfin-update" class="primary">Update Jellyfin</button>
+              <button type="button" id="jellyfin-check" class="ghost">Check for update</button>
+              <button type="button" id="jellyfin-update" class="primary" disabled>Update Jellyfin</button>
             </div>
+            <p class="status-line" id="jellyfin-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub when you ask, never on its own.</span></span></p>
             <p class="hint">
               Jellyfin migrates its own database on the first start after an
               update, so give it a minute before expecting the web page to load.
