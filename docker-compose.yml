@@ -167,6 +167,40 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ---- CleanFrame Watcher (TV Launcher) -------------------------------------
+  #
+  # Behind the "cleanframe-watcher" profile. Built from the local
+  # cleanframe-watcher/ folder in this repo, like Nextcloud -- so it updates
+  # with the stack itself and has no separate branch to track.
+  #
+  # It watches the TV's developer port and launches CleanFrame over SDB when the
+  # TV powers on. It never writes to the TV. Two things are machine-specific and
+  # can be overridden in the stack .env rather than edited here:
+  #   CLEANFRAME_TV_IP     the TV's address on this network (default below)
+  #   CLEANFRAME_SDB_PATH  the host path to Samsung's sdb, bind-mounted read-only
+  # The status page port is not here: like the other apps it is published from
+  # the generated conf/apps-ports.yml when "Publish on the host" is ticked.
+  cleanframe-watcher:
+    image: quickstart-home/cleanframe-watcher:1
+    build:
+      context: ./cleanframe-watcher
+    container_name: quickstart-home-cleanframe-watcher
+    hostname: cleanframe-watcher
+    profiles: ["cleanframe-watcher"]
+    restart: unless-stopped
+    environment:
+      CF_TV_IP: ${CLEANFRAME_TV_IP:-192.168.4.136}
+      CF_APP_ID: ${CLEANFRAME_APP_ID:-AThO0Ps28U.CleanFrame}
+    volumes:
+      # Samsung's sdb is proprietary and is not committed. It is mounted from the
+      # host at runtime; the container needs nothing else to run it.
+      - "${CLEANFRAME_SDB_PATH:-/home/shudan/tizen-studio/tools/sdb}:/opt/sdb:ro"
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ---- The panel ------------------------------------------------------------
   manager:
     image: quickstart-home/manager:1

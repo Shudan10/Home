@@ -73,6 +73,18 @@ export const UNITS = {
         buildable: ['mealplan'],
         data: 'the meal library and every week that has been planned',
     },
+    'cleanframe-watcher': {
+        label: 'TV Launcher',
+        profile: 'cleanframe-watcher',
+        services: ['cleanframe-watcher'],
+        containers: ['quickstart-home-cleanframe-watcher'],
+        primary: 'quickstart-home-cleanframe-watcher',
+        // It keeps no state of its own, so there is no volume to remove.
+        volumes: [],
+        images: ['quickstart-home/cleanframe-watcher'],
+        buildable: ['cleanframe-watcher'],
+        data: 'nothing. It stores no data of its own, and the TV is untouched',
+    },
     proxy: {
         label: 'Reverse proxy',
         profile: 'proxy',

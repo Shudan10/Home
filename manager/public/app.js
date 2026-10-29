@@ -902,6 +902,7 @@ const setRunning = (key, on, headers) =>
 const SERVICE_NAMES = {
     nextcloud: 'Nextcloud',
     jellyfin: 'Jellyfin',
+    'cleanframe-watcher': 'TV Launcher',
     proxy: 'the reverse proxy',
 };
 
@@ -1187,6 +1188,11 @@ async function loadApps() {
         loadMealPlanRefs();
     }
 
+    // --- CleanFrame Watcher (TV Launcher) ---
+    $('cleanframe-watcher-pub-web').checked = c['cleanframe-watcher']?.publish?.web !== false;
+    $('cleanframe-watcher-port').value = c['cleanframe-watcher']?.hostPort ?? 8086;
+    renderAppState('cleanframe-watcher', r.apps['cleanframe-watcher']);
+
     for (const app of APP_KEYS) {
         const running = Boolean(r.apps[app]?.container?.running);
         setNavHealth(app, !c[app]?.enabled ? 'off' : running ? 'ok' : 'bad');
@@ -1194,7 +1200,7 @@ async function loadApps() {
 }
 
 /** Every app with a tab of its own. The loops below are driven by this. */
-const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan'];
+const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'cleanframe-watcher'];
 
 /**
  * The ways in to an app: the one on this network, and the one from outside.
@@ -1483,6 +1489,32 @@ function renderAppState(name, state) {
               }.`
             : 'Not built yet.';
     }
+
+    if (name === 'cleanframe-watcher') {
+        const link = $('cleanframe-watcher-link');
+        const cfg = appsState.config['cleanframe-watcher'] ?? {};
+        link.hidden = false;
+        if (running && (cfg.publish?.web || state.publicUrl)) {
+            link.className = 'verdict ok';
+            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl);
+        } else if (running) {
+            link.className = 'verdict';
+            link.textContent =
+                'Running. Tick "Publish on the host" under Settings to open its status page from this network.';
+        } else {
+            const note = appStatusNote(state, {
+                absent: 'Not installed yet. Installing builds it and leaves it switched off.',
+                stopped: 'Not running. Its switch in the sidebar starts it.',
+            });
+            link.className = note.bad ? 'verdict bad' : 'verdict';
+            link.textContent = note.text;
+        }
+
+        const build = $('cleanframe-watcher-build');
+        build.textContent = state.build?.builtAt
+            ? `Built ${new Date(state.build.builtAt).toLocaleString()}.`
+            : 'Not built yet.';
+    }
 }
 
 // --- jellyfin media folders ---
@@ -1599,6 +1631,16 @@ $('jellyfin-media-list').addEventListener('click', (event) => {
 });
 
 function collectAppConfig(name) {
+    if (name === 'cleanframe-watcher') {
+        return {
+            enabled: Boolean(appsState?.config?.['cleanframe-watcher']?.enabled),
+            // Built locally, so there is no branch to pick; sent unchanged so a
+            // save cannot drop it.
+            ref: appsState?.config?.['cleanframe-watcher']?.ref ?? 'main',
+            publish: { web: $('cleanframe-watcher-pub-web').checked },
+            hostPort: Number($('cleanframe-watcher-port').value),
+        };
+    }
     if (name === 'mealplan') {
         return {
             enabled: Boolean(appsState?.config?.mealplan?.enabled),
@@ -2278,6 +2320,7 @@ const UNINSTALL_COPY = {
     nextcloud: 'every file, photo and calendar stored in it',
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
     mealplan: 'the meal library and every week that has been planned',
+    'cleanframe-watcher': 'nothing. It stores no data of its own, and the TV is untouched',
     proxy: 'nothing. Your domains and certificates live in the stack directory and are kept',
 };
 const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';

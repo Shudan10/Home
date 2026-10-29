@@ -113,6 +113,17 @@
           <span class="track"></span>
         </label>
       </div>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="cleanframe-watcher" title="TV Launcher">
+          <span class="nav-dot" data-health="cleanframe-watcher"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 20.5h8M12 17.5v3"/></svg>
+          <span class="label">TV Launcher</span>
+        </button>
+        <label class="switch mini" title="Start or stop TV Launcher">
+          <input type="checkbox" data-service="cleanframe-watcher" aria-label="Start or stop TV Launcher">
+          <span class="track"></span>
+        </label>
+      </div>
 
       <p class="nav-group-title">Network</p>
       <div class="nav-row">
@@ -736,6 +747,109 @@
       <div id="sub-mealplan-uninstall" class="subtab">
         <div class="grid">
           <article class="card span2 uninstall-card" data-uninstall="mealplan"></article>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- -------------------------------------------------- cleanframe watcher -->
+    <section id="tab-cleanframe-watcher" class="tab">
+      <nav class="subnav" aria-label="TV Launcher">
+        <button class="subtab-btn active" data-subtab="cleanframe-watcher-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="cleanframe-watcher-settings">Settings</button>
+        <button class="subtab-btn" data-subtab="cleanframe-watcher-updates">Rebuild</button>
+        <button class="subtab-btn" data-subtab="cleanframe-watcher-uninstall">Uninstall</button>
+      </nav>
+
+      <div id="sub-cleanframe-watcher-overview" class="subtab active">
+        <div class="grid">
+          <article class="card">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <strong>Run TV Launcher</strong>
+                <span class="muted">Opens CleanFrame on the TV when it powers on.</span>
+              </div>
+              <span id="cleanframe-watcher-state" class="tag">off</span>
+            </div>
+            <div id="cleanframe-watcher-notice" class="verdict" hidden></div>
+            <p class="error" id="cleanframe-watcher-error" hidden></p>
+
+            <div class="node-section">
+              <h3>Status page</h3>
+              <div id="cleanframe-watcher-link" class="verdict" hidden></div>
+              <p class="hint">
+                The status page shows whether the TV is reachable, whether it is
+                armed, and the last launch. It is a view only &mdash; nothing is
+                ever written to the TV.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>TV Launcher</h3>
+            <p class="muted">
+              A small background worker. It watches the TV on the network and,
+              the moment it powers on, opens CleanFrame over Samsung's developer
+              connection. There is no way on this model to reassign the physical
+              Home button safely, so this is how the TV lands on CleanFrame.
+            </p>
+            <p class="hint">
+              It needs Developer Mode left on on the TV, and the TV allows one
+              developer connection at a time &mdash; so switch this off before
+              rebuilding or reinstalling CleanFrame from the computer.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-cleanframe-watcher-settings" class="subtab">
+        <div class="grid">
+          <article class="card">
+            <h3>Where it listens</h3>
+            <p class="muted">
+              Publishing it on the host lets you open its status page from other
+              devices on this network. It is not needed for the launcher to work.
+            </p>
+            <label class="check"><input type="checkbox" id="cleanframe-watcher-pub-web"> Publish on the host</label>
+            <label class="inline">Port <input type="number" id="cleanframe-watcher-port" min="1024" max="65535"></label>
+
+            <div class="row end">
+              <button type="button" id="cleanframe-watcher-save" class="primary">Apply settings</button>
+              <button type="button" class="ghost" data-app-action="cleanframe-watcher/restart">Restart</button>
+            </div>
+            <p class="hint">
+              The TV's address and the path to Samsung's <code>sdb</code> tool
+              are set in the stack <code>.env</code>
+              (<code>CLEANFRAME_TV_IP</code>, <code>CLEANFRAME_SDB_PATH</code>).
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-cleanframe-watcher-updates" class="subtab">
+        <div class="grid">
+          <article class="card">
+            <h3>Rebuild</h3>
+            <p class="muted">
+              TV Launcher is built from this stack's own
+              <code>cleanframe-watcher/</code> folder, so it updates with the
+              panel itself. Rebuild it after a panel update to pick up changes.
+            </p>
+            <div id="cleanframe-watcher-build" class="verdict"></div>
+            <div class="row">
+              <button type="button" id="cleanframe-watcher-update" class="primary">Rebuild TV Launcher</button>
+            </div>
+            <p class="hint">
+              A rebuild never touches the TV. If it is running, it restarts onto
+              the new image.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-cleanframe-watcher-uninstall" class="subtab">
+        <div class="grid">
+          <article class="card span2 uninstall-card" data-uninstall="cleanframe-watcher"></article>
         </div>
       </div>
 

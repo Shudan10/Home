@@ -219,7 +219,7 @@ async function applyProxyState(enabled, onLine = () => {}) {
 // The services built from a Dockerfile. The rest are stock images (databases,
 // cache, previews) with nothing to build, and asking compose to build them is
 // an error rather than a no-op.
-const BUILDABLE_SERVICES = new Set(['nextcloud', 'mealplan']);
+const BUILDABLE_SERVICES = new Set(['nextcloud', 'mealplan', 'cleanframe-watcher']);
 
 /**
  * Notes when an app's image was built, and from what.
@@ -1512,7 +1512,7 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
     sendJson(res, 200, { config: cfg, apps: state });
 });
 
-route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)$/, async (req, res, match) => {
+route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|cleanframe-watcher)$/, async (req, res, match) => {
     const name = match[1];
     const body = await readBody(req);
 
@@ -1674,7 +1674,7 @@ route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/check$/, async (req, 
     }
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/update$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|cleanframe-watcher)\/update$/, async (req, res, match) => {
     const name = match[1];
     const cfg = apps.loadAppsConfig();
     if (!cfg[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
@@ -1717,7 +1717,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/update$/, async (req
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/(start|stop|restart)$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|cleanframe-watcher)\/(start|stop|restart)$/, async (req, res, match) => {
     const [, name, action] = match;
     const app = apps.APPS[name];
     const job = jobs.start(`${action} ${app.label}`, async (onLine) => {
