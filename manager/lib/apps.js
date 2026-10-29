@@ -99,28 +99,6 @@ export const APPS = {
             web: { port: 8080, label: 'Meal Plan web', hostPort: 8083 },
         },
     },
-
-    'cleanframe-watcher': {
-        label: 'TV Launcher',
-        // Built from its own repository, like Meal Plan, so the branch pickers
-        // and upstream checks apply to it.
-        tracksRepo: true,
-        repo: 'Shudan10/CleanFrameWatcher',
-        profile: 'cleanframe-watcher',
-        services: ['cleanframe-watcher'],
-        container: 'quickstart-home-cleanframe-watcher',
-        // Only read if it is ever given a domain, which it is not. Kept for the
-        // shape the panel expects of an app.
-        publish: {
-            hostname: 'cleanframe-watcher',
-            port: 8080,
-            websocket: false,
-            maxBodySize: null,
-        },
-        ports: {
-            web: { port: 8080, label: 'TV Launcher status', hostPort: 8086 },
-        },
-    },
 };
 
 export const DEFAULT_APPS_CONFIG = {
@@ -170,14 +148,6 @@ export const DEFAULT_APPS_CONFIG = {
         ref: 'main',
         publish: { web: true },
         hostPort: 8083,
-    },
-    'cleanframe-watcher': {
-        enabled: false,
-        // Built locally like Nextcloud, so this is unused; carried so a save
-        // cannot drop it and the shape matches the other apps.
-        ref: 'main',
-        publish: { web: true },
-        hostPort: 8086,
     },
 };
 
@@ -457,32 +427,6 @@ export function validateAppsConfig(input) {
         cfg.mealplan.hostPort = mport;
     }
 
-    // --- CleanFrame Watcher (TV Launcher) ---
-    const cw = input['cleanframe-watcher'] ?? {};
-    cfg['cleanframe-watcher'].enabled = Boolean(cw.enabled);
-    cfg['cleanframe-watcher'].publish = { web: cw.publish?.web !== false };
-
-    const cwport = Number(cw.hostPort ?? DEFAULT_APPS_CONFIG['cleanframe-watcher'].hostPort);
-    const cwtaken = reservedHostPorts().get(cwport);
-    const cwclash = [
-        cfg.nextcloud.publish.web && cwport === Number(cfg.nextcloud.hostPort) ? 'Nextcloud' : null,
-        cfg.jellyfin.publish.web && cwport === Number(cfg.jellyfin.hostPort) ? 'Jellyfin' : null,
-        cfg.mealplan.publish.web && cwport === Number(cfg.mealplan.hostPort) ? 'Meal Plan' : null,
-    ].find(Boolean);
-
-    if (!Number.isInteger(cwport) || cwport < 1024 || cwport > 65535) {
-        errors.push('TV Launcher port must be between 1024 and 65535.');
-    } else if (cwclash && cfg['cleanframe-watcher'].publish.web) {
-        errors.push(`Port ${cwport} is where ${cwclash} is published, so TV Launcher cannot take it too.`);
-    } else if (cwtaken && cfg['cleanframe-watcher'].publish.web) {
-        errors.push(
-            `Port ${cwport} is already used by ${cwtaken}, so TV Launcher cannot start on it. Pick another one, ` +
-                `for example ${cwport + 1}.`,
-        );
-    } else {
-        cfg['cleanframe-watcher'].hostPort = cwport;
-    }
-
     return { cfg, errors };
 }
 
@@ -585,7 +529,7 @@ export function renderAppsPortsOverride(cfg) {
         '# mounted, and whether a GPU is passed through.',
     ];
     const blocks = [];
-    const published = { nextcloud: [], jellyfin: [], mealplan: [], 'cleanframe-watcher': [] };
+    const published = { nextcloud: [], jellyfin: [], mealplan: [] };
 
     if (composeDefines('nextcloud')) {
         blocks.push('  nextcloud:');
@@ -658,21 +602,6 @@ export function renderAppsPortsOverride(cfg) {
         if (cfg.mealplan.publish.web) {
             blocks.push(`      - "0.0.0.0:${cfg.mealplan.hostPort}:8080/tcp"`);
             published.mealplan = [cfg.mealplan.hostPort];
-        } else {
-            blocks.push('      []');
-        }
-    }
-
-    if (composeDefines('cleanframe-watcher')) {
-        blocks.push('  cleanframe-watcher:');
-        // The branch is part of the build context, so writing it here is what
-        // makes "track this branch" mean anything.
-        blocks.push('    build:');
-        blocks.push(`      context: https://github.com/${APPS['cleanframe-watcher'].repo}.git#${cfg['cleanframe-watcher'].ref}`);
-        blocks.push('    ports:');
-        if (cfg['cleanframe-watcher'].publish.web) {
-            blocks.push(`      - "0.0.0.0:${cfg['cleanframe-watcher'].hostPort}:8080/tcp"`);
-            published['cleanframe-watcher'] = [cfg['cleanframe-watcher'].hostPort];
         } else {
             blocks.push('      []');
         }

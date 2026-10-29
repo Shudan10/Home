@@ -902,7 +902,6 @@ const setRunning = (key, on, headers) =>
 const SERVICE_NAMES = {
     nextcloud: 'Nextcloud',
     jellyfin: 'Jellyfin',
-    'cleanframe-watcher': 'TV Launcher',
     proxy: 'the reverse proxy',
 };
 
@@ -1142,7 +1141,6 @@ let appsState = null;
 
 /* Loaded once per page load rather than on every poll: see loadApps. */
 let mealPlanRefsLoaded = false;
-let cleanframeWatcherRefsLoaded = false;
 
 async function loadApps() {
     const r = await api('/api/apps');
@@ -1189,17 +1187,6 @@ async function loadApps() {
         loadMealPlanRefs();
     }
 
-    // --- CleanFrame Watcher (TV Launcher) ---
-    $('cleanframe-watcher-pub-web').checked = c['cleanframe-watcher']?.publish?.web !== false;
-    $('cleanframe-watcher-port').value = c['cleanframe-watcher']?.hostPort ?? 8086;
-    if (document.activeElement !== $('cleanframe-watcher-ref'))
-        $('cleanframe-watcher-ref').value = c['cleanframe-watcher']?.ref ?? 'main';
-    renderAppState('cleanframe-watcher', r.apps['cleanframe-watcher']);
-    if (!cleanframeWatcherRefsLoaded) {
-        cleanframeWatcherRefsLoaded = true;
-        loadCleanframeWatcherRefs();
-    }
-
     for (const app of APP_KEYS) {
         const running = Boolean(r.apps[app]?.container?.running);
         setNavHealth(app, !c[app]?.enabled ? 'off' : running ? 'ok' : 'bad');
@@ -1207,7 +1194,7 @@ async function loadApps() {
 }
 
 /** Every app with a tab of its own. The loops below are driven by this. */
-const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'cleanframe-watcher'];
+const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan'];
 
 /**
  * The ways in to an app: the one on this network, and the one from outside.
@@ -1496,32 +1483,6 @@ function renderAppState(name, state) {
               }.`
             : 'Not built yet.';
     }
-
-    if (name === 'cleanframe-watcher') {
-        const link = $('cleanframe-watcher-link');
-        const cfg = appsState.config['cleanframe-watcher'] ?? {};
-        link.hidden = false;
-        if (running && (cfg.publish?.web || state.publicUrl)) {
-            link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl);
-        } else if (running) {
-            link.className = 'verdict';
-            link.textContent =
-                'Running. Tick "Publish on the host" under Settings to open its status page from this network.';
-        } else {
-            const note = appStatusNote(state, {
-                absent: 'Not installed yet. Installing builds it and leaves it switched off.',
-                stopped: 'Not running. Its switch in the sidebar starts it.',
-            });
-            link.className = note.bad ? 'verdict bad' : 'verdict';
-            link.textContent = note.text;
-        }
-
-        const build = $('cleanframe-watcher-build');
-        build.textContent = state.build?.builtAt
-            ? `Built ${new Date(state.build.builtAt).toLocaleString()}.`
-            : 'Not built yet.';
-    }
 }
 
 // --- jellyfin media folders ---
@@ -1638,16 +1599,6 @@ $('jellyfin-media-list').addEventListener('click', (event) => {
 });
 
 function collectAppConfig(name) {
-    if (name === 'cleanframe-watcher') {
-        return {
-            enabled: Boolean(appsState?.config?.['cleanframe-watcher']?.enabled),
-            // Built locally, so there is no branch to pick; sent unchanged so a
-            // save cannot drop it.
-            ref: appsState?.config?.['cleanframe-watcher']?.ref ?? 'main',
-            publish: { web: $('cleanframe-watcher-pub-web').checked },
-            hostPort: Number($('cleanframe-watcher-port').value),
-        };
-    }
     if (name === 'mealplan') {
         return {
             enabled: Boolean(appsState?.config?.mealplan?.enabled),
@@ -1776,10 +1727,6 @@ for (const name of APP_KEYS) {
             $('mealplan-update').disabled = true;
             setMealPlanStatus('current', 'Built from the newest commit', 'Check again whenever you want to know if it has moved on.');
         }
-        if (name === 'cleanframe-watcher' && result?.ok) {
-            $('cleanframe-watcher-update').disabled = true;
-            setCleanframeWatcherStatus('current', 'Built from the newest commit', 'Check again whenever you want to know if it has moved on.');
-        }
     });
 }
 
@@ -1885,56 +1832,6 @@ async function loadMealPlanRefs() {
     } catch {
         /* GitHub being unreachable or rate limited is not worth a message: the
            field works perfectly well without suggestions. */
-    }
-}
-
-// --- TV Launcher: branch list and update check (same flow as Meal Plan) ---
-
-function setCleanframeWatcherStatus(state, head, detail) {
-    setUpdateStatus(state, head, detail, 'cleanframe-watcher-check-status');
-}
-
-$('cleanframe-watcher-check').addEventListener('click', async () => {
-    const button = $('cleanframe-watcher-check');
-    button.disabled = true;
-    setCleanframeWatcherStatus('checking', 'Checking…');
-    try {
-        const r = await api('/api/apps/cleanframe-watcher/check');
-        const when = r.date ? new Date(r.date).toLocaleString() : 'unknown date';
-        if (r.neverBuilt) {
-            setCleanframeWatcherStatus(null, `${r.ref} is at ${r.shortSha} (${when}).`,
-                'This install has not built TV Launcher yet, so there is nothing to compare it against.');
-            $('cleanframe-watcher-update').disabled = false;
-        } else if (r.updateAvailable) {
-            setCleanframeWatcherStatus('update', 'Update available', `${r.shortSha}\n${r.message}`);
-            $('cleanframe-watcher-update').disabled = false;
-        } else {
-            setCleanframeWatcherStatus('current', 'Up to date', `${r.ref} · ${r.shortSha} · ${when}`);
-            $('cleanframe-watcher-update').disabled = true;
-        }
-    } catch (e) {
-        setCleanframeWatcherStatus('error', 'Could not check', e.message);
-    } finally {
-        button.disabled = false;
-    }
-});
-
-$('cleanframe-watcher-ref').addEventListener('input', () => {
-    const changed = $('cleanframe-watcher-ref').value.trim() !== (appsState?.config?.['cleanframe-watcher']?.ref ?? 'main');
-    $('cleanframe-watcher-update').disabled = !changed;
-    setCleanframeWatcherStatus(null, changed
-        ? 'Branch changed. Updating will build from it.'
-        : 'Checked against GitHub when you ask, never on its own.');
-});
-
-async function loadCleanframeWatcherRefs() {
-    try {
-        const { branches = [], tags = [] } = await api('/api/apps/cleanframe-watcher/refs');
-        $('cleanframe-watcher-refs').innerHTML = [...branches, ...tags]
-            .map((r) => `<option value="${escapeHtml(r)}"></option>`)
-            .join('');
-    } catch {
-        /* GitHub unreachable is not worth a message; the field still works. */
     }
 }
 
@@ -2381,7 +2278,6 @@ const UNINSTALL_COPY = {
     nextcloud: 'every file, photo and calendar stored in it',
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
     mealplan: 'the meal library and every week that has been planned',
-    'cleanframe-watcher': 'nothing. It stores no data of its own, and the TV is untouched',
     proxy: 'nothing. Your domains and certificates live in the stack directory and are kept',
 };
 const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';

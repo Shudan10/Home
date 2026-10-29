@@ -55,7 +55,6 @@ export const STACK_CONTAINERS = [
     { key: 'nextcloud-imaginary', label: 'nextcloud previews', name: 'quickstart-home-nextcloud-imaginary' },
     { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
     { key: 'mealplan', label: 'meal plan', name: MEALPLAN_CONTAINER },
-    { key: 'cleanframe-watcher', label: 'tv launcher', name: 'quickstart-home-cleanframe-watcher' },
     { key: 'proxy', label: 'nginx proxy', name: PROXY_CONTAINER },
     { key: 'manager', label: 'control panel', name: MANAGER_CONTAINER },
 ];
