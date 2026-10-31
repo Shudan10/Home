@@ -2034,3 +2034,9 @@ main {
 .pub-name { display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap; }
 .pub-name label { flex: 1 1 140px; margin-bottom: 0; }
 .pub-dot { padding-bottom: 10px; font-weight: 700; color: var(--muted); }
+
+/* The Setup API token guide: room between steps, since each one is a field to
+   find and fill on another screen. */
+.guide .steps li { margin: 9px 0; line-height: 1.5; }
+.guide .perm-table { margin: 8px 0 6px; }
+.guide p { margin: 6px 0; }

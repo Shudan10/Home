@@ -742,10 +742,15 @@
 
     <!-- ---------------------------------------------------------- tunnel -->
     <section id="tab-tunnel" class="tab">
+      <nav class="subnav" aria-label="Tunnel and domains">
+        <button class="subtab-btn active" data-subtab="tunnel-main">Tunnel</button>
+        <button class="subtab-btn" data-subtab="tunnel-token">Setup API token</button>
+      </nav>
 
-      <!-- Before an account is connected: what this is, and exactly how to get
-           the one thing it needs. Written for somebody who has never made an
-           API token, because that is who opens this first. -->
+      <div id="sub-tunnel-main" class="subtab active">
+
+      <!-- Before an account is connected: what this is, and the one thing it
+           needs. How to make that thing is the next tab. -->
       <div id="tunnel-setup" hidden>
         <div class="grid">
           <article class="card span2">
@@ -760,29 +765,13 @@
             </p>
 
             <h3 class="sub">What you need</h3>
-            <ol class="steps">
-              <li>
-                A domain on Cloudflare. If you bought it somewhere else, add it at
-                <a href="https://dash.cloudflare.com/" target="_blank" rel="noreferrer noopener">dash.cloudflare.com ↗</a>
-                and change its nameservers to the ones Cloudflare gives you. It is ready
-                when Cloudflare shows it as <strong>Active</strong>.
-              </li>
-              <li>
-                An API token. Open
-                <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">API Tokens ↗</a>,
-                press <strong>Create Token</strong>, then <strong>Create Custom Token</strong>.
-              </li>
-              <li>
-                Give it these three permissions, each on its own row:
-                <table class="perm-table">
-                  <tr><td>Account</td><td>Cloudflare Tunnel</td><td>Edit</td></tr>
-                  <tr><td>Zone</td><td>DNS</td><td>Edit</td></tr>
-                  <tr><td>Zone</td><td>Zone</td><td>Read</td></tr>
-                </table>
-                Under <strong>Zone Resources</strong>, include your domain.
-              </li>
-              <li>Press <strong>Continue to summary</strong>, then <strong>Create Token</strong>, and copy it. Cloudflare only shows it once.</li>
-            </ol>
+            <p>
+              A domain on Cloudflare, and a Cloudflare API token that lets the panel
+              create the tunnel and DNS records.
+            </p>
+            <div class="row">
+              <button type="button" class="ghost" data-goto-subtab="tunnel-token">How to make the API token</button>
+            </div>
 
             <label class="inline">API token
               <input id="tunnel-token" type="password" size="44" autocomplete="off" spellcheck="false" placeholder="paste it here">
@@ -858,6 +847,93 @@
             <div class="row">
               <button type="button" id="tunnel-disconnect" class="danger">Disconnect from Cloudflare</button>
             </div>
+          </article>
+        </div>
+      </div>
+      </div>
+
+      <!-- How to make the API token, in the order the fields appear on
+           Cloudflare's form. Kept on its own tab so it can be followed side by
+           side with that form, and found again when a token needs replacing. -->
+      <div id="sub-tunnel-token" class="subtab">
+        <div class="grid">
+          <article class="card span2 guide">
+            <h3>Setup API token</h3>
+            <p class="muted">
+              The panel needs a Cloudflare API token to create the tunnel and the DNS
+              record for each name you publish. Making one takes a couple of minutes.
+            </p>
+
+            <h3 class="sub">Before you start</h3>
+            <p>
+              Your domain must be on Cloudflare and show as <strong>Active</strong>. If you
+              bought it somewhere else, add it at
+              <a href="https://dash.cloudflare.com/" target="_blank" rel="noreferrer noopener">dash.cloudflare.com ↗</a>
+              and change its nameservers to the ones Cloudflare gives you.
+            </p>
+
+            <h3 class="sub">Open the form</h3>
+            <ol class="steps">
+              <li>Go to <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">dash.cloudflare.com/profile/api-tokens ↗</a>.</li>
+              <li>Select <strong>Create Token</strong>.</li>
+              <li>Under <strong>Custom token</strong>, select <strong>Get started</strong>.</li>
+            </ol>
+            <p class="hint">
+              Do not use the <strong>Global API Key</strong> further down the same page. It
+              controls your whole Cloudflare account, and the panel cannot use it.
+            </p>
+
+            <h3 class="sub">Fill in the form</h3>
+            <ol class="steps">
+              <li>
+                <strong>Token name</strong> — any name, for example <code>homelab</code>.
+              </li>
+              <li>
+                <strong>Permissions</strong> — add these three rows. The first row is already
+                there; select <strong>+ Add more</strong> for each of the others.
+                <table class="perm-table">
+                  <tr><td>Account</td><td>Cloudflare Tunnel</td><td>Edit</td></tr>
+                  <tr><td>Zone</td><td>DNS</td><td>Edit</td></tr>
+                  <tr><td>Zone</td><td>Zone</td><td>Read</td></tr>
+                </table>
+                Type in the middle box to search. If <strong>Cloudflare Tunnel</strong> is not
+                listed, choose <strong>Cloudflare One Connector: cloudflared</strong>.
+              </li>
+              <li>
+                <strong>Account Resources</strong> — <strong>Include</strong> →
+                <strong>All accounts</strong>, or your own account.
+              </li>
+              <li>
+                <strong>Zone Resources</strong> — this section appears after you add the first
+                <strong>Zone</strong> row. Set it to <strong>Include</strong> →
+                <strong>Specific zone</strong> → your domain.
+              </li>
+              <li>
+                <strong>Token expiration</strong> — <strong>No expiration</strong>, or
+                <strong>1 year</strong>. When a token expires, apps already published keep
+                working. Adding or removing names needs a new token.
+              </li>
+              <li>
+                <strong>Client IP address filtering</strong> — leave it empty. A filter stops
+                the token working if your home internet address changes.
+              </li>
+            </ol>
+
+            <h3 class="sub">Create and copy</h3>
+            <ol class="steps">
+              <li>Select <strong>Continue to summary</strong>. Check that it lists the three permissions above.</li>
+              <li>Select <strong>Create Token</strong>.</li>
+              <li>
+                Copy the token with its copy button. Copy only the token, not the
+                <code>curl</code> command under it. Cloudflare shows the token once.
+              </li>
+              <li>Open the <strong>Tunnel</strong> tab, paste the token, and select <strong>Connect</strong>.</li>
+            </ol>
+            <p class="hint">
+              A token is about 40 characters or more, with upper and lower case letters and
+              numbers. If yours contains only <code>0–9</code> and <code>a–f</code>, it is the
+              Global API Key or a token ID, not a token.
+            </p>
           </article>
         </div>
       </div>

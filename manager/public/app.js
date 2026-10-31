@@ -268,6 +268,12 @@ for (const button of document.querySelectorAll('.subtab-btn')) {
     button.addEventListener('click', () => selectSubtab(button.closest('section'), button.dataset.subtab));
 }
 
+// A button elsewhere on a page that opens one of its sub-tabs, like the link
+// from the Tunnel tab's connect form to the Setup API token guide.
+for (const button of document.querySelectorAll('[data-goto-subtab]')) {
+    button.addEventListener('click', () => selectSubtab(button.closest('section'), button.dataset.gotoSubtab));
+}
+
 /** The sub-tab currently showing in a section, or null if it has none. */
 const activeSubtab = (tab) =>
     document.querySelector(`#tab-${tab} .subtab-btn.active`)?.dataset.subtab ?? null;
