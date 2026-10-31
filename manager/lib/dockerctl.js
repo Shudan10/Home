@@ -36,8 +36,9 @@ const TUNNEL_CONTAINER = process.env.TUNNEL_CONTAINER || 'quickstart-home-tunnel
 const NEXTCLOUD_CONTAINER = process.env.NEXTCLOUD_CONTAINER || 'quickstart-home-nextcloud';
 const JELLYFIN_CONTAINER = process.env.JELLYFIN_CONTAINER || 'quickstart-home-jellyfin';
 const MEALPLAN_CONTAINER = process.env.MEALPLAN_CONTAINER || 'quickstart-home-mealplan';
+const MINECRAFT_CONTAINER = process.env.MINECRAFT_CONTAINER || 'quickstart-home-minecraft';
 
-export { MANAGER_CONTAINER, TUNNEL_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER };
+export { MANAGER_CONTAINER, TUNNEL_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER, MINECRAFT_CONTAINER };
 
 /**
  * Every container this stack can run, in the order worth reading them.
@@ -55,6 +56,7 @@ export const STACK_CONTAINERS = [
     { key: 'nextcloud-imaginary', label: 'nextcloud previews', name: 'quickstart-home-nextcloud-imaginary' },
     { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
     { key: 'mealplan', label: 'meal plan', name: MEALPLAN_CONTAINER },
+    { key: 'minecraft', label: 'minecraft', name: MINECRAFT_CONTAINER },
     { key: 'tunnel', label: 'cloudflare tunnel', name: TUNNEL_CONTAINER },
     { key: 'manager', label: 'control panel', name: MANAGER_CONTAINER },
 ];

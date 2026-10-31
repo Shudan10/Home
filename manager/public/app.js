@@ -245,6 +245,9 @@ function selectTab(name) {
     if (name === 'queue') loadQueue();
     // Asked on arrival: the tunnel's health is Cloudflare's to report, live.
     if (name === 'tunnel') loadTunnel();
+    // The player lists change by themselves -- people join and leave -- so
+    // they are fetched on arrival and then kept fresh while the tab is open.
+    if (name === 'minecraft') loadMinecraftPlayers();
     // On the drawer layout, picking a destination should get out of the way.
     if (MOBILE()) closeDrawer();
 }
@@ -907,6 +910,7 @@ const SERVICE_NAMES = {
     nextcloud: 'Nextcloud',
     jellyfin: 'Jellyfin',
     mealplan: 'Meal Plan',
+    minecraft: 'Minecraft',
 };
 
 for (const input of document.querySelectorAll('[data-service]')) {
@@ -1257,6 +1261,10 @@ async function loadApps() {
         loadMealPlanRefs();
     }
 
+    // --- Minecraft ---
+    fillMinecraftSettings(c.minecraft ?? {});
+    renderAppState('minecraft', r.apps.minecraft);
+
     for (const app of APP_KEYS) {
         const running = Boolean(r.apps[app]?.container?.running);
         setNavHealth(app, !c[app]?.enabled ? 'off' : running ? 'ok' : 'bad');
@@ -1264,7 +1272,7 @@ async function loadApps() {
 }
 
 /** Every app with a tab of its own. The loops below are driven by this. */
-const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan'];
+const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft'];
 
 /**
  * The ways in to an app: the one on this network, and the one from outside.
@@ -1552,6 +1560,36 @@ function renderAppState(name, state) {
               }.`
             : 'Not built yet.';
     }
+
+    if (name === 'minecraft') {
+        const link = $('minecraft-link');
+        link.hidden = false;
+        if (running) {
+            // The image's own health check is what knows when the world is
+            // loaded. Until then a Java client gets "connection refused",
+            // which reads as broken when it is only busy.
+            const health = container.health;
+            link.className = health === 'unhealthy' ? 'verdict bad' : health === 'starting' ? 'verdict' : 'verdict ok';
+            link.textContent =
+                health === 'starting'
+                    ? 'Starting. The first time, it downloads the game and builds the world, which takes a few minutes. Players can join once this says ready.'
+                    : health === 'unhealthy'
+                      ? 'Running, but not answering players. The Console tab shows what it last said.'
+                      : 'Running and ready. Players can join with these addresses.';
+        } else {
+            const note = appStatusNote(state, {
+                absent: 'Not installed yet. Installing downloads the server and leaves it switched off.',
+                stopped: 'Not running. Its switch in the sidebar starts it.',
+            });
+            link.className = note.bad ? 'verdict bad' : 'verdict';
+            link.textContent = note.text;
+        }
+        renderMinecraftJoin();
+
+        $('minecraft-build').textContent = state.build?.builtAt
+            ? `Image downloaded ${new Date(state.build.builtAt).toLocaleString()}.`
+            : 'Not installed yet.';
+    }
 }
 
 // --- jellyfin media folders ---
@@ -1668,6 +1706,7 @@ $('jellyfin-media-list').addEventListener('click', (event) => {
 });
 
 function collectAppConfig(name) {
+    if (name === 'minecraft') return collectMinecraftSettings();
     if (name === 'mealplan') {
         return {
             enabled: Boolean(appsState?.config?.mealplan?.enabled),
@@ -1966,6 +2005,344 @@ for (const button of document.querySelectorAll('[data-app-action]')) {
     });
 }
 
+// --------------------------------------------------------------- minecraft ---
+
+/*
+ * Settings go through the same Apply as every other app. Players do not: each
+ * change to who can join is one small request answered on the spot, because
+ * "let Sam in" is a thing done while Sam is standing there waiting.
+ */
+
+const MC_CHECKS = {
+    pvp: 'mc-pvp',
+    hardcore: 'mc-hardcore',
+    forceGamemode: 'mc-force-gamemode',
+    allowNether: 'mc-allow-nether',
+    allowFlight: 'mc-allow-flight',
+    commandBlocks: 'mc-command-blocks',
+    onlineMode: 'mc-online-mode',
+    eula: 'mc-eula',
+};
+const MC_FIELDS = {
+    gamemode: 'mc-gamemode',
+    difficulty: 'mc-difficulty',
+    maxPlayers: 'mc-max-players',
+    motd: 'mc-motd',
+    version: 'mc-version',
+    memory: 'mc-memory',
+    javaPort: 'mc-java-port',
+    bedrockPort: 'mc-bedrock-port',
+    viewDistance: 'mc-view-distance',
+    simulationDistance: 'mc-sim-distance',
+    spawnProtection: 'mc-spawn-protection',
+    seed: 'mc-seed',
+    levelType: 'mc-level-type',
+};
+const MC_NUMBERS = new Set(['maxPlayers', 'javaPort', 'bedrockPort', 'viewDistance', 'simulationDistance', 'spawnProtection']);
+
+function fillMinecraftSettings(m) {
+    for (const [key, id] of Object.entries(MC_CHECKS)) $(id).checked = Boolean(m[key]);
+    // A field somebody is typing in is left alone, so a reload landing mid-edit
+    // does not throw away what they were halfway through.
+    for (const [key, id] of Object.entries(MC_FIELDS)) {
+        if (document.activeElement !== $(id)) $(id).value = m[key] ?? '';
+    }
+}
+
+function collectMinecraftSettings() {
+    const out = { enabled: Boolean(appsState?.config?.minecraft?.enabled) };
+    for (const [key, id] of Object.entries(MC_CHECKS)) out[key] = $(id).checked;
+    for (const [key, id] of Object.entries(MC_FIELDS)) {
+        const value = $(id).value.trim();
+        out[key] = MC_NUMBERS.has(key) ? Number(value) : value;
+    }
+    if (!out.version) out.version = 'LATEST';
+    return out;
+}
+
+// Ticking the licence is the one thing standing between an install and a
+// server, so it saves itself rather than waiting for an Apply further down.
+$('mc-eula').addEventListener('change', () => $('minecraft-save').click());
+
+/** The addresses to type into each game, built from the address that works from here. */
+function renderMinecraftJoin() {
+    const cfg = appsState?.config?.minecraft;
+    const installed = Boolean(appsState?.apps?.minecraft?.container?.exists);
+    $('mc-join').hidden = !installed || !cfg;
+    if (!cfg) return;
+
+    const host = localHost() ?? 'this machine';
+    // A port the game assumes is left off, because the box that asks for it
+    // is then one fewer thing to get wrong.
+    $('mc-join-java').textContent = Number(cfg.javaPort) === 25565 ? host : `${host}:${cfg.javaPort}`;
+    $('mc-join-bedrock').textContent = `${host}   port ${cfg.bedrockPort}`;
+    $('mc-fwd-java').textContent = cfg.javaPort;
+    $('mc-fwd-bedrock').textContent = cfg.bedrockPort;
+    $('mc-fwd-host').textContent = hostSnapshot?.lanAddress ?? 'this machine';
+}
+
+$('mc-public-ip').addEventListener('click', async () => {
+    const button = $('mc-public-ip');
+    const out = $('mc-public-ip-value');
+    button.disabled = true;
+    try {
+        const { address } = await api('/api/apps/minecraft/public-address');
+        const cfg = appsState?.config?.minecraft ?? {};
+        out.hidden = false;
+        out.textContent = address
+            ? `Java ${Number(cfg.javaPort) === 25565 ? address : `${address}:${cfg.javaPort}`} · Bedrock ${address} port ${cfg.bedrockPort}`
+            : 'Unknown';
+    } catch (e) {
+        toast(e.message, 'bad');
+    } finally {
+        button.disabled = false;
+    }
+});
+
+// --- players ---
+
+let mcPlayers = null;
+let mcPlayersBusy = false;
+
+async function loadMinecraftPlayers() {
+    if (mcPlayersBusy) return;
+    mcPlayersBusy = true;
+    try {
+        mcPlayers = await api('/api/apps/minecraft/players');
+        renderMinecraftPlayers();
+        renderMinecraftJoin();
+    } catch {
+        /* the next poll tries again */
+    } finally {
+        mcPlayersBusy = false;
+    }
+}
+
+const mcKey = (p) => (p.uuid ? p.uuid : String(p.name).toLowerCase());
+const mcEdition = (p) => (p.platform === 'bedrock' ? 'Bedrock' : 'Java');
+
+function mcButton(player, action, label, extra = '') {
+    return `<button type="button" class="ghost mini ${extra}" data-mc-act="${action}" data-mc-name="${escapeHtml(player.name)}" data-mc-uuid="${escapeHtml(player.uuid ?? '')}" data-mc-platform="${player.platform === 'bedrock' ? 'bedrock' : 'java'}">${label}</button>`;
+}
+
+function mcRow(player, note, buttons) {
+    return `<div class="media-row">
+        <div class="mc-player"><strong>${escapeHtml(player.name)}</strong><span class="tag">${mcEdition(player)}</span>${
+            note ? `<span class="muted">${escapeHtml(note)}</span>` : ''
+        }</div>
+        <div class="mc-actions">${buttons.join('')}</div>
+    </div>`;
+}
+
+function renderMinecraftPlayers() {
+    const p = mcPlayers;
+    if (!p) return;
+
+    const note = $('mc-players-note');
+    const msg = !p.installed
+        ? 'Minecraft is not installed yet.'
+        : p.error
+          ? p.error
+          : !p.running
+            ? 'The server is stopped. The list, operators and bans can still be changed here, and take effect when it starts.'
+            : !p.ready
+              ? 'The server is starting. Changes to the list work now; kicking waits until it is up.'
+              : null;
+    note.hidden = !msg;
+    note.className = p.error ? 'verdict bad' : 'verdict';
+    note.textContent = msg ?? '';
+
+    const allowed = new Set(p.whitelist.map(mcKey));
+    const opped = new Set(p.ops.map(mcKey));
+
+    // --- online ---
+    $('mc-online-count').textContent = p.running && p.ready ? `${p.online.length} of ${p.max ?? '?'}` : '–';
+    $('mc-online').innerHTML = !p.running
+        ? '<p class="muted">The server is not running.</p>'
+        : !p.ready
+          ? '<p class="muted">Starting up…</p>'
+          : !p.online.length
+            ? '<p class="muted">Nobody is playing right now.</p>'
+            : p.online
+                  .map((player) =>
+                      mcRow(player, opped.has(mcKey(player)) ? 'operator' : '', [
+                          p.whitelistOn && !allowed.has(mcKey(player)) ? mcButton(player, 'allow', 'Add to list') : '',
+                          opped.has(mcKey(player)) ? mcButton(player, 'deop', 'Remove operator') : mcButton(player, 'op', 'Make operator'),
+                          mcButton(player, 'kick', 'Kick'),
+                          mcButton(player, 'ban', 'Ban', 'danger'),
+                      ]),
+                  )
+                  .join('');
+
+    // --- allow list ---
+    const toggle = $('mc-wl-on');
+    if (toggle.dataset.busy !== '1') toggle.checked = Boolean(p.whitelistOn);
+    toggle.disabled = !p.installed;
+    $('mc-wl-hint').textContent = p.whitelistOn
+        ? 'On: only the players below can join. Everyone else is turned away at the door.'
+        : 'Off: anyone who knows the address can join. The list below is kept, and applies the moment this is turned on.';
+    $('mc-wl-list').innerHTML = p.whitelist.length
+        ? p.whitelist.map((player) => mcRow(player, '', [mcButton(player, 'disallow', 'Remove')])).join('')
+        : '<p class="muted">Nobody on the list yet.</p>';
+
+    $('mc-ops-list').innerHTML = p.ops.length
+        ? p.ops.map((player) => mcRow(player, '', [mcButton(player, 'deop', 'Remove')])).join('')
+        : '<p class="muted">No operators. Without one, nobody can use commands in the game, only here in the Console.</p>';
+
+    $('mc-bans-list').innerHTML =
+        p.bans.length || p.ipBans.length
+            ? [
+                  ...p.bans.map((player) => mcRow(player, player.reason || '', [mcButton(player, 'pardon', 'Unban')])),
+                  // Address bans are made in the game with /ban-ip. Shown so
+                  // they are not invisible, lifted from the console.
+                  ...p.ipBans.map(
+                      (b) => `<div class="media-row"><div class="mc-player"><strong>${escapeHtml(b.ip)}</strong><span class="tag">address</span><span class="muted">${escapeHtml(b.reason || '')} · lift with pardon-ip in the Console</span></div></div>`,
+                  ),
+              ].join('')
+            : '<p class="muted">Nobody is banned.</p>';
+}
+
+async function minecraftAct(body, { quiet = false } = {}) {
+    try {
+        const r = await api('/api/apps/minecraft/players', { method: 'POST', body });
+        if (!quiet) toast(r.message || 'Done.');
+        return true;
+    } catch (e) {
+        toast(e.message, 'bad');
+        return false;
+    } finally {
+        loadMinecraftPlayers();
+    }
+}
+
+$('mc-wl-on').addEventListener('change', async () => {
+    const box = $('mc-wl-on');
+    const wanted = box.checked;
+    box.dataset.busy = '1';
+    box.disabled = true;
+    const ok = await minecraftAct({ action: 'whitelist', enabled: wanted });
+    if (!ok) box.checked = !wanted;
+    box.dataset.busy = '0';
+    box.disabled = false;
+});
+
+/** An Add button and the name box beside it, Enter included. */
+function mcAddForm(inputId, platformId, buttonId, action, { reasonId = null, after = null } = {}) {
+    const submit = async () => {
+        const name = $(inputId).value.trim();
+        if (!name) return toast('Type a name first.', 'bad');
+        const body = { action, name, platform: $(platformId).value };
+        if (reasonId) body.reason = $(reasonId).value.trim();
+        if (after && !(await after(body))) return;
+        $(buttonId).disabled = true;
+        const ok = await minecraftAct(body);
+        $(buttonId).disabled = false;
+        if (ok) {
+            $(inputId).value = '';
+            if (reasonId) $(reasonId).value = '';
+        }
+    };
+    $(buttonId).addEventListener('click', submit);
+    for (const id of [inputId, reasonId].filter(Boolean)) {
+        $(id).addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submit();
+            }
+        });
+    }
+}
+
+mcAddForm('mc-wl-name', 'mc-wl-platform', 'mc-wl-add', 'allow');
+mcAddForm('mc-ops-name', 'mc-ops-platform', 'mc-ops-add', 'op');
+mcAddForm('mc-ban-name', 'mc-ban-platform', 'mc-ban-add', 'ban', { reasonId: 'mc-ban-reason' });
+
+$('tab-minecraft').addEventListener('click', async (event) => {
+    const button = event.target.closest?.('[data-mc-act]');
+    if (!button) return;
+    const { mcAct: action, mcName: name, mcUuid: uuid, mcPlatform: platform } = button.dataset;
+
+    if (action === 'ban') {
+        const sure = await askConfirm({
+            title: `Ban ${name}?`,
+            body: 'They are put out of the game and cannot come back until they are unbanned, whether or not they are on the list.',
+            confirmLabel: 'Ban',
+            danger: true,
+        });
+        if (!sure) return;
+    }
+    button.disabled = true;
+    await minecraftAct({ action, name, uuid: uuid || undefined, platform });
+});
+
+// --- console ---
+
+let mcConsoleBusy = false;
+
+async function loadMinecraftConsole() {
+    if (mcConsoleBusy) return;
+    mcConsoleBusy = true;
+    const view = $('mc-console');
+    try {
+        if (!appsState?.apps?.minecraft?.container?.exists) {
+            view.textContent = 'Minecraft is not installed yet.';
+            return;
+        }
+        const { text } = await api('/api/logs?container=minecraft&tail=400');
+        // Kept at the bottom only if it already was, so scrolling back to read
+        // something is not undone by the next refresh.
+        const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
+        // Paper colours its console, and the codes would show as junk.
+        view.textContent = String(text ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') || 'Nothing logged yet.';
+        if (atBottom) view.scrollTop = view.scrollHeight;
+    } catch {
+        /* the next poll tries again */
+    } finally {
+        mcConsoleBusy = false;
+    }
+}
+
+async function sendMinecraftCommand(command) {
+    const out = $('mc-command-out');
+    try {
+        const r = await api('/api/apps/minecraft/command', { method: 'POST', body: { command } });
+        out.hidden = false;
+        out.textContent = `> ${command}\n${r.output}`;
+        return true;
+    } catch (e) {
+        toast(e.message, 'bad');
+        return false;
+    } finally {
+        loadMinecraftConsole();
+    }
+}
+
+$('mc-command-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const box = $('mc-command');
+    const command = box.value.trim();
+    if (!command) return;
+    if (await sendMinecraftCommand(command)) box.value = '';
+});
+
+for (const button of document.querySelectorAll('[data-mc-command]')) {
+    button.addEventListener('click', () => sendMinecraftCommand(button.dataset.mcCommand));
+}
+
+/*
+ * Kept fresh only while somebody is looking. The player list costs a console
+ * command and the log a docker call, which is nothing once and wasteful every
+ * few seconds from a tab sitting in the background.
+ */
+const mcVisible = () => !document.hidden && $('tab-minecraft').classList.contains('active');
+setInterval(() => {
+    if (mcVisible()) loadMinecraftPlayers();
+}, 8000);
+setInterval(() => {
+    if (mcVisible() && activeSubtab('minecraft') === 'minecraft-console') loadMinecraftConsole();
+}, 3000);
+document.querySelector('[data-subtab="minecraft-console"]').addEventListener('click', loadMinecraftConsole);
+
 // -------------------------------------------------------------- lifecycle ---
 
 /**
@@ -1990,6 +2367,7 @@ const UNINSTALL_COPY = {
     nextcloud: 'every file, photo and calendar stored in it',
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
     mealplan: 'the meal library and every week that has been planned',
+    minecraft: 'the world and everything built in it, and the allow list, operators and bans',
 };
 const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';
 

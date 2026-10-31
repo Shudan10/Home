@@ -73,6 +73,20 @@ export const UNITS = {
         buildable: ['mealplan'],
         data: 'the meal library and every week that has been planned',
     },
+    minecraft: {
+        label: 'Minecraft',
+        profile: 'minecraft',
+        services: ['minecraft'],
+        containers: ['quickstart-home-minecraft'],
+        primary: 'quickstart-home-minecraft',
+        volumes: ['quickstart-home-minecraft-data'],
+        // Pulled from Docker Hub and possibly shared with anything else on the
+        // machine running a Minecraft server, so never removed.
+        images: [],
+        buildable: [],
+        pullable: ['minecraft'],
+        data: 'the world and everything built in it, plus the allow list, operators and bans',
+    },
 };
 
 export const unitFor = (key) => UNITS[key] ?? null;

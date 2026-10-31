@@ -14,6 +14,7 @@ import * as host from './lib/host.js';
 import * as selfservice from './lib/selfservice.js';
 import * as tunnel from './lib/tunnel.js';
 import * as lifecycle from './lib/lifecycle.js';
+import * as minecraft from './lib/minecraft.js';
 import { jobs, requestContext } from './lib/jobs.js';
 import {
     authConfigured,
@@ -142,6 +143,14 @@ function sse(req, res) {
 const managerBind = () => (readEnvFile().MANAGER_BIND || '0.0.0.0').trim();
 const isLoopbackBind = () => ['127.0.0.1', '::1', 'localhost'].includes(managerBind());
 
+// The services built from a Dockerfile. The rest are stock images (databases,
+// cache, previews, Jellyfin, Minecraft) with nothing to build, and asking
+// compose to build them is an error rather than a no-op.
+//
+// This went missing in the move to the tunnel while both of its uses stayed,
+// so Apply settings and Update failed on every app with a ReferenceError.
+const BUILDABLE_SERVICES = new Set(['nextcloud', 'mealplan']);
+
 /**
  * Notes when an app's image was built, and from what.
  *
@@ -264,12 +273,36 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
         return { enabled: false };
     }
 
-    onLine('Building images if needed...');
-    await dockerctl.compose(['build', ...app.services.filter((sv) => BUILDABLE_SERVICES.has(sv))], {
-        onLine,
-        profile: app.profile,
-        timeoutMs: 120 * 60_000,
-    });
+    /*
+     * Minecraft's settings are saved, not started. Applying them recreates the
+     * container, which is a restart that puts everybody out of the game -- fine
+     * when it is running and they asked, and wrong when it is off: changing the
+     * difficulty is not a request to switch the server on. A stopped one picks
+     * the new settings up when its switch next starts it, which recreates it.
+     */
+    if (name === 'minecraft') {
+        if (!(await dockerctl.containerState(app.container)).running) {
+            onLine('Saved. Minecraft is stopped, so it uses these the next time it starts.');
+            return { enabled: true };
+        }
+        onLine('Restarting Minecraft with the new settings. Players are disconnected for about a minute.');
+        await dockerctl.compose(['up', '-d', '--no-deps', ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
+        onLine('Minecraft is starting with the new settings.');
+        return { enabled: true };
+    }
+
+    // Only the services that have something to build. An empty list is not a
+    // no-op: `compose build` with no names builds every service that is
+    // active, which includes this panel.
+    const buildable = app.services.filter((sv) => BUILDABLE_SERVICES.has(sv));
+    if (buildable.length) {
+        onLine('Building images if needed...');
+        await dockerctl.compose(['build', ...buildable], {
+            onLine,
+            profile: app.profile,
+            timeoutMs: 120 * 60_000,
+        });
+    }
 
     onLine('Starting containers...');
     await dockerctl.compose(['up', '-d', ...app.services], { onLine, profile: app.profile, timeoutMs: 20 * 60_000 });
@@ -731,7 +764,7 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
     sendJson(res, 200, { config: cfg, apps: state });
 });
 
-route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)$/, async (req, res, match) => {
+route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)$/, async (req, res, match) => {
     const name = match[1];
     const body = await readBody(req);
 
@@ -742,8 +775,14 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)$/, async (req, res, ma
     const { cfg, errors } = apps.validateAppsConfig(merged);
     if (errors.length) return fail(res, 400, 'The configuration has problems.', { details: errors });
 
+    // Minecraft's apply only starts a server that is already running, so its
+    // blockers -- the licence -- only matter then. Otherwise the box could not
+    // be ticked and saved along with everything else on the same page.
     const blockers = apps.appBlockers(name, cfg);
-    if (blockers.length) return fail(res, 409, `${apps.APPS[name].label} cannot start yet.`, { details: blockers });
+    const starting = name !== 'minecraft' || (await dockerctl.containerState(apps.APPS.minecraft.container)).running;
+    if (blockers.length && starting) {
+        return fail(res, 409, `${apps.APPS[name].label} cannot start yet.`, { details: blockers });
+    }
 
     // A media folder that is not there is refused rather than mounted. Docker
     // would not complain -- it creates the missing directory as root and mounts
@@ -776,7 +815,8 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)$/, async (req, res, ma
     }
 
     apps.saveAppsConfig(cfg);
-    const job = jobs.start(`${cfg[name].enabled ? 'Start' : 'Stop'} ${apps.APPS[name].label}`, async (onLine) => {
+    const verb = name === 'minecraft' ? 'Apply settings to' : cfg[name].enabled ? 'Start' : 'Stop';
+    const job = jobs.start(`${verb} ${apps.APPS[name].label}`, async (onLine) => {
         // Remember how this turned out. The job itself only lives in memory, so
         // without a record on disk a failed build is indistinguishable from one
         // that is still running as soon as the manager restarts.
@@ -874,7 +914,7 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
     sendJson(res, 202, { ok: true, jobId: job.id, restarting: true });
 });
 
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/check$/, async (req, res, match) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/check$/, async (req, res, match) => {
     const name = match[1];
     try {
         // Nextcloud and Jellyfin come from a Docker Hub tag, not a repository:
@@ -898,7 +938,7 @@ route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/check$/, async (req, 
     }
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/update$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, async (req, res, match) => {
     const name = match[1];
     const cfg = apps.loadAppsConfig();
     if (!cfg[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
@@ -941,15 +981,64 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/update$/, async (req
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/(start|stop|restart)$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/(start|stop|restart)$/, async (req, res, match) => {
     const [, name, action] = match;
     const app = apps.APPS[name];
+    if (action !== 'stop' && apps.appBlockers(name).length) {
+        return fail(res, 409, `${app.label} cannot start yet.`, { details: apps.appBlockers(name) });
+    }
     const job = jobs.start(`${action} ${app.label}`, async (onLine) => {
-        const verb = action === 'start' ? ['up', '-d'] : [action];
+        // A Minecraft restart is a recreate, because `restart` brings back the
+        // container as it was created -- with the settings it had then, not
+        // the ones saved since. It is also how Paper and Geyser get updated:
+        // both are downloaded fresh as the server starts.
+        const verb =
+            action === 'start'
+                ? ['up', '-d']
+                : name === 'minecraft' && action === 'restart'
+                  ? ['up', '-d', '--no-deps', '--force-recreate']
+                  : [action];
         await dockerctl.compose([...verb, ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
         if (name === 'nextcloud' && action !== 'stop') await reconcileNextcloud(onLine);
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+// ---------------------------------------------------------------- minecraft --
+
+/*
+ * Who is on, who may join, who runs the server and who is banned. Answered on
+ * the spot rather than queued: each is one console command or one small file,
+ * and a queue entry for "let Sam in" would be more ceremony than the change.
+ * lib/minecraft.js has why the server's own files are the record.
+ */
+route('GET', /^\/api\/apps\/minecraft\/players$/, async (req, res) => sendJson(res, 200, await minecraft.snapshot()));
+
+route('POST', /^\/api\/apps\/minecraft\/players$/, async (req, res) => {
+    const body = await readBody(req);
+    try {
+        const message = await minecraft.act(body ?? {}, apps.loadAppsConfig());
+        sendJson(res, 200, { ok: true, message });
+    } catch (err) {
+        fail(res, err.status ?? 500, err.message);
+    }
+});
+
+route('POST', /^\/api\/apps\/minecraft\/command$/, async (req, res) => {
+    const body = await readBody(req);
+    try {
+        sendJson(res, 200, { ok: true, output: await minecraft.command(body.command) });
+    } catch (err) {
+        fail(res, err.status ?? 500, err.message);
+    }
+});
+
+route('GET', /^\/api\/apps\/minecraft\/public-address$/, async (req, res) => {
+    try {
+        sendJson(res, 200, { address: await minecraft.publicAddress() });
+    } catch (err) {
+        fail(res, err.status ?? 502, err.message);
+    }
 });
 
 // -------------------------------------------------------- admin password --
@@ -1044,6 +1133,10 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
     const running = match[2] === 'start';
     const state = await lifecycle.status(match[1]);
     if (!state.installed) return fail(res, 409, `${unit.label} is not installed yet.`);
+    // Said before anything is queued, so the switch springs back with the
+    // reason rather than starting something that exits a second later.
+    const blockers = running ? apps.appBlockers(match[1]) : [];
+    if (blockers.length) return fail(res, 409, `${unit.label} cannot start yet.`, { details: blockers });
 
     const job = jobs.start(`${running ? 'Start' : 'Stop'} ${unit.label}`, async (onLine) => {
         await lifecycle.setRunning(match[1], running, onLine);

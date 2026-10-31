@@ -82,6 +82,26 @@ export const APPS = {
             web: { port: 8080, label: 'Meal Plan web', hostPort: 8083 },
         },
     },
+
+    minecraft: {
+        label: 'Minecraft',
+        // Pulled, not built: itzg/minecraft-server is the image nearly every
+        // self-hosted server runs, and it fetches the server itself (Paper) and
+        // the Bedrock bridge (Geyser and Floodgate) when it starts.
+        tracksRepo: false,
+        repo: null,
+        profile: 'minecraft',
+        services: ['minecraft'],
+        container: 'quickstart-home-minecraft',
+        // Not a web page, so there is nothing for the tunnel to publish:
+        // Cloudflare's tunnel carries HTTP, and a game is raw TCP and UDP.
+        // Players outside the house come in through a forwarded port instead.
+        publish: null,
+        ports: {
+            java: { port: 25565, label: 'Java Edition', hostPort: 25565, protocol: 'tcp' },
+            bedrock: { port: 19132, label: 'Bedrock Edition', hostPort: 19132, protocol: 'udp' },
+        },
+    },
 };
 
 export const DEFAULT_APPS_CONFIG = {
@@ -132,6 +152,48 @@ export const DEFAULT_APPS_CONFIG = {
         publish: { web: true },
         hostPort: 8083,
     },
+    minecraft: {
+        enabled: false,
+        // Mojang's licence, which the server refuses to start without. Off
+        // until the person running it ticks the box: agreeing to somebody's
+        // terms is theirs to do, not a default.
+        eula: false,
+        // The ports a game client assumes when none is typed. Moving either
+        // works, but then everybody has to type it.
+        javaPort: 25565,
+        bedrockPort: 19132,
+        // LATEST follows each new release as Paper supports it, which is also
+        // what keeps Bedrock working: Geyser tracks the newest Java version.
+        version: 'LATEST',
+        memory: '2G',
+        motd: 'A Minecraft server at home',
+        gamemode: 'survival',
+        difficulty: 'easy',
+        hardcore: false,
+        pvp: true,
+        maxPlayers: 10,
+        viewDistance: 10,
+        simulationDistance: 10,
+        spawnProtection: 16,
+        allowNether: true,
+        allowFlight: false,
+        commandBlocks: false,
+        forceGamemode: false,
+        // Java players must own the game, checked with Mojang. Bedrock players
+        // sign in with Xbox through Floodgate whatever this says.
+        onlineMode: true,
+        // Only read when the world is first made.
+        seed: '',
+        levelType: 'minecraft:normal',
+    },
+};
+
+/** What the Minecraft settings can be. The page builds its menus from the same words. */
+export const MINECRAFT_CHOICES = {
+    gamemode: ['survival', 'creative', 'adventure', 'spectator'],
+    difficulty: ['peaceful', 'easy', 'normal', 'hard'],
+    memory: ['1G', '2G', '3G', '4G', '6G', '8G', '12G', '16G'],
+    levelType: ['minecraft:normal', 'minecraft:flat', 'minecraft:large_biomes', 'minecraft:amplified'],
 };
 
 /**
@@ -410,7 +472,95 @@ export function validateAppsConfig(input) {
         cfg.mealplan.hostPort = mport;
     }
 
+    validateMinecraft(input.minecraft ?? {}, cfg, errors);
+
     return { cfg, errors };
+}
+
+/*
+ * The server's message under its name in the multiplayer list. It travels
+ * through .env unquoted, where a # starts a comment and a $ starts a variable,
+ * so those are kept out along with line breaks. An apostrophe is fine except
+ * as the first character, where compose would read it as an opening quote --
+ * "Bob's world" is the message half of all servers want. The section sign is
+ * allowed: it is how Minecraft writes colours (§a is green).
+ */
+const MOTD_RE = /^(?!')[\p{L}\p{N} .,!?&()\-:+*@%/§|~^_<>[\]{}']{0,59}$/u;
+const SEED_RE = /^[A-Za-z0-9_-]{0,32}$/;
+const MC_VERSION_RE = /^(LATEST|\d+\.\d+(\.\d+)?)$/;
+
+function validateMinecraft(m, cfg, errors) {
+    const d = DEFAULT_APPS_CONFIG.minecraft;
+    const out = cfg.minecraft;
+    const bool = (key) => (m[key] === undefined ? d[key] : Boolean(m[key]));
+    const pick = (key, label) => {
+        const value = String(m[key] ?? d[key]);
+        if (MINECRAFT_CHOICES[key].includes(value)) return value;
+        errors.push(`${label} must be one of: ${MINECRAFT_CHOICES[key].join(', ')}.`);
+        return d[key];
+    };
+    const int = (key, label, lo, hi) => {
+        const value = Number(m[key] ?? d[key]);
+        if (Number.isInteger(value) && value >= lo && value <= hi) return value;
+        errors.push(`${label} must be a whole number from ${lo} to ${hi}.`);
+        return d[key];
+    };
+
+    out.enabled = Boolean(m.enabled);
+    out.eula = Boolean(m.eula);
+    for (const key of ['hardcore', 'pvp', 'allowNether', 'allowFlight', 'commandBlocks', 'forceGamemode', 'onlineMode']) {
+        out[key] = bool(key);
+    }
+    out.gamemode = pick('gamemode', 'Game mode');
+    out.difficulty = pick('difficulty', 'Difficulty');
+    out.memory = pick('memory', 'Memory');
+    out.levelType = pick('levelType', 'World type');
+    out.maxPlayers = int('maxPlayers', 'Max players', 1, 200);
+    out.viewDistance = int('viewDistance', 'View distance', 3, 32);
+    out.simulationDistance = int('simulationDistance', 'Simulation distance', 3, 32);
+    out.spawnProtection = int('spawnProtection', 'Spawn protection', 0, 256);
+
+    const version = String(m.version ?? d.version).trim().toUpperCase();
+    if (!MC_VERSION_RE.test(version)) errors.push('Minecraft version is LATEST or a release number like 1.21.4.');
+    else out.version = version;
+
+    const motd = String(m.motd ?? d.motd).trim();
+    if (!MOTD_RE.test(motd)) {
+        errors.push('The server message can be up to 59 characters, without double quotes, #, $ or line breaks, and cannot start with an apostrophe.');
+    } else {
+        out.motd = motd;
+    }
+
+    const seed = String(m.seed ?? '').trim();
+    if (!SEED_RE.test(seed)) errors.push('A seed is a number or a word: letters, digits, - and _, up to 32 of them.');
+    else out.seed = seed;
+
+    // The Java port is TCP, so it shares a space with every web app's; the
+    // Bedrock port is UDP, which nothing else in this stack uses.
+    const webPorts = [
+        ['Nextcloud', cfg.nextcloud.publish.web && cfg.nextcloud.hostPort],
+        ['Jellyfin', cfg.jellyfin.publish.web && cfg.jellyfin.hostPort],
+        ['Meal Plan', cfg.mealplan.publish.web && cfg.mealplan.hostPort],
+    ];
+    const jport = Number(m.javaPort ?? d.javaPort);
+    const jtaken = reservedHostPorts().get(jport);
+    const jclash = webPorts.find(([, p]) => p && Number(p) === jport)?.[0];
+    if (!Number.isInteger(jport) || jport < 1024 || jport > 65535) {
+        errors.push('The Java Edition port must be between 1024 and 65535.');
+    } else if (jclash) {
+        errors.push(`Minecraft and ${jclash} both want port ${jport}. Give one of them another number.`);
+    } else if (jtaken) {
+        errors.push(`Port ${jport} is already used by ${jtaken}, so Minecraft cannot take it.`);
+    } else {
+        out.javaPort = jport;
+    }
+
+    const bport = Number(m.bedrockPort ?? d.bedrockPort);
+    if (!Number.isInteger(bport) || bport < 1024 || bport > 65535) {
+        errors.push('The Bedrock Edition port must be between 1024 and 65535.');
+    } else {
+        out.bedrockPort = bport;
+    }
 }
 
 /**
@@ -437,10 +587,15 @@ export async function hasRenderDevice(docker) {
  * Reasons an app cannot be switched on right now.
  *
  * Nothing blocks Nextcloud today -- it depends on nothing else in the stack --
- * but the hook is what lets a future app say "this needs the proxy running"
- * plainly, at the moment somebody asks for it, rather than failing later.
+ * but the hook is what lets an app say why plainly, at the moment somebody
+ * asks for it, rather than failing later. Minecraft is the first that does:
+ * without the licence accepted the server prints one line and exits, and a
+ * switch that flips on and straight back off explains nothing.
  */
-export function appBlockers() {
+export function appBlockers(name, cfg = loadAppsConfig()) {
+    if (name === 'minecraft' && !cfg.minecraft?.eula) {
+        return ["Minecraft only starts once you have accepted Mojang's EULA. Tick the box under Minecraft → Settings."];
+    }
     return [];
 }
 
@@ -476,7 +631,42 @@ export function writeAppsEnv(cfg) {
     updateEnvFile({
         NEXTCLOUD_ADMIN_USER: cfg.nextcloud.adminUser,
         NEXTCLOUD_TRUSTED_DOMAINS: cfg.nextcloud.trustedDomains,
+        ...minecraftEnv(cfg.minecraft),
     });
+}
+
+/**
+ * The Minecraft settings, as the variables the image turns into
+ * server.properties on every start.
+ *
+ * Every start rather than once, which is what makes these settings and not
+ * suggestions: change the difficulty here and the next start has it. The one
+ * exception is the world's shape -- seed and type are only read the first time
+ * a world is made, which the page says next to them.
+ */
+function minecraftEnv(m) {
+    const yes = (v) => (v ? 'true' : 'false');
+    return {
+        MINECRAFT_EULA: m.eula ? 'TRUE' : 'FALSE',
+        MINECRAFT_VERSION: m.version,
+        MINECRAFT_MEMORY: m.memory,
+        MINECRAFT_MOTD: m.motd,
+        MINECRAFT_MODE: m.gamemode,
+        MINECRAFT_DIFFICULTY: m.difficulty,
+        MINECRAFT_HARDCORE: yes(m.hardcore),
+        MINECRAFT_PVP: yes(m.pvp),
+        MINECRAFT_MAX_PLAYERS: String(m.maxPlayers),
+        MINECRAFT_VIEW_DISTANCE: String(m.viewDistance),
+        MINECRAFT_SIMULATION_DISTANCE: String(m.simulationDistance),
+        MINECRAFT_SPAWN_PROTECTION: String(m.spawnProtection),
+        MINECRAFT_ALLOW_NETHER: yes(m.allowNether),
+        MINECRAFT_ALLOW_FLIGHT: yes(m.allowFlight),
+        MINECRAFT_COMMAND_BLOCKS: yes(m.commandBlocks),
+        MINECRAFT_FORCE_GAMEMODE: yes(m.forceGamemode),
+        MINECRAFT_ONLINE_MODE: yes(m.onlineMode),
+        MINECRAFT_SEED: m.seed,
+        MINECRAFT_LEVEL_TYPE: m.levelType,
+    };
 }
 
 // -------------------------------------------------------------- port file --
@@ -512,7 +702,7 @@ export function renderAppsPortsOverride(cfg) {
         '# mounted, and whether a GPU is passed through.',
     ];
     const blocks = [];
-    const published = { nextcloud: [], jellyfin: [], mealplan: [] };
+    const published = { nextcloud: [], jellyfin: [], mealplan: [], minecraft: [] };
 
     if (composeDefines('nextcloud')) {
         blocks.push('  nextcloud:');
@@ -588,6 +778,18 @@ export function renderAppsPortsOverride(cfg) {
         } else {
             blocks.push('      []');
         }
+    }
+
+    if (composeDefines('minecraft')) {
+        // Always published: a game server nobody can connect to is not a
+        // setting anyone wants. Java on TCP, Bedrock on UDP, and the container
+        // side of each stays at the default so neither Paper nor Geyser needs
+        // its own configuration touched when the host side moves.
+        blocks.push('  minecraft:');
+        blocks.push('    ports:');
+        blocks.push(`      - "0.0.0.0:${cfg.minecraft.javaPort}:25565/tcp"`);
+        blocks.push(`      - "0.0.0.0:${cfg.minecraft.bedrockPort}:19132/udp"`);
+        published.minecraft = [cfg.minecraft.javaPort, cfg.minecraft.bedrockPort];
     }
 
     // `services:` is only written when something goes under it. A bare
@@ -839,6 +1041,10 @@ async function upstreamImage(name, docker) {
         // the pin exists to refuse.
         return `jellyfin/jellyfin:${readEnvFile().JELLYFIN_VERSION || 'latest'}`;
     }
+    if (name === 'minecraft') {
+        // Same rule as Jellyfin's: the tag an Update would fetch.
+        return `itzg/minecraft-server:${readEnvFile().MINECRAFT_IMAGE_VERSION || 'latest'}`;
+    }
     throw new Error(`${APPS[name]?.label ?? name} is not made from a Docker Hub image.`);
 }
 
@@ -846,6 +1052,9 @@ async function upstreamImage(name, docker) {
 function imageVersions(name, env, labels) {
     if (name === 'nextcloud') return [['PHP', env.PHP_VERSION], ['Nextcloud', env.NEXTCLOUD_VERSION]];
     if (name === 'jellyfin') return [['Jellyfin', labels['org.opencontainers.image.version']]];
+    // The image's own version, not Minecraft's: the game is downloaded by the
+    // container when it starts, so no image says which one it will be.
+    if (name === 'minecraft') return [['Java', env.JAVA_VERSION]];
     return [];
 }
 

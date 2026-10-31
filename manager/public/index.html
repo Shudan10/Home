@@ -113,6 +113,17 @@
           <span class="track"></span>
         </label>
       </div>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="minecraft" title="Minecraft">
+          <span class="nav-dot" data-health="minecraft"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l8.5 4.6v9.2L12 21.2l-8.5-4.6V7.4z"/><path d="M3.5 7.4L12 12l8.5-4.6M12 12v9.2"/></svg>
+          <span class="label">Minecraft</span>
+        </button>
+        <label class="switch mini" title="Start or stop Minecraft">
+          <input type="checkbox" data-service="minecraft" aria-label="Start or stop Minecraft">
+          <span class="track"></span>
+        </label>
+      </div>
 
       <p class="nav-group-title">Network</p>
       <!-- No switch: the connector runs while an account is connected and stops
@@ -735,6 +746,312 @@
       <div id="sub-mealplan-uninstall" class="subtab">
         <div class="grid">
           <article class="card span2 uninstall-card" data-uninstall="mealplan"></article>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ------------------------------------------------------- minecraft -->
+    <section id="tab-minecraft" class="tab">
+      <nav class="subnav" aria-label="Minecraft">
+        <button class="subtab-btn active" data-subtab="minecraft-overview">Overview</button>
+        <button class="subtab-btn" data-subtab="minecraft-players">Players</button>
+        <button class="subtab-btn" data-subtab="minecraft-settings">Settings</button>
+        <button class="subtab-btn" data-subtab="minecraft-console">Console</button>
+        <button class="subtab-btn" data-subtab="minecraft-updates">Updates</button>
+        <button class="subtab-btn" data-subtab="minecraft-uninstall">Uninstall</button>
+      </nav>
+
+      <div id="sub-minecraft-overview" class="subtab active">
+        <div class="grid">
+          <article class="card">
+            <div class="toggle-row">
+              <div class="toggle-text">
+                <strong>Run Minecraft</strong>
+                <span class="muted">One world for Java and Bedrock players together.</span>
+              </div>
+              <span id="minecraft-state" class="tag">off</span>
+            </div>
+            <div id="minecraft-notice" class="verdict" hidden></div>
+            <p class="error" id="minecraft-error" hidden></p>
+
+            <div class="node-section">
+              <h3>How to join</h3>
+              <div id="minecraft-link" class="verdict" hidden></div>
+              <div id="mc-join" class="mc-join" hidden>
+                <div class="mc-join-row">
+                  <span class="mc-edition">Java Edition</span>
+                  <span class="muted">PC, Mac and Linux. Multiplayer → Add Server → Server Address:</span>
+                  <code id="mc-join-java">–</code>
+                </div>
+                <div class="mc-join-row">
+                  <span class="mc-edition">Bedrock Edition</span>
+                  <span class="muted">Phones, tablets, Windows and consoles. Play → Servers → Add Server:</span>
+                  <code id="mc-join-bedrock">–</code>
+                </div>
+              </div>
+              <p class="hint">
+                Xbox, PlayStation and Switch only list featured servers and have
+                no Add Server button. Players on those can still join through a
+                phone or PC on the same account, or with a helper app such as
+                BedrockTogether.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Players online <span id="mc-online-count" class="tag">–</span></h3>
+            <div id="mc-online" class="media-list"><p class="muted">The server is not running.</p></div>
+            <p class="hint">Bedrock players appear with a dot in front of their name. That is how the Java side of the server tells them apart.</p>
+          </article>
+
+          <article class="card span2">
+            <h3>Playing from outside your home</h3>
+            <p class="muted">
+              Anyone on your home network can join with the addresses above.
+              Friends elsewhere need your router to let the game through, because
+              Cloudflare's tunnel only carries web pages, not games.
+            </p>
+            <ol class="steps">
+              <li>Open your router's settings page (often <code>192.168.1.1</code> or <code>192.168.0.1</code>) and find <em>Port forwarding</em>.</li>
+              <li>Forward <strong>TCP <span id="mc-fwd-java">25565</span></strong> (Java) and <strong>UDP <span id="mc-fwd-bedrock">19132</span></strong> (Bedrock) to <code id="mc-fwd-host">this machine</code>.</li>
+              <li>Give friends your public address with those ports. It changes now and then unless your internet provider gives you a fixed one.</li>
+            </ol>
+            <div class="row">
+              <button type="button" id="mc-public-ip" class="ghost">Show my public address</button>
+              <code id="mc-public-ip-value" hidden></code>
+            </div>
+            <p class="hint">
+              Forwarding a port puts the server on the internet. Turn on
+              <strong>Only listed players can join</strong> under Players first,
+              so strangers who scan for Minecraft servers cannot just walk in.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-minecraft-players" class="subtab">
+        <div id="mc-players-note" class="verdict" hidden></div>
+        <div class="grid">
+          <article class="card span2">
+            <h3>Who can join</h3>
+            <label class="check"><input type="checkbox" id="mc-wl-on"> Only players on this list can join</label>
+            <p class="hint" id="mc-wl-hint">Off: anyone who knows the address can join. On: everyone else is turned away at the door.</p>
+            <div id="mc-wl-list" class="media-list"></div>
+            <div class="row mc-add">
+              <select id="mc-wl-platform" class="inline-select" aria-label="Edition">
+                <option value="java">Java</option>
+                <option value="bedrock">Bedrock</option>
+              </select>
+              <input id="mc-wl-name" autocomplete="off" placeholder="Player name or gamertag" aria-label="Player name">
+              <button type="button" id="mc-wl-add" class="primary">Add to list</button>
+            </div>
+            <p class="hint">
+              Java players by the name in their launcher; Bedrock players by
+              their Xbox gamertag, without the #1234 on the end. The panel looks
+              each one up so the server knows exactly who they are, even before
+              they have ever joined.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Operators</h3>
+            <p class="muted">Operators can use every command in the game: change the time, teleport, give items, ban people.</p>
+            <div id="mc-ops-list" class="media-list"></div>
+            <div class="row mc-add">
+              <select id="mc-ops-platform" class="inline-select" aria-label="Edition">
+                <option value="java">Java</option>
+                <option value="bedrock">Bedrock</option>
+              </select>
+              <input id="mc-ops-name" autocomplete="off" placeholder="Player name" aria-label="Operator name">
+              <button type="button" id="mc-ops-add" class="ghost">Make operator</button>
+            </div>
+            <p class="hint">While the server runs, a Bedrock player has to have joined once before they can be made an operator.</p>
+          </article>
+
+          <article class="card">
+            <h3>Banned</h3>
+            <p class="muted">Banned players cannot join, whether or not they are on the list.</p>
+            <div id="mc-bans-list" class="media-list"></div>
+            <div class="row mc-add">
+              <select id="mc-ban-platform" class="inline-select" aria-label="Edition">
+                <option value="java">Java</option>
+                <option value="bedrock">Bedrock</option>
+              </select>
+              <input id="mc-ban-name" autocomplete="off" placeholder="Player name" aria-label="Player to ban">
+            </div>
+            <div class="row mc-add">
+              <input id="mc-ban-reason" autocomplete="off" placeholder="Reason (optional, they see this)" aria-label="Ban reason">
+              <button type="button" id="mc-ban-add" class="ghost danger">Ban</button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-minecraft-settings" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Minecraft's licence</h3>
+            <p class="muted">
+              Mojang only lets a server run once whoever runs it has agreed to the
+              <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noreferrer noopener">Minecraft End User Licence Agreement ↗</a>.
+              Read it, and tick the box if you agree. The server will not start until you do.
+            </p>
+            <label class="check"><input type="checkbox" id="mc-eula"> I have read and agree to the Minecraft EULA</label>
+          </article>
+
+          <article class="card">
+            <h3>Gameplay</h3>
+            <label class="inline">Game mode
+              <select id="mc-gamemode">
+                <option value="survival">Survival</option>
+                <option value="creative">Creative</option>
+                <option value="adventure">Adventure</option>
+                <option value="spectator">Spectator</option>
+              </select>
+            </label>
+            <label class="inline">Difficulty
+              <select id="mc-difficulty">
+                <option value="peaceful">Peaceful (no monsters)</option>
+                <option value="easy">Easy</option>
+                <option value="normal">Normal</option>
+                <option value="hard">Hard</option>
+              </select>
+            </label>
+            <label class="inline">Max players <input type="number" id="mc-max-players" min="1" max="200"></label>
+            <label class="check"><input type="checkbox" id="mc-pvp"> Players can hurt each other (PvP)</label>
+            <label class="check"><input type="checkbox" id="mc-hardcore"> Hardcore: one life, then spectator</label>
+            <label class="check"><input type="checkbox" id="mc-force-gamemode"> Put everyone in this game mode when they join</label>
+            <label class="check"><input type="checkbox" id="mc-allow-nether"> The Nether is open</label>
+            <label class="check"><input type="checkbox" id="mc-allow-flight"> Allow flying in survival (needed by some mods; otherwise flying gets you kicked)</label>
+            <label class="check"><input type="checkbox" id="mc-command-blocks"> Command blocks work</label>
+          </article>
+
+          <div class="col">
+            <article class="card">
+              <h3>Server</h3>
+              <label>Message in the server list
+                <input id="mc-motd" maxlength="59" autocomplete="off">
+              </label>
+              <label class="inline">Minecraft version
+                <input id="mc-version" autocomplete="off" placeholder="LATEST">
+              </label>
+              <label class="inline">Memory
+                <select id="mc-memory">
+                  <option value="1G">1 GB (one or two players)</option>
+                  <option value="2G">2 GB (a few friends)</option>
+                  <option value="3G">3 GB</option>
+                  <option value="4G">4 GB (a busy server)</option>
+                  <option value="6G">6 GB</option>
+                  <option value="8G">8 GB</option>
+                  <option value="12G">12 GB</option>
+                  <option value="16G">16 GB</option>
+                </select>
+              </label>
+              <label class="check"><input type="checkbox" id="mc-online-mode"> Java players must own the game (online mode)</label>
+              <p class="hint">
+                <code>LATEST</code> moves to each new release, which is what keeps
+                Bedrock players able to join. Pin a number like <code>1.21.4</code>
+                to stay put, but Bedrock may stop working until you move on.
+                Worlds only upgrade: going back to an older version is not possible.
+              </p>
+              <p class="hint">
+                Leave online mode on. Off lets anyone join with any name,
+                including yours. Bedrock players sign in with Xbox either way.
+              </p>
+            </article>
+
+            <article class="card">
+              <h3>Network</h3>
+              <label class="inline">Java port (TCP) <input type="number" id="mc-java-port" min="1024" max="65535"></label>
+              <label class="inline">Bedrock port (UDP) <input type="number" id="mc-bedrock-port" min="1024" max="65535"></label>
+              <p class="hint">25565 and 19132 are what the games assume when no port is typed. Change them only if something else needs those numbers.</p>
+            </article>
+          </div>
+
+          <article class="card">
+            <h3>World</h3>
+            <label class="inline">View distance <input type="number" id="mc-view-distance" min="3" max="32"></label>
+            <label class="inline">Simulation distance <input type="number" id="mc-sim-distance" min="3" max="32"></label>
+            <label class="inline">Spawn protection <input type="number" id="mc-spawn-protection" min="0" max="256"></label>
+            <p class="hint">
+              Distances are in chunks of 16 blocks. Lower is lighter on this
+              machine. Spawn protection is how far around spawn only operators
+              can build, and 0 turns it off.
+            </p>
+            <label class="inline">Seed <input id="mc-seed" autocomplete="off" placeholder="random"></label>
+            <label class="inline">World type
+              <select id="mc-level-type">
+                <option value="minecraft:normal">Normal</option>
+                <option value="minecraft:flat">Superflat</option>
+                <option value="minecraft:large_biomes">Large biomes</option>
+                <option value="minecraft:amplified">Amplified</option>
+              </select>
+            </label>
+            <p class="hint">Seed and world type are only used when the world is first made. To start a fresh world, uninstall without keeping the data and install again.</p>
+          </article>
+
+          <article class="card">
+            <h3>Apply</h3>
+            <p class="muted">
+              The server reads these when it starts. If it is running, applying
+              restarts it, which disconnects everyone for about a minute. The world is kept.
+            </p>
+            <div class="row">
+              <button type="button" id="minecraft-save" class="primary">Apply settings</button>
+              <button type="button" class="ghost" data-app-action="minecraft/restart">Restart</button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-minecraft-console" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Console</h3>
+            <pre id="mc-console" class="logview mc-console">The server is not running.</pre>
+            <form class="row" id="mc-command-form">
+              <input id="mc-command" autocomplete="off" spellcheck="false" placeholder="A command, like: time set day" aria-label="Server command">
+              <button type="submit" class="primary">Send</button>
+            </form>
+            <pre id="mc-command-out" class="mc-command-out" hidden></pre>
+            <div class="row">
+              <button type="button" class="ghost mini" data-mc-command="save-all">Save the world</button>
+              <button type="button" class="ghost mini" data-mc-command="time set day">Make it day</button>
+              <button type="button" class="ghost mini" data-mc-command="weather clear">Clear weather</button>
+              <button type="button" class="ghost mini" data-mc-command="say The server restarts in a minute.">Warn of a restart</button>
+            </div>
+            <p class="hint">Commands run as the server itself, with full permissions. No leading slash needed.</p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-minecraft-updates" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Updates</h3>
+            <p class="muted">
+              There are two parts. The <code>itzg/minecraft-server</code> image is
+              the container and its Java runtime, and it is checked here like
+              Jellyfin's. The game itself (Paper) and the Bedrock bridge (Geyser
+              and Floodgate) are downloaded fresh each time the server starts, so
+              a <strong>Restart</strong> is what brings those up to date.
+            </p>
+            <div id="minecraft-build" class="verdict"></div>
+            <div class="row">
+              <button type="button" id="minecraft-check" class="ghost">Check for update</button>
+              <button type="button" id="minecraft-update" class="primary" disabled>Update the image</button>
+              <button type="button" class="ghost" data-app-action="minecraft/restart">Restart for the newest Paper and Geyser</button>
+            </div>
+            <p class="status-line" id="minecraft-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub when you ask, never on its own.</span></span></p>
+            <p class="hint">When Bedrock players suddenly cannot join, it is usually because their game updated before Geyser did. A restart a day or two later fixes it.</p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-minecraft-uninstall" class="subtab">
+        <div class="grid">
+          <article class="card span2 uninstall-card" data-uninstall="minecraft"></article>
         </div>
       </div>
 

@@ -318,6 +318,7 @@ const CONTAINERS = [
     'quickstart-home-nextcloud-imaginary',
     'quickstart-home-jellyfin',
     'quickstart-home-mealplan',
+    'quickstart-home-minecraft',
     // From before the tunnel; gone on most installs, harmless when it is.
     'quickstart-home-proxy',
 ];
@@ -340,6 +341,7 @@ const VOLUMES = [
     'quickstart-home-jellyfin-config',
     'quickstart-home-jellyfin-cache',
     'quickstart-home-mealplan-data',
+    'quickstart-home-minecraft-data',
 ];
 
 // Pulled by the stack but not built by it, so they may well be shared with

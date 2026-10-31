@@ -167,6 +167,65 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ---- Minecraft ------------------------------------------------------------
+  #
+  # One world that Java Edition and Bedrock Edition (phones, tablets, Windows,
+  # consoles) can both join. The server is Paper; Geyser translates Bedrock's
+  # protocol on UDP 19132, and Floodgate lets Bedrock players sign in with their
+  # Xbox account instead of needing a Java one. The image downloads all three
+  # when it starts, so a restart is also how they are kept current.
+  #
+  # Every gameplay setting comes from .env, written by the panel, and the image
+  # turns them into server.properties on each start. The allow list, operators
+  # and bans are deliberately not here: they are the server's own files, which
+  # the game changes too, and the panel edits those directly.
+  minecraft:
+    image: itzg/minecraft-server:${MINECRAFT_IMAGE_VERSION:-latest}
+    container_name: quickstart-home-minecraft
+    hostname: minecraft
+    profiles: ["minecraft"]
+    restart: unless-stopped
+    # Stopping saves the world, and a big one takes longer than Docker's
+    # default ten seconds. Cut short, the last few minutes of play are lost.
+    stop_grace_period: 2m
+    environment:
+      # Mojang's licence. FALSE until it is accepted in the panel, and the
+      # server will not start without it.
+      EULA: ${MINECRAFT_EULA:-FALSE}
+      TYPE: PAPER
+      VERSION: ${MINECRAFT_VERSION:-LATEST}
+      MEMORY: ${MINECRAFT_MEMORY:-2G}
+      USE_AIKAR_FLAGS: "true"
+      PLUGINS: |
+        https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot
+        https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot
+      MOTD: ${MINECRAFT_MOTD:-A Minecraft server at home}
+      MODE: ${MINECRAFT_MODE:-survival}
+      DIFFICULTY: ${MINECRAFT_DIFFICULTY:-easy}
+      HARDCORE: ${MINECRAFT_HARDCORE:-false}
+      PVP: ${MINECRAFT_PVP:-true}
+      MAX_PLAYERS: ${MINECRAFT_MAX_PLAYERS:-10}
+      VIEW_DISTANCE: ${MINECRAFT_VIEW_DISTANCE:-10}
+      SIMULATION_DISTANCE: ${MINECRAFT_SIMULATION_DISTANCE:-10}
+      SPAWN_PROTECTION: ${MINECRAFT_SPAWN_PROTECTION:-16}
+      ALLOW_NETHER: ${MINECRAFT_ALLOW_NETHER:-true}
+      ALLOW_FLIGHT: ${MINECRAFT_ALLOW_FLIGHT:-false}
+      ENABLE_COMMAND_BLOCK: ${MINECRAFT_COMMAND_BLOCKS:-false}
+      FORCE_GAMEMODE: ${MINECRAFT_FORCE_GAMEMODE:-false}
+      ONLINE_MODE: ${MINECRAFT_ONLINE_MODE:-true}
+      SEED: ${MINECRAFT_SEED:-}
+      LEVEL_TYPE: ${MINECRAFT_LEVEL_TYPE:-minecraft:normal}
+      # Taking someone off the allow list also puts them out of the game,
+      # rather than letting them play on until they next log in.
+      ENFORCE_WHITELIST: "true"
+    volumes:
+      - minecraft-data:/data
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ---- The panel ------------------------------------------------------------
   manager:
     image: quickstart-home/manager:1
@@ -239,3 +298,6 @@ volumes:
     name: quickstart-home-jellyfin-cache
   mealplan-data:
     name: quickstart-home-mealplan-data
+  # The world, the server's settings, and its allow, operator and ban lists.
+  minecraft-data:
+    name: quickstart-home-minecraft-data

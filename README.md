@@ -10,8 +10,9 @@ curl -fsSL https://raw.githubusercontent.com/Shudan10/Home/main/install.sh | bas
 It installs Docker if it is missing, sets up the control panel, prints a
 password, and stops. Nothing else is installed until you ask for it.
 
-Today it carries **Nextcloud**, **Jellyfin** and **Meal Plan**, and puts any of
-them on your own domain through a **Cloudflare Tunnel**. More apps will be added.
+Today it carries **Nextcloud**, **Jellyfin**, **Meal Plan** and a **Minecraft**
+server, and puts the web apps on your own domain through a **Cloudflare Tunnel**.
+More apps will be added.
 
 ---
 
@@ -35,6 +36,15 @@ alter or delete your library. It checks each folder exists before saving —
 Docker's own response to a path that is not there is to create an empty one and
 mount that, which turns a typo into an empty library and a stray root-owned
 directory. If the machine has a GPU, one checkbox hands it over for transcoding.
+
+**Minecraft** — one world that Java Edition and Bedrock Edition (phones,
+tablets, Windows, consoles) join together. It is a Paper server with Geyser and
+Floodgate, so Bedrock players sign in with their Xbox account and need no Java
+one. The panel holds the settings worth having (game mode, difficulty, PvP,
+memory, version, world seed) and manages who can play: an allow list,
+operators, bans and kicks, by Java name or Bedrock gamertag, whether or not the
+server is running. There is a console for anything else. Paper and Geyser are
+fetched fresh on every start, so a restart is also the update.
 
 **Tunnel and domains** — your apps on a domain you own, like
 `meals.yourdomain.com`, through a Cloudflare Tunnel. A small connector on this
@@ -94,6 +104,12 @@ or builds the image and creates the containers, then leaves them **stopped**.
 The switch in the sidebar is what starts things, and stopping keeps everything —
 the container, the data, and the image. Throwing something away is its own tab,
 and it says what it will delete.
+
+For Minecraft, accept Mojang's EULA under its Settings tab first; the server
+will not start without it. People on your network join with the address on its
+Overview. To let friends elsewhere in, forward TCP 25565 and UDP 19132 on your
+router to this machine (the tunnel carries web pages, not games), and turn on
+**Only players on this list can join** before you do.
 
 For Jellyfin, add your media folders under Settings before starting it, or it
 will come up with an empty library. Give the paths as *this* machine sees them

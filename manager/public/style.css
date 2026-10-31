@@ -2040,3 +2040,46 @@ main {
 .guide .steps li { margin: 9px 0; line-height: 1.5; }
 .guide .perm-table { margin: 8px 0 6px; }
 .guide p { margin: 6px 0; }
+
+/* -------------------------------------------------------------- minecraft */
+
+/* Two cards stacked in one grid cell, spaced like the grid itself. */
+#tab-minecraft .col { display: grid; gap: 16px; }
+
+/* The two ways in, one per edition: what the game calls the field, then the
+   address to type into it. */
+.mc-join[hidden] { display: none; }
+.mc-join { display: grid; gap: 10px; margin-top: 12px; }
+.mc-join-row {
+    display: grid;
+    gap: 3px;
+    padding: 9px 11px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+.mc-join-row .muted { font-size: 13px; }
+.mc-join-row code { font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; user-select: all; }
+.mc-edition { font-weight: 600; }
+
+/* A player row: name, edition, then whatever can be done to them. The buttons
+   drop under the name when the card is narrow, rather than squeezing the name
+   into a column one letter wide. */
+#tab-minecraft .media-row { flex-wrap: wrap; }
+.mc-player { flex: 1 1 150px; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mc-player strong { overflow-wrap: anywhere; font-weight: 550; }
+.mc-player .muted { font-size: 12.5px; }
+.mc-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+#tab-minecraft button.mini { padding: 4px 10px; font-size: 13px; }
+
+/* Add rows: the edition picker stays its own size, the name takes the rest,
+   and the button goes onto a line of its own before the name box gets too
+   small to read what was typed. */
+.mc-add { align-items: center; }
+.mc-add input { flex: 1 1 140px; min-width: 0; margin: 0; }
+.mc-add select { flex: none; }
+
+.mc-console { height: min(56vh, 520px); }
+#mc-players-note { margin: 0 0 16px; }
+.mc-command-out[hidden] { display: none; }
+.mc-command-out { margin-top: 10px; max-height: 160px; }

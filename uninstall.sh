@@ -102,8 +102,8 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         # Every profile is named, or the services behind them are invisible to
         # compose and their containers and volumes are left behind as orphans.
         # Jellyfin and Meal Plan were missing here, so an uninstall left both
-        # running, with their data.
-        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile tunnel down --remove-orphans --rmi local)
+        # running, with their data. Minecraft is in the list for the same reason.
+        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile tunnel down --remove-orphans --rmi local)
         [ "$KEEP_DATA" = "1" ] || down+=(--volumes)
         d compose "${compose_files[@]}" --project-directory "$STACK_DIR" "${down[@]}" 2>/dev/null \
             || warn "compose down reported an error; removing objects individually."
@@ -115,7 +115,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
     for name in quickstart-home-manager quickstart-home-tunnel quickstart-home-proxy \
                quickstart-home-nextcloud quickstart-home-nextcloud-db \
                quickstart-home-nextcloud-redis quickstart-home-nextcloud-imaginary \
-               quickstart-home-jellyfin quickstart-home-mealplan; do
+               quickstart-home-jellyfin quickstart-home-mealplan quickstart-home-minecraft; do
         d rm -f "$name" >/dev/null 2>&1 && ok "removed container $name" || true
     done
 
