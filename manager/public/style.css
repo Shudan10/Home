@@ -2083,3 +2083,4 @@ main {
 #mc-players-note { margin: 0 0 16px; }
 .mc-command-out[hidden] { display: none; }
 .mc-command-out { margin-top: 10px; max-height: 160px; }
+.mc-code { font-family: var(--mono); font-size: 15px; font-weight: 650; letter-spacing: 0.04em; user-select: all; }

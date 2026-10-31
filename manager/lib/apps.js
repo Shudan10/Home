@@ -182,6 +182,10 @@ export const DEFAULT_APPS_CONFIG = {
         // Java players must own the game, checked with Mojang. Bedrock players
         // sign in with Xbox through Floodgate whatever this says.
         onlineMode: true,
+        // Lets Xbox, PlayStation and Switch players in, through the Friends
+        // tab. Off by default because it signs a Microsoft account into the
+        // server, and which account that is should be somebody's decision.
+        consoles: false,
         // Only read when the world is first made.
         seed: '',
         levelType: 'minecraft:normal',
@@ -508,7 +512,7 @@ function validateMinecraft(m, cfg, errors) {
 
     out.enabled = Boolean(m.enabled);
     out.eula = Boolean(m.eula);
-    for (const key of ['hardcore', 'pvp', 'allowNether', 'allowFlight', 'commandBlocks', 'forceGamemode', 'onlineMode']) {
+    for (const key of ['hardcore', 'pvp', 'allowNether', 'allowFlight', 'commandBlocks', 'forceGamemode', 'onlineMode', 'consoles']) {
         out[key] = bool(key);
     }
     out.gamemode = pick('gamemode', 'Game mode');

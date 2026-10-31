@@ -2021,6 +2021,7 @@ const MC_CHECKS = {
     allowFlight: 'mc-allow-flight',
     commandBlocks: 'mc-command-blocks',
     onlineMode: 'mc-online-mode',
+    consoles: 'mc-consoles',
     eula: 'mc-eula',
 };
 const MC_FIELDS = {
@@ -2111,6 +2112,7 @@ async function loadMinecraftPlayers() {
         mcPlayers = await api('/api/apps/minecraft/players');
         renderMinecraftPlayers();
         renderMinecraftJoin();
+        loadMinecraftConsoles();
     } catch {
         /* the next poll tries again */
     } finally {
@@ -2274,6 +2276,112 @@ $('tab-minecraft').addEventListener('click', async (event) => {
     button.disabled = true;
     await minecraftAct({ action, name, uuid: uuid || undefined, platform });
 });
+
+// --- xbox, playstation, switch ---
+
+/*
+ * The bridge's progress, said as the next thing to do: sign it in, then tell
+ * console players which gamertag to add. Everything here is read from the
+ * server log by the panel, because that is the only place the bridge reports.
+ */
+async function loadMinecraftConsoles() {
+    let c;
+    try {
+        c = await api('/api/apps/minecraft/consoles');
+    } catch {
+        return;
+    }
+    const tag = $('mc-consoles-tag');
+    const body = $('mc-consoles-body');
+    const words = {
+        off: ['off', ''],
+        stopped: ['waiting', ''],
+        starting: ['starting', ''],
+        'sign-in': ['needs sign-in', 'warn'],
+        age: ['needs attention', 'warn'],
+        error: ['not working', 'warn'],
+        connecting: ['connecting', ''],
+        ready: ['ready', 'ok'],
+    };
+    const [word, kind] = words[c.state] ?? [c.state, ''];
+    tag.textContent = word;
+    tag.className = `tag ${kind}`;
+
+    // Rewritten only when something changed, so a half-read code does not
+    // flicker away under somebody every few seconds.
+    const signature = JSON.stringify(c);
+    if (body.dataset.sig === signature) return;
+    body.dataset.sig = signature;
+
+    const joinSteps = (gamertag) => `
+        <ol class="steps">
+          <li>On the console, open Minecraft and go to <strong>Play → Friends</strong>.</li>
+          <li>Choose <strong>Add Friend</strong> (or <em>Find Cross-Platform Friends</em>) and search for <code>${escapeHtml(gamertag)}</code>. Add it.</li>
+          <li>Within a minute the server appears under <strong>Joinable Friends</strong>. Select it to play.</li>
+        </ol>
+        <p class="hint">
+          The account accepts friend requests by itself. It forgets players who
+          have not joined for 15 days, who just add it again. If
+          <em>Only players on this list can join</em> is on, add each player's
+          gamertag to the list too, as Bedrock. On PlayStation and Switch the
+          player has to be signed in to their Microsoft account inside
+          Minecraft, and the account must allow cross-network play.
+        </p>`;
+
+    if (c.state === 'off') {
+        body.innerHTML = `<p class="muted">Off. Consoles have no Add Server button, so they cannot join yet. Turn on
+            <strong>Let Xbox, PlayStation and Switch players join</strong> under Settings, and the server will join
+            them through the Friends tab.</p>`;
+    } else if (c.state === 'stopped') {
+        body.innerHTML = '<p class="muted">On, and it starts with the server. Start Minecraft and this card shows what to do next.</p>';
+    } else if (c.state === 'starting') {
+        body.innerHTML = '<p class="muted">The server is starting. The console bridge signs in once the world has loaded, usually within a minute or two.</p>';
+    } else if (c.state === 'sign-in') {
+        body.innerHTML = `
+          <p>Sign the server in to its own Microsoft account. Once is enough; it remembers it.</p>
+          <ol class="steps">
+            <li>Open <a href="${escapeHtml(c.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(c.url)} ↗</a> on any device.</li>
+            <li>Enter the code <code class="mc-code">${escapeHtml(c.code)}</code></li>
+            <li>Sign in with the <strong>spare</strong> account, using its password (not a passwordless sign-in).</li>
+          </ol>
+          <p class="hint">This card moves on by itself once it has worked. Codes expire after about fifteen minutes; restarting the server makes a new one.</p>`;
+    } else if (c.state === 'age') {
+        body.innerHTML = `<p class="verdict bad">Microsoft wants that account's age confirmed before it can play online. Sign in to
+            <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a> with it, finish the age check, then restart the server.</p>`;
+    } else if (c.state === 'error') {
+        body.innerHTML = `<p class="verdict bad">The console bridge stopped with an error, so consoles cannot join right now. The Console tab has the full story.</p>
+            <p class="hint">${escapeHtml(c.error ?? '')}</p>`;
+    } else {
+        body.innerHTML = `
+          <p>${c.state === 'ready' ? 'Ready.' : 'Signed in, and opening the session…'} The server's account is
+            <code class="mc-code">${escapeHtml(c.gamertag)}</code>
+            <span class="muted">(${fmtNum(c.friends)} of ${fmtNum(c.maxFriends)} friends)</span></p>
+          ${joinSteps(c.gamertag)}`;
+    }
+
+    if (['sign-in', 'age', 'error', 'connecting', 'ready'].includes(c.state)) {
+        body.insertAdjacentHTML('beforeend',
+            '<div class="row"><button type="button" class="ghost" id="mc-consoles-reset">Use a different account</button></div>');
+        $('mc-consoles-reset').addEventListener('click', resetMinecraftConsoles);
+    }
+}
+
+async function resetMinecraftConsoles() {
+    const sure = await askConfirm({
+        title: 'Use a different account?',
+        body: 'The server forgets the account it signed in with, and its friend list. Console players will need to add the new account instead.\n\nThe server restarts to ask for the new sign-in, which disconnects everyone for about a minute.',
+        confirmLabel: 'Sign out and restart',
+    });
+    if (!sure) return;
+    try {
+        const r = await api('/api/apps/minecraft/consoles/reset', { method: 'POST' });
+        toast(r.restarting ? 'Signed out. Restarting to ask for a new account.' : 'Signed out. The next start asks for an account.');
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    $('mc-consoles-body').dataset.sig = '';
+    loadMinecraftConsoles();
+}
 
 // --- console ---
 

@@ -286,7 +286,15 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
             return { enabled: true };
         }
         onLine('Restarting Minecraft with the new settings. Players are disconnected for about a minute.');
-        await dockerctl.compose(['up', '-d', '--no-deps', ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
+        await minecraft.syncConsoleBridge(settings.consoles, onLine);
+        // Forced: the console bridge is a file in the world volume, not part of
+        // the container's configuration, so switching only it on or off would
+        // otherwise leave compose with nothing to recreate.
+        await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...app.services], {
+            onLine,
+            profile: app.profile,
+            timeoutMs: 10 * 60_000,
+        });
         onLine('Minecraft is starting with the new settings.');
         return { enabled: true };
     }
@@ -968,6 +976,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, 
         // The new image is in place either way; what was stopped stays stopped
         // and comes up on it whenever somebody starts it.
         if ((await lifecycle.status(name))?.running) {
+            if (name === 'minecraft') await minecraft.syncConsoleBridge(cfg.minecraft.consoles, onLine);
             await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...app.services], {
                 onLine,
                 profile: app.profile,
@@ -998,6 +1007,9 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/(start|sto
                 : name === 'minecraft' && action === 'restart'
                   ? ['up', '-d', '--no-deps', '--force-recreate']
                   : [action];
+        if (name === 'minecraft' && action !== 'stop') {
+            await minecraft.syncConsoleBridge(apps.loadAppsConfig().minecraft.consoles, onLine);
+        }
         await dockerctl.compose([...verb, ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
         if (name === 'nextcloud' && action !== 'stop') await reconcileNextcloud(onLine);
     });
@@ -1031,6 +1043,33 @@ route('POST', /^\/api\/apps\/minecraft\/command$/, async (req, res) => {
     } catch (err) {
         fail(res, err.status ?? 500, err.message);
     }
+});
+
+/*
+ * Xbox, PlayStation and Switch: whether the bridge is signed in, and the code
+ * to sign it in with when it is not. lib/minecraft.js has how it works.
+ */
+route('GET', /^\/api\/apps\/minecraft\/consoles$/, async (req, res) =>
+    sendJson(res, 200, await minecraft.consoleStatus(apps.loadAppsConfig())));
+
+/** Signs the bridge out, so the next start asks for an account again. */
+route('POST', /^\/api\/apps\/minecraft\/consoles\/reset$/, async (req, res) => {
+    try {
+        await minecraft.resetConsoleAccount();
+    } catch (err) {
+        return fail(res, err.status ?? 500, err.message);
+    }
+    const app = apps.APPS.minecraft;
+    if (!(await dockerctl.containerState(app.container)).running) return sendJson(res, 200, { ok: true, restarting: false });
+    const job = jobs.start('Restart Minecraft to sign in again', async (onLine) => {
+        await minecraft.syncConsoleBridge(apps.loadAppsConfig().minecraft.consoles, onLine);
+        await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...app.services], {
+            onLine,
+            profile: app.profile,
+            timeoutMs: 10 * 60_000,
+        });
+    });
+    sendJson(res, 202, { ok: true, restarting: true, jobId: job.id });
 });
 
 route('GET', /^\/api\/apps\/minecraft\/public-address$/, async (req, res) => {
@@ -1139,6 +1178,11 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
     if (blockers.length) return fail(res, 409, `${unit.label} cannot start yet.`, { details: blockers });
 
     const job = jobs.start(`${running ? 'Start' : 'Stop'} ${unit.label}`, async (onLine) => {
+        // Placed before the server comes up, because Geyser only looks for
+        // extensions while it is starting.
+        if (running && match[1] === 'minecraft') {
+            await minecraft.syncConsoleBridge(apps.loadAppsConfig().minecraft.consoles, onLine);
+        }
         await lifecycle.setRunning(match[1], running, onLine);
         // Settings that live inside the app rather than in compose have to be
         // reapplied to the container that has just come up.

@@ -791,10 +791,8 @@
                 </div>
               </div>
               <p class="hint">
-                Xbox, PlayStation and Switch only list featured servers and have
-                no Add Server button. Players on those can still join through a
-                phone or PC on the same account, or with a helper app such as
-                BedrockTogether.
+                Xbox, PlayStation and Switch have no Add Server button. They join
+                through the Friends tab instead; see the card below.
               </p>
             </div>
           </article>
@@ -803,6 +801,11 @@
             <h3>Players online <span id="mc-online-count" class="tag">–</span></h3>
             <div id="mc-online" class="media-list"><p class="muted">The server is not running.</p></div>
             <p class="hint">Bedrock players appear with a dot in front of their name. That is how the Java side of the server tells them apart.</p>
+          </article>
+
+          <article class="card span2" id="mc-consoles-card">
+            <h3>Xbox, PlayStation and Switch <span id="mc-consoles-tag" class="tag">off</span></h3>
+            <div id="mc-consoles-body"></div>
           </article>
 
           <article class="card span2">
@@ -898,6 +901,27 @@
               Read it, and tick the box if you agree. The server will not start until you do.
             </p>
             <label class="check"><input type="checkbox" id="mc-eula"> I have read and agree to the Minecraft EULA</label>
+          </article>
+
+          <article class="card span2">
+            <h3>Console players</h3>
+            <label class="check"><input type="checkbox" id="mc-consoles"> Let Xbox, PlayStation and Switch players join</label>
+            <p class="muted">
+              Consoles cannot type in a server address. With this on, the server
+              signs in to a Microsoft account of its own and shows up in
+              Minecraft's <strong>Friends</strong> tab for anyone who adds that
+              account as a friend. It uses
+              <a href="https://github.com/MCXboxBroadcast/Broadcaster" target="_blank" rel="noreferrer noopener">MCXboxBroadcast ↗</a>,
+              fetched fresh each time the server starts.
+            </p>
+            <p class="hint">
+              <strong>Use a spare Microsoft account, not your own.</strong> The
+              project imitates parts of a game client, which Microsoft may treat
+              as against its terms, and the account is shown to every player
+              who adds it. A free new account at
+              <a href="https://signup.live.com" target="_blank" rel="noreferrer noopener">signup.live.com ↗</a>
+              is fine; it does not need to own Minecraft.
+            </p>
           </article>
 
           <article class="card">

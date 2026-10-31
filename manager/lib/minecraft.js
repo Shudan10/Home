@@ -440,6 +440,121 @@ export async function act(input, cfg) {
     }
 }
 
+// ---------------------------------------------------------------- consoles ---
+
+/*
+ * Xbox, PlayStation and Switch players.
+ *
+ * Their Minecraft has no Add Server button -- only the handful of featured
+ * servers, and whatever friends are playing. MCXboxBroadcast uses the second
+ * door: it signs a Microsoft account into this server, advertises the world as
+ * that account's game session, and relays anyone who joins it through Xbox
+ * Live's own connection to Geyser. So a console player adds one gamertag as a
+ * friend and the server appears under Friends, on any console, with nothing
+ * changed on the console itself and no port forwarded for it.
+ *
+ * It is a Geyser extension, which lives in a folder the image does not manage,
+ * so the panel puts it there itself before each start -- fresh each time, the
+ * same way the image fetches Geyser, because the two have to keep up with
+ * Bedrock's releases together.
+ */
+const BRIDGE_URL = 'https://github.com/MCXboxBroadcast/Broadcaster/releases/latest/download/MCXboxBroadcastExtension.jar';
+const EXTENSIONS = 'plugins/Geyser-Spigot/extensions';
+const BRIDGE_JAR = `${EXTENSIONS}/MCXboxBroadcastExtension.jar`;
+// Its sign-in and friend list. Deleting this is signing out.
+const BRIDGE_DATA = `${EXTENSIONS}/mcxboxbroadcast`;
+
+/**
+ * Puts the console bridge in place, or takes it away, ahead of a start.
+ *
+ * A failed download is reported and not thrown: Java and Bedrock players do
+ * not need the bridge, and a server that will not start because GitHub was
+ * slow would be a worse outcome than one where only consoles wait.
+ */
+export async function syncConsoleBridge(enabled, onLine = () => {}) {
+    const state = await containerState(CONTAINER);
+    if (!state.exists) return;
+    const owner = '(chown -R "$(stat -c %u:%g "$D")" "$D/plugins" 2>/dev/null || true)';
+    if (!enabled) {
+        await inDataDir(state.running, `rm -f "$D/${BRIDGE_JAR}"`).catch(() => {});
+        return;
+    }
+    onLine('Fetching the console bridge (MCXboxBroadcast) so Xbox, PlayStation and Switch players can join...');
+    const script =
+        `mkdir -p "$D/${EXTENSIONS}" && t="$D/${EXTENSIONS}/.qsh-download" && ` +
+        '{ { command -v curl >/dev/null 2>&1 && curl -fsSL -o "$t" "$QSH_URL"; } || wget -qO "$t" "$QSH_URL"; } && ' +
+        // A jar is a zip, and a zip starts with PK. Anything else is an error
+        // page, and installing that would stop Geyser loading at all.
+        '[ "$(head -c 2 "$t")" = "PK" ] && ' +
+        `mv "$t" "$D/${BRIDGE_JAR}" && ${owner}`;
+    try {
+        await inDataDir(state.running, script, { QSH_URL: BRIDGE_URL });
+        onLine('Console bridge is in place.');
+    } catch (err) {
+        await inDataDir(state.running, `rm -f "$D/${EXTENSIONS}/.qsh-download"`).catch(() => {});
+        onLine(`Could not fetch the console bridge, so consoles cannot join this time: ${err.message}`);
+    }
+}
+
+/** Forgets the Microsoft account the bridge signed in with, so another can be used. */
+export async function resetConsoleAccount() {
+    const state = await containerState(CONTAINER);
+    if (!state.exists) throw userError('Minecraft is not installed yet.', 409);
+    await inDataDir(state.running, `rm -rf "$D/${BRIDGE_DATA}"`);
+}
+
+/**
+ * Where the console bridge has got to, read from what it printed.
+ *
+ * The bridge only talks through the server log, and it says the three things
+ * that matter in plain sentences: the code to sign in with, the account it
+ * signed in as, and the one failure people hit (a young account that needs age
+ * verification). The last of each wins, because the log runs across restarts.
+ */
+export async function consoleStatus(cfg) {
+    const enabled = Boolean(cfg.minecraft?.consoles);
+    const state = await containerState(CONTAINER);
+    const base = { enabled, installed: state.exists, running: state.running, state: 'off' };
+    if (!enabled) return base;
+    if (!state.running) return { ...base, state: 'stopped' };
+
+    let text = '';
+    try {
+        const { stdout, stderr } = await docker(['logs', '--tail', '4000', '--since', state.startedAt, CONTAINER], { timeoutMs: 15_000 });
+        text = stripColours(`${stdout}${stderr}`);
+    } catch {
+        return { ...base, state: 'starting' };
+    }
+    const lines = text.split('\n');
+    const last = (re) => {
+        for (let i = lines.length - 1; i >= 0; i -= 1) {
+            const m = re.exec(lines[i]);
+            if (m) return { i, m };
+        }
+        return null;
+    };
+
+    const code = last(/To sign in, use a web browser to open the page (\S+) and enter the code (\S+) to authenticate/);
+    const ok = last(/Successfully authenticated as (.+?) \((\d+)\) with (\d+)\/(\d+) friends/);
+    const age = last(/requiring age verification/);
+    const live = last(/Creation of Xbox LIVE session was successful/);
+    const failed = last(/\[MCXboxBroadcast\].*(?:ERROR|Failed to create xbox session|extension will not start)/i);
+
+    if (ok && (!code || ok.i > code.i)) {
+        return {
+            ...base,
+            state: live ? 'ready' : 'connecting',
+            gamertag: ok.m[1].trim(),
+            friends: Number(ok.m[3]),
+            maxFriends: Number(ok.m[4]),
+        };
+    }
+    if (age && (!code || age.i > code.i)) return { ...base, state: 'age' };
+    if (code) return { ...base, state: 'sign-in', url: code.m[1], code: code.m[2] };
+    if (failed) return { ...base, state: 'error', error: failed.m[0].slice(0, 240) };
+    return { ...base, state: 'starting' };
+}
+
 /**
  * A line typed into the panel's console.
  *
