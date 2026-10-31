@@ -1833,6 +1833,9 @@ $('mealplan-password-save').addEventListener('click', async () => {
         field.value = '';
         toast(r.restarting ? 'Password set. Meal Plan is restarting.' : 'Password set.');
         loadMealPlanPassword();
+        // Publishing it was waiting on this, so the tunnel form should know now
+        // rather than on the next reload.
+        loadTunnel().catch(() => {});
     } catch (e) {
         err.textContent = e.message;
         err.hidden = false;
@@ -2247,7 +2250,11 @@ function renderTunnel() {
     // re-renders after every job and must not throw away half-typed input.
     const svc = $('pub-service');
     const keepSvc = svc.value;
-    svc.innerHTML = t.services.map((x) => `<option value="${x.key}">${escapeHtml(x.label)}</option>`).join('');
+    // A blocked service stays in the list rather than being disabled: a greyed
+    // option gives no reason, and picking it is how the reason gets shown.
+    svc.innerHTML = t.services
+        .map((x) => `<option value="${x.key}">${escapeHtml(x.label)}${x.blocked ? ' (needs a password first)' : ''}</option>`)
+        .join('');
     if (keepSvc && t.services.some((x) => x.key === keepSvc)) svc.value = keepSvc;
 
     const zone = $('pub-zone');
@@ -2267,8 +2274,19 @@ function renderPublishForm() {
     $('pub-sub').placeholder = SUGGESTED_NAME[service.key] ?? 'name';
 
     const warn = $('pub-warning');
-    warn.hidden = !service.warning;
-    warn.textContent = service.warning ?? '';
+    // Something that cannot be published says why where the warning goes, and
+    // the button stays off: the server refuses it anyway, and a button that
+    // only ever produces an error is worse than one that is plainly not on.
+    if (service.blocked) {
+        warn.hidden = false;
+        warn.className = 'verdict bad';
+        warn.textContent = service.blocked;
+    } else {
+        warn.className = 'verdict warn';
+        warn.hidden = !service.warning;
+        warn.textContent = service.warning ?? '';
+    }
+    $('pub-go').disabled = Boolean(service.blocked);
 
     const zoneName = t.zones.find((z) => z.id === $('pub-zone').value)?.name ?? '';
     const sub = $('pub-sub').value.trim().toLowerCase();

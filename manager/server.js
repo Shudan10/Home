@@ -1217,6 +1217,10 @@ route('POST', /^\/api\/tunnel\/routes$/, async (req, res) => {
     if (body.service === 'panel' && !authConfigured()) {
         return fail(res, 409, 'This panel has no admin password. Set one under Global settings before putting it on the internet: it holds the Docker socket, so an address without a password is the whole machine.');
     }
+    // An answer on the spot rather than a queued job that fails. publish()
+    // checks again, and that check is the one that matters.
+    const blocked = tunnel.blockedReason(body.service);
+    if (blocked) return fail(res, 409, blocked);
     // Checked before queueing, so a typo is an answer on the spot rather than a
     // job that fails a moment later.
     const zone = (loadManagerConfig().tunnel?.zones ?? []).find((z) => z.id === body.zoneId);

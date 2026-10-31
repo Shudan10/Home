@@ -78,6 +78,26 @@ export const SERVICES = [
 
 export const serviceFor = (key) => SERVICES.find((s) => s.key === key) ?? null;
 
+/**
+ * Why a service cannot go on the internet yet, or null when it can.
+ *
+ * Meal Plan without a family password lets in whoever reaches it. On the
+ * house network that is the house; behind a public name it is anyone who
+ * finds the address, and they could read and rewrite the plan. So it stays
+ * off a domain until a password exists, rather than the password being
+ * something remembered afterwards.
+ *
+ * Read from the stack's .env, which is what the panel writes when the password
+ * is set and what the container starts from -- so this agrees with what the
+ * app will actually enforce, whether it is running yet or not.
+ */
+export function blockedReason(key) {
+    if (key === 'mealplan' && !(readEnvFile().MEALPLAN_PASSWORD_HASH || '').trim()) {
+        return 'Meal Plan has no family password yet, so on the internet anyone who found the address could read and change your plan. Set one under Meal Plan, Settings, then publish it.';
+    }
+    return null;
+}
+
 // ------------------------------------------------------------------ state ---
 
 const config = () => loadManagerConfig().tunnel ?? structuredClone(DEFAULT_MANAGER_CONFIG.tunnel);
@@ -264,6 +284,11 @@ export async function publish({ service: key, subdomain, zoneId, origin: rawOrig
 
     const service = serviceFor(key);
     if (!service) throw Object.assign(new Error(`There is nothing called "${key}" to publish.`), { status: 400 });
+    // Here and not only in the route: this is the one place every publish
+    // passes through, so nothing added later can walk round it. Before any
+    // call to Cloudflare, so a refusal leaves no DNS record behind.
+    const blocked = blockedReason(key);
+    if (blocked) throw Object.assign(new Error(blocked), { status: 409 });
     const zone = t.zones.find((z) => z.id === zoneId);
     if (!zone) throw Object.assign(new Error('Pick one of your domains.'), { status: 400 });
 
@@ -368,6 +393,13 @@ export async function status() {
             // works and shows an error, which reads like the tunnel is broken.
             appOff: Boolean(serviceFor(r.service)?.app && !appsCfg[serviceFor(r.service).app]?.enabled),
         })),
-        services: SERVICES.map(({ key, label, detail, warning, note }) => ({ key, label, detail, warning, note })),
+        services: SERVICES.map(({ key, label, detail, warning, note }) => ({
+            key,
+            label,
+            detail,
+            warning,
+            note,
+            blocked: blockedReason(key),
+        })),
     };
 }
