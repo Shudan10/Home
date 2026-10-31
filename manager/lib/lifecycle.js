@@ -73,19 +73,6 @@ export const UNITS = {
         buildable: ['mealplan'],
         data: 'the meal library and every week that has been planned',
     },
-    proxy: {
-        label: 'Reverse proxy',
-        profile: 'proxy',
-        services: ['proxy'],
-        containers: ['quickstart-home-proxy'],
-        primary: 'quickstart-home-proxy',
-        volumes: [],
-        // nginx is pulled, not built here, and is very likely in use by
-        // something else on this machine. Never removed.
-        images: [],
-        buildable: [],
-        data: 'nothing. Your domains and certificates live in the stack directory and are kept',
-    },
 };
 
 export const unitFor = (key) => UNITS[key] ?? null;

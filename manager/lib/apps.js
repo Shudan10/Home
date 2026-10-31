@@ -11,12 +11,13 @@ import { builtOn, envMap, resolveTag } from './registry.js';
  * Each one lives behind a compose profile, so it does not exist until it is
  * switched on, and each declares everything the rest of the panel needs to know
  * about it: which services it is made of, which container decides whether it is
- * installed, where nginx should send a domain pointed at it, and which of its
+ * installed, where the tunnel sends a name published for it, and which of its
  * ports are worth publishing to the host.
  *
  * Adding another app means an entry here, a block in docker-compose.yml, a unit
- * in lifecycle.js, a target kind in nginx.js, a row in publish.js, and a tab in
- * the frontend. Six places, deliberately explicit rather than generated.
+ * in lifecycle.js, a row in tunnel.js's SERVICES, its container in the teardown
+ * lists, and a tab in the frontend. The README lists them; deliberately
+ * explicit rather than generated.
  */
 
 export const APPS_STATE_FILE = path.join(CONF_DIR, 'apps.json');
@@ -36,18 +37,10 @@ export const APPS = {
         profile: 'nextcloud',
         services: ['nextcloud-db', 'nextcloud-redis', 'nextcloud-imaginary', 'nextcloud'],
         container: 'quickstart-home-nextcloud',
-        // Where nginx sends a domain pointed at this app. The hostname is the
-        // one compose gives the container on the internal network, so this
-        // works whether or not the port is published to the host.
-        publish: {
-            hostname: 'nextcloud',
-            port: 80,
-            websocket: false,
-            // Nextcloud is a file server: an upload is a single request that can
-            // run to whatever size the person is storing, so the proxy must not
-            // impose a limit of its own.
-            maxBodySize: '0',
-        },
+        // Where the tunnel sends a name published for this app: the hostname
+        // compose gives the container on the stack network, so it works whether
+        // or not the port is also published on the machine.
+        publish: { hostname: 'nextcloud', port: 80 },
         // Ports the container listens on, and whether publishing them is useful.
         ports: {
             web: { port: 80, label: 'Nextcloud web', hostPort: 8080 },
@@ -63,17 +56,10 @@ export const APPS = {
         profile: 'jellyfin',
         services: ['jellyfin'],
         container: 'quickstart-home-jellyfin',
-        publish: {
-            hostname: 'jellyfin',
-            port: 8096,
-            // Its web client talks to the server over a websocket for playback
-            // state and remote control, so a proxy that drops upgrades leaves a
-            // UI that loads and then never updates itself.
-            websocket: true,
-            // Streaming a film is one long response and uploading artwork is a
-            // large request; neither should meet a limit invented here.
-            maxBodySize: '0',
-        },
+        // Where the tunnel sends a name published for this app: the hostname
+        // compose gives the container on the stack network, so it works whether
+        // or not the port is also published on the machine.
+        publish: { hostname: 'jellyfin', port: 8096 },
         ports: {
             web: { port: 8096, label: 'Jellyfin web', hostPort: 8096 },
         },
@@ -88,14 +74,10 @@ export const APPS = {
         profile: 'mealplan',
         services: ['mealplan'],
         container: 'quickstart-home-mealplan',
-        publish: {
-            hostname: 'mealplan',
-            port: 8080,
-            websocket: false,
-            // A meal with a long method is still a few kilobytes. The default
-            // proxy limit is far above anything this can send.
-            maxBodySize: null,
-        },
+        // Where the tunnel sends a name published for this app: the hostname
+        // compose gives the container on the stack network, so it works whether
+        // or not the port is also published on the machine.
+        publish: { hostname: 'mealplan', port: 8080 },
         ports: {
             web: { port: 8080, label: 'Meal Plan web', hostPort: 8083 },
         },

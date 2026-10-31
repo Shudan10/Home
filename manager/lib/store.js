@@ -1,25 +1,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DOMAINS_FILE, ENV_FILE, MANAGER_CONFIG_FILE, PROXIES_FILE } from './paths.js';
+import { ENV_FILE, MANAGER_CONFIG_FILE } from './paths.js';
 
 // ---------------------------------------------------------------- defaults --
 
 export const DEFAULT_MANAGER_CONFIG = {
-    duckdns: { enabled: false, domains: '', token: '', intervalMinutes: 5, lastResult: null, lastRunAt: null },
     updates: { lastCheckedAt: null, latestKnown: null, autoCheck: true },
-    // The reverse proxy claims ports 80 and 443, so it stays off until someone
-    // actually wants a domain. null means "not decided yet" and is resolved
-    // once, on first boot, from whether the stack is already using it.
-    proxy: {
-        enabled: null,
-        // What the outside world reaches this machine on, which is not always
-        // what nginx binds. A router can send external 8443 to this machine's
-        // 443, and it has to, on a network where 443 already belongs to
-        // something else. The panel needs the outside numbers to write a
-        // redirect that lands in the right place and to show an address that
-        // can be pasted into a browser.
-        publicHttpPort: 80,
-        publicHttpsPort: 443,
+    // The Cloudflare tunnel every published app goes through. The two tokens
+    // are not here: they live in the stack's .env, which only this panel can
+    // read, rather than in a JSON file that a backup copies around.
+    tunnel: {
+        // Picked once and kept through a disconnect, so the tunnel this install
+        // makes in Cloudflare is the one it finds again on reconnecting, and a
+        // second install on the same account makes a second tunnel rather than
+        // fighting over the first.
+        installId: null,
+        accountId: null,
+        accountName: null,
+        tunnelId: null,
+        tunnelName: null,
+        // The domains the token can publish on: [{ id, name }].
+        zones: [],
+        // [{ hostname, zoneId, service, origin, createdAt }]
+        routes: [],
     },
 };
 
@@ -59,12 +62,6 @@ function mergeDefaults(value, defaults) {
 
 export const loadManagerConfig = () => readJson(MANAGER_CONFIG_FILE, DEFAULT_MANAGER_CONFIG);
 export const saveManagerConfig = (cfg) => writeJson(MANAGER_CONFIG_FILE, cfg);
-
-export const loadProxies = () => readJson(PROXIES_FILE, []);
-export const saveProxies = (list) => writeJson(PROXIES_FILE, list);
-
-export const loadDomains = () => readJson(DOMAINS_FILE, []);
-export const saveDomains = (list) => writeJson(DOMAINS_FILE, list);
 
 // ------------------------------------------------------------- .env file ----
 

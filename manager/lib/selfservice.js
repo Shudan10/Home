@@ -144,8 +144,9 @@ const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const REF_RE = /^(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/;
 
 // Exactly the set install.sh replaces on a re-install. conf/ holds generated
-// state and proxy/ holds issued certificates, so neither is listed: wiping
-// either would cost real work to get back.
+// state, so it is not listed: wiping it would cost real work to get back. An
+// old proxy/ directory from before the tunnel is left where it is, for the
+// same reason -- it may hold certificates somebody wants to keep.
 const CODE_ITEMS = ['docker-compose.yml', 'manager', 'nextcloud', 'uninstall.sh', 'dev.sh', 'README.md'];
 
 const ghHeaders = {
@@ -307,12 +308,18 @@ ${compose} up -d --force-recreate manager || {
 
 // ----------------------------------------------------------------- teardown ---
 
+// Every container the stack runs except the panel itself. Jellyfin and Meal
+// Plan were missing from this list, so "remove everything" left both running.
 const CONTAINERS = [
-    'quickstart-home-proxy',
+    'quickstart-home-tunnel',
     'quickstart-home-nextcloud',
     'quickstart-home-nextcloud-db',
     'quickstart-home-nextcloud-redis',
     'quickstart-home-nextcloud-imaginary',
+    'quickstart-home-jellyfin',
+    'quickstart-home-mealplan',
+    // From before the tunnel; gone on most installs, harmless when it is.
+    'quickstart-home-proxy',
 ];
 
 /**
@@ -325,12 +332,24 @@ const CONTAINERS = [
  */
 const PANEL_CONTAINER = 'quickstart-home-manager';
 
-const VOLUMES = ['quickstart-home-nextcloud-db-data', 'quickstart-home-nextcloud-data'];
+// Everything the stack keeps. The button promises "all its data", and it
+// used to quietly keep Jellyfin's library database and Meal Plan's meals.
+const VOLUMES = [
+    'quickstart-home-nextcloud-db-data',
+    'quickstart-home-nextcloud-data',
+    'quickstart-home-jellyfin-config',
+    'quickstart-home-jellyfin-cache',
+    'quickstart-home-mealplan-data',
+];
 
 // Pulled by the stack but not built by it, so they may well be shared with
 // something else on the machine. Docker refuses when they are, which is the
 // behaviour we want: nothing unrelated gets broken.
 const BASE_IMAGES = [
+    // The exact tag: `docker rmi` without one means :latest, which never
+    // matches. Keep in step with the tunnel service in docker-compose.yml.
+    'cloudflare/cloudflared:2026.10.7',
+    // From before the tunnel, so an upgraded install cleans them up too.
     'nginx:1.27-alpine',
     'certbot/certbot:latest',
     'node:22-alpine',

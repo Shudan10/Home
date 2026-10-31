@@ -47,8 +47,8 @@ while [ $# -gt 0 ]; do
 Usage: uninstall.sh [options]
 
   --dir <path>          Install directory (default: ~/.quickstart-home)
-  --keep-data           Keep the app data volumes (your Nextcloud files)
-  --keep-base-images    Keep nginx / node / alpine / certbot images
+  --keep-data           Keep the app data volumes (Nextcloud files, Jellyfin's library, Meal Plan's meals)
+  --keep-base-images    Keep node / alpine / cloudflared and the other pulled base images
   --yes, -y             Do not ask for confirmation
 USAGE
             exit 0 ;;
@@ -101,16 +101,21 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         [ -f "$STACK_DIR/conf/apps-ports.yml" ] && compose_files+=(-f "$STACK_DIR/conf/apps-ports.yml")
         # Every profile is named, or the services behind them are invisible to
         # compose and their containers and volumes are left behind as orphans.
-        down=(--profile nextcloud --profile proxy down --remove-orphans --rmi local)
+        # Jellyfin and Meal Plan were missing here, so an uninstall left both
+        # running, with their data.
+        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile tunnel down --remove-orphans --rmi local)
         [ "$KEEP_DATA" = "1" ] || down+=(--volumes)
         d compose "${compose_files[@]}" --project-directory "$STACK_DIR" "${down[@]}" 2>/dev/null \
             || warn "compose down reported an error; removing objects individually."
     fi
 
     say "Removing leftover containers"
-    for name in quickstart-home-manager quickstart-home-proxy \
+    # quickstart-home-proxy is from before the tunnel, for installs that never
+    # updated far enough to have it retired.
+    for name in quickstart-home-manager quickstart-home-tunnel quickstart-home-proxy \
                quickstart-home-nextcloud quickstart-home-nextcloud-db \
-               quickstart-home-nextcloud-redis quickstart-home-nextcloud-imaginary; do
+               quickstart-home-nextcloud-redis quickstart-home-nextcloud-imaginary \
+               quickstart-home-jellyfin quickstart-home-mealplan; do
         d rm -f "$name" >/dev/null 2>&1 && ok "removed container $name" || true
     done
 
@@ -124,7 +129,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
     if [ "$KEEP_BASE_IMAGES" = "0" ]; then
         # Base images the stack pulled. These may be shared with other projects,
         # so a refusal here is expected and harmless.
-        for image in nginx:1.27-alpine certbot/certbot:latest node:22-alpine alpine:3.21 \
+        for image in cloudflare/cloudflared:2026.10.7 nginx:1.27-alpine certbot/certbot:latest node:22-alpine alpine:3.21 \
                      mariadb:10.11 redis:7-alpine \
                      nextcloud/aio-imaginary:latest nextcloud:stable; do
             d rmi "$image" >/dev/null 2>&1 && ok "removed image $image" || true

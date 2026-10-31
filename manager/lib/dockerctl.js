@@ -12,7 +12,7 @@ import { jobContext } from './jobcontext.js';
 const LIVE = new Set();
 
 /**
- * Ends the processes a job started. SIGTERM, because docker and certbot both
+ * Ends the processes a job started. SIGTERM, because docker and compose both
  * clean up on it; a build that is killed leaves its finished layers in the
  * cache, so starting again picks up where this left off rather than at the
  * beginning.
@@ -32,12 +32,12 @@ export function killJob(jobId) {
 }
 
 const MANAGER_CONTAINER = process.env.MANAGER_CONTAINER || 'quickstart-home-manager';
-const PROXY_CONTAINER = process.env.PROXY_CONTAINER || 'quickstart-home-proxy';
+const TUNNEL_CONTAINER = process.env.TUNNEL_CONTAINER || 'quickstart-home-tunnel';
 const NEXTCLOUD_CONTAINER = process.env.NEXTCLOUD_CONTAINER || 'quickstart-home-nextcloud';
 const JELLYFIN_CONTAINER = process.env.JELLYFIN_CONTAINER || 'quickstart-home-jellyfin';
 const MEALPLAN_CONTAINER = process.env.MEALPLAN_CONTAINER || 'quickstart-home-mealplan';
 
-export { MANAGER_CONTAINER, PROXY_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER };
+export { MANAGER_CONTAINER, TUNNEL_CONTAINER, NEXTCLOUD_CONTAINER, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER };
 
 /**
  * Every container this stack can run, in the order worth reading them.
@@ -55,7 +55,7 @@ export const STACK_CONTAINERS = [
     { key: 'nextcloud-imaginary', label: 'nextcloud previews', name: 'quickstart-home-nextcloud-imaginary' },
     { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
     { key: 'mealplan', label: 'meal plan', name: MEALPLAN_CONTAINER },
-    { key: 'proxy', label: 'nginx proxy', name: PROXY_CONTAINER },
+    { key: 'tunnel', label: 'cloudflare tunnel', name: TUNNEL_CONTAINER },
     { key: 'manager', label: 'control panel', name: MANAGER_CONTAINER },
 ];
 

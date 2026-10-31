@@ -114,9 +114,3 @@ export const clearCookie = () => `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=St
 export const isAuthenticated = (req) => validateSession(parseCookies(req.headers.cookie || '')[COOKIE_NAME]);
 
 export { COOKIE_NAME };
-
-/** Password hash for nginx `auth_basic_user_file` ({SHA} is understood by nginx). */
-export function htpasswdLine(user, password) {
-    const digest = crypto.createHash('sha1').update(password).digest('base64');
-    return `${user}:{SHA}${digest}`;
-}

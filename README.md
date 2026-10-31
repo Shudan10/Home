@@ -10,8 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/Shudan10/Home/main/install.sh | bas
 It installs Docker if it is missing, sets up the control panel, prints a
 password, and stops. Nothing else is installed until you ask for it.
 
-Today it carries **Nextcloud**, **Jellyfin**, and a **reverse proxy** with free
-HTTPS. More apps will be added.
+Today it carries **Nextcloud**, **Jellyfin** and **Meal Plan**, and puts any of
+them on your own domain through a **Cloudflare Tunnel**. More apps will be added.
 
 ---
 
@@ -36,11 +36,15 @@ Docker's own response to a path that is not there is to create an empty one and
 mount that, which turns a typo into an empty library and a stray root-owned
 directory. If the machine has a GPU, one checkbox hands it over for transcoding.
 
-**Proxy and domains** — nginx in front of everything, with a guided setup that
-does the whole job end to end: a free DuckDNS name, the DNS record, the vhost,
-and a Let's Encrypt certificate that renews itself. It tells you what it is about
-to do before it does it, and says plainly what went wrong when a certificate
-fails, which is almost always a port that is not forwarded.
+**Tunnel and domains** — your apps on a domain you own, like
+`meals.yourdomain.com`, through a Cloudflare Tunnel. A small connector on this
+machine dials out to Cloudflare and visitors come back in through it, so there
+are no ports to open on your router, no certificates to renew (Cloudflare serves
+HTTPS), and it works even when your internet provider never gave you an address
+of your own. You paste one Cloudflare API token; the panel makes the tunnel and
+the DNS record for each name, and will not overwrite a DNS record it did not
+make. Anything else on your network with a web page can be published the same
+way, by its address and port.
 
 ## Installing
 
@@ -64,8 +68,6 @@ from any other device on your network.
 |---|---|---|
 | `--dir <path>` | `~/.quickstart-home` | Where everything lives |
 | `--gui-port <port>` | `8420` | The panel's port |
-| `--http-port <port>` | `80` | What nginx binds for http |
-| `--https-port <port>` | `443` | What nginx binds for https |
 | `--bind <address>` | `0.0.0.0` | What the panel listens on |
 | `--password <pass>` | generated | The panel password |
 | `--yes, -y` | | Do not ask anything |
@@ -97,10 +99,16 @@ For Jellyfin, add your media folders under Settings before starting it, or it
 will come up with an empty library. Give the paths as *this* machine sees them
 (`/srv/media/Films`), not as another computer sees them over the network.
 
-To put Nextcloud on a real web address, go to **Proxy & domains**, switch the
-proxy on, and press **Set up** next to it. You will need ports 80 and 443
-forwarded to this machine on your router; the page says so before you start, and
-there is a check that asks an outside service whether they actually arrive.
+To put an app on your own domain, open **Tunnel & domains**. You need a domain
+on Cloudflare and an API token with three permissions — Account › Cloudflare
+Tunnel › Edit, Zone › DNS › Edit and Zone › Zone › Read — and the page walks
+you through making it. Then pick the app and a name.
+
+Two limits worth knowing before you start. Names are one level deep
+(`meals.example.com`, not `meals.home.example.com`), because Cloudflare's free
+certificate only covers that. And Cloudflare's terms limit serving a lot of
+video through it on the free plan, so Jellyfin through a tunnel works but is
+the kind of use Cloudflare reserves the right to slow down.
 
 ## Where things live
 
@@ -110,7 +118,6 @@ Everything is in one directory (`~/.quickstart-home` by default):
 docker-compose.yml     the stack
 manager/               the control panel (Node, no dependencies)
 nextcloud/             the Nextcloud image build
-proxy/                 nginx config, certificates, ACME webroot
 conf/                  generated state: settings, port and mount overrides,
                        build records
 .env                   generated secrets and the panel password hash
@@ -148,17 +155,20 @@ is built here from a Dockerfile, Jellyfin is pulled as a published image
    relative. Publish no ports here; the panel writes those into
    `conf/apps-ports.yml`, along with any host folders and devices.
 2. **`manager/lib/apps.js`** — an entry in `APPS` (services, container name,
-   what nginx should proxy to) and one in `DEFAULT_APPS_CONFIG`, plus a branch
-   in `validateAppsConfig`. If it needs host folders or a device, add them to
+   its hostname and port on the stack network) and one in `DEFAULT_APPS_CONFIG`,
+   plus a branch in `validateAppsConfig`. If it needs host folders or a device, add them to
    `renderAppsPortsOverride` too — compose merges `volumes` by target path, so
    the base file's own volumes survive.
 3. **`manager/lib/lifecycle.js`** — a `UNITS` entry naming its containers,
    volumes and images, with `buildable` or `pullable` depending on where the
    image comes from. Volume names are the real Docker ones, because getting
    them wrong deletes something else's data.
-4. **`manager/lib/nginx.js`** — a `TARGET_KINDS` entry and a case in
-   `upstreamFor`.
-5. **`manager/lib/publish.js`** — a `SERVICES` entry so it can be given a domain.
+4. **`manager/lib/tunnel.js`** — a `SERVICES` entry so it can be put on a
+   domain. Its address comes from the `publish` hostname and port in `APPS`.
+5. **The container lists** — `STACK_CONTAINERS` in `manager/lib/dockerctl.js`,
+   and the teardown lists in `manager/lib/selfservice.js` and `uninstall.sh`.
+   Miss these and "remove everything" quietly leaves the app running with its
+   data, which is how Jellyfin and Meal Plan went unremoved for a while.
 6. **`manager/public/`** — a sidebar row and a `<section id="tab-...">`, and add
    its key to `APP_KEYS` in `app.js`.
 
@@ -187,7 +197,7 @@ git config core.hooksPath .githooks
 
 ## Credit
 
-The panel, installer and proxy machinery began as
+The panel and installer began as
 [Kaspa Quick Start](https://github.com/KaspaSilver/Quick-Start-Kaspa) and were
 stripped down and rebuilt around a home server rather than a node.
 

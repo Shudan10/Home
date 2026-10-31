@@ -91,7 +91,7 @@ export async function containers() {
  * certain to work from wherever the page is being read. That holds right up
  * until you are sitting at home and reach the panel by its public name, which
  * a router with hairpin NAT lets you do and habit makes likely -- and then the
- * "on this network" link confidently points at the DuckDNS name.
+ * "on this network" link confidently points at the public name.
  *
  * So it is asked properly: a throwaway container sharing the host's network
  * stack opens a socket towards a public address and reports which local

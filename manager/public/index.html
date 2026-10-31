@@ -115,16 +115,14 @@
       </div>
 
       <p class="nav-group-title">Network</p>
+      <!-- No switch: the connector runs while an account is connected and stops
+           when it is disconnected, so a switch of its own could only disagree. -->
       <div class="nav-row">
-        <button class="nav-item" data-tab="proxy" title="Proxy &amp; domains">
-          <span class="nav-dot" data-health="proxy"></span>
+        <button class="nav-item" data-tab="tunnel" title="Tunnel &amp; domains">
+          <span class="nav-dot" data-health="tunnel"></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18z"/></svg>
-          <span class="label">Proxy &amp; domains</span>
+          <span class="label">Tunnel &amp; domains</span>
         </button>
-        <label class="switch mini" title="Start or stop the reverse proxy">
-          <input type="checkbox" data-service="proxy" aria-label="Start or stop the reverse proxy">
-          <span class="track"></span>
-        </label>
       </div>
 
     </nav>
@@ -311,7 +309,7 @@
               </label>
               <p class="hint">
                 Nextcloud turns away requests for names it has not been told about.
-                Publishing it on a domain from the Proxy tab adds that name here
+                Publishing it on your domain from Tunnel &amp; domains adds that name here
                 for you; this is where to add any others, separated by spaces.
               </p>
             </article>
@@ -555,7 +553,7 @@
               <p class="hint">
                 Publishing puts Jellyfin on this machine's address so anything on
                 your network can reach it. Leave it off if you would rather it
-                were only reachable through a domain on the proxy.
+                were only reachable through your domain, under Tunnel &amp; domains.
               </p>
             </article>
 
@@ -692,7 +690,7 @@
             <h3>Where it listens</h3>
             <p class="muted">
               Publishing it on the host is what lets phones on this network reach
-              it directly. A domain under Proxy and domains works whether or not
+              it directly. A name under Tunnel &amp; domains works whether or not
               this is ticked.
             </p>
             <label class="check"><input type="checkbox" id="mealplan-pub-web"> Publish on the host</label>
@@ -742,179 +740,127 @@
 
     </section>
 
-    <!-- ----------------------------------------------------------- proxy -->
-    <section id="tab-proxy" class="tab">
-      <nav class="subnav" aria-label="Proxy and domains">
-        <button class="subtab-btn active" data-subtab="proxy-overview">Overview</button>
-        <button class="subtab-btn" data-subtab="proxy-advanced">Advanced</button>
-        <button class="subtab-btn" data-subtab="proxy-uninstall">Uninstall</button>
-      </nav>
+    <!-- ---------------------------------------------------------- tunnel -->
+    <section id="tab-tunnel" class="tab">
 
-      <div id="sub-proxy-overview" class="subtab active">
-      <!--
-        One card: what it is, and the switch that starts it. Three stacked cards
-        for a single switch read as three separate things, and left most of the
-        page empty while it was off.
-      -->
-      <article class="card proxy-intro">
-        <div class="toggle-row">
-          <div class="toggle-text">
-            <strong>Proxy and domains</strong>
-            <span class="muted">
-              Gives your apps a proper web address instead of an IP and a port
-              number, with free HTTPS.
-            </span>
-          </div>
-          <span id="proxy-state" class="tag">off</span>
-        </div>
-        <p class="hint">
-          It takes ports 80 and 443 on this machine, so it stays off until you
-          ask for it. Leave it off if something else here already uses them.
-          Switch it on to add domains and certificates.
-        </p>
-        <p class="error" id="proxy-error" hidden></p>
-      </article>
-
-      <div class="grid" id="proxy-config">
-        <article class="card span2">
-          <h3>Public addresses</h3>
-          <p class="muted">
-            Everything here can have a web address of its own.
-            <strong>Set up</strong> walks the whole thing: a free DuckDNS name,
-            whatever the service needs switched on, the nginx configuration, and
-            an HTTPS certificate.
-          </p>
-          <!--
-            The one requirement nothing here can arrange for you, and the reason
-            most setups fail at the certificate. It is stated before the table
-            rather than in the failure, because by then the work has been done.
-          -->
-          <div class="notice" id="ports-notice">
-            <p>
-              <strong>The outside has to reach this machine somewhere.</strong>
-              By default that means forwarding ports 80 and 443 to it on your
-              router. Nothing outside your network can open these addresses
-              until something does.
-            </p>
-            <p>
-              If 80 and 443 already belong to something else, forward two other
-              outside ports to this machine instead and set them here. The check
-              below then tests those rather than 80 and 443. Certificates work
-              either way: a DuckDNS name is proved with a DNS record rather than
-              an inbound request, so it needs no open port at all. Addresses
-              then carry the port, as
-              <code>https://yourname.duckdns.org:8443</code>.
-            </p>
-            <div class="row">
-              <label class="inline">Outside http <input type="number" id="ports-http" min="1" max="65535" value="80" size="5"></label>
-              <label class="inline">Outside https <input type="number" id="ports-https" min="1" max="65535" value="443" size="5"></label>
-              <span class="muted">what the internet dials</span>
-            </div>
-            <div class="row">
-              <label class="inline">On this machine <input type="number" id="ports-bind-http" min="1" max="65535" value="80" size="5"></label>
-              <label class="inline">and <input type="number" id="ports-bind-https" min="1" max="65535" value="443" size="5"></label>
-              <span class="muted">what nginx binds here, and what a forwarding rule points at</span>
-              <button id="ports-save" class="ghost">Save ports</button>
-            </div>
-            <p class="hint">
-              Usually the same numbers on both rows. They differ when a router
-              maps one to the other, and when it cannot, set this row to match
-              the rule. Changing what nginx binds restarts the proxy.
-            </p>
-            <p class="hint">
-              This connection looks like <code id="public-ip">…</code> from the
-              outside. That is the address a domain has to point at, and it is
-              the one DuckDNS publishes for you.
-            </p>
-            <div class="row">
-              <button id="ports-check" class="ghost">Check from outside</button>
-              <span class="muted" id="ports-check-note">Asks check-host.net to try connecting to your address. It sees your public IP.</span>
-            </div>
-            <div id="ports-check-result" hidden></div>
-          </div>
-          <!-- Scrolls itself on a narrow screen rather than widening the page. -->
-          <div class="scroll-x">
-            <table class="proxies publish-table">
-              <thead>
-                <tr><th>Service</th><th>Status</th><th>Public address</th><th></th></tr>
-              </thead>
-              <tbody id="publish-body"></tbody>
-            </table>
-          </div>
-          <p class="hint">
-            A service that is switched off can still be given an address: nginx
-            serves it either way and it starts answering the moment the service
-            does.
-          </p>
-          <div class="row proxy-tools">
-            <span class="muted" id="duck-status">–</span>
-            <span class="spacer"></span>
-            <button id="dd-now" class="ghost" title="Tell DuckDNS this machine's address right now, rather than waiting for the next check.">Refresh DNS</button>
-            <button id="proxy-renew" class="ghost" title="Renew every Let's Encrypt certificate that is close to expiring.">Renew certificates</button>
-            <button id="proxy-reload" class="ghost" title="Rewrite every vhost from the saved configuration and reload nginx.">Re-apply nginx config</button>
-          </div>
-        </article>
-      </div>
-
-      </div>
-
-      <!--
-        The raw proxy-host list. Overview asks "what do you want reachable" and
-        answers it for the apps on this machine; this asks "what should answer
-        on this name", which is the only question that can be pointed somewhere
-        else entirely.
-      -->
-      <div id="sub-proxy-advanced" class="subtab">
+      <!-- Before an account is connected: what this is, and exactly how to get
+           the one thing it needs. Written for somebody who has never made an
+           API token, because that is who opens this first. -->
+      <div id="tunnel-setup" hidden>
         <div class="grid">
           <article class="card span2">
-            <h3>Proxy hosts</h3>
+            <h3>Put your apps on your own domain</h3>
             <p class="muted">
-              Every name this machine answers for, and what it forwards each one
-              to. The ones the Overview page set up appear here too — this is the
-              same list, with the details it does not ask about.
+              Your apps get addresses like <code>meals.yourdomain.com</code> through a
+              Cloudflare Tunnel. A small connector on this machine dials out to
+              Cloudflare and visitors come back in through it, so there are no
+              ports to open on your router and no certificates to look after:
+              Cloudflare serves HTTPS for you. It works even when your internet
+              provider does not give you an address of your own.
             </p>
-            <!-- Scrolls itself on a narrow screen rather than widening the page. -->
-            <div class="scroll-x">
-              <table class="proxies">
-                <thead>
-                  <tr><th>Address</th><th>Forwards to</th><th>HTTPS</th><th></th></tr>
-                </thead>
-                <tbody id="proxy-body"></tbody>
-              </table>
-            </div>
+
+            <h3 class="sub">What you need</h3>
+            <ol class="steps">
+              <li>
+                A domain on Cloudflare. If you bought it somewhere else, add it at
+                <a href="https://dash.cloudflare.com/" target="_blank" rel="noreferrer noopener">dash.cloudflare.com ↗</a>
+                and change its nameservers to the ones Cloudflare gives you. It is ready
+                when Cloudflare shows it as <strong>Active</strong>.
+              </li>
+              <li>
+                An API token. Open
+                <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">API Tokens ↗</a>,
+                press <strong>Create Token</strong>, then <strong>Create Custom Token</strong>.
+              </li>
+              <li>
+                Give it these three permissions, each on its own row:
+                <table class="perm-table">
+                  <tr><td>Account</td><td>Cloudflare Tunnel</td><td>Edit</td></tr>
+                  <tr><td>Zone</td><td>DNS</td><td>Edit</td></tr>
+                  <tr><td>Zone</td><td>Zone</td><td>Read</td></tr>
+                </table>
+                Under <strong>Zone Resources</strong>, include your domain.
+              </li>
+              <li>Press <strong>Continue to summary</strong>, then <strong>Create Token</strong>, and copy it. Cloudflare only shows it once.</li>
+            </ol>
+
+            <label class="inline">API token
+              <input id="tunnel-token" type="password" size="44" autocomplete="off" spellcheck="false" placeholder="paste it here">
+            </label>
             <div class="row">
-              <button type="button" id="proxy-add" class="primary">Add proxy host</button>
+              <button type="button" id="tunnel-connect" class="primary">Connect</button>
             </div>
-            <div class="notice">
-              <p>
-                <strong>Another machine can sit behind this one.</strong> Only one
-                machine on your network can hold port 443, but it does not have to
-                be the machine running the service. Choose
-                <strong>Custom host:port</strong> and give this proxy the other
-                machine's address on your network, and it will forward that name
-                to it — certificate and all, handled here.
-              </p>
-              <p>
-                So a second machine running something else needs no proxy, no
-                certificate and no forwarded port of its own. It serves plain http
-                on your network, this machine terminates HTTPS in front of it, and
-                each name goes where it belongs.
-              </p>
-            </div>
+            <p class="error" id="tunnel-connect-error" hidden></p>
+            <p class="hint">
+              The token stays on this machine, in the stack's <code>.env</code>, which only
+              this panel can read. It is used to set up the tunnel and the DNS record for
+              each name you publish, and nothing else.
+            </p>
           </article>
         </div>
       </div>
 
-      <!--
-        Its own panel, like every other service. Removing something is not a
-        thing to meet at the bottom of the page you use to configure it.
-      -->
-      <div id="sub-proxy-uninstall" class="subtab">
+      <!-- Once connected: the tunnel's health, what is published, and a form to
+           publish something else. -->
+      <div id="tunnel-live" hidden>
         <div class="grid">
-          <article class="card span2 uninstall-card" data-uninstall="proxy"></article>
+          <article class="card span2">
+            <div class="node-head">
+              <h3>Tunnel</h3>
+              <span id="tunnel-state" class="tag">–</span>
+            </div>
+            <dl class="kv">
+              <div><dt>Cloudflare account</dt><dd id="tunnel-account">–</dd></div>
+              <div><dt>Tunnel</dt><dd id="tunnel-name" class="mono">–</dd></div>
+              <div class="wide"><dt>Domains</dt><dd id="tunnel-zones">–</dd></div>
+            </dl>
+            <div id="tunnel-note" class="verdict" hidden></div>
+          </article>
+
+          <article class="card span2">
+            <h3>Published</h3>
+            <div id="tunnel-routes"></div>
+          </article>
+
+          <article class="card span2">
+            <h3>Publish something</h3>
+            <label>What
+              <select id="pub-service"></select>
+            </label>
+            <p class="muted" id="pub-detail"></p>
+            <label id="pub-origin-row" hidden>Its address on your network
+              <input id="pub-origin" placeholder="http://192.168.1.20:8123" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="pub-name">
+              <label>Name
+                <input id="pub-sub" placeholder="meals" autocomplete="off" spellcheck="false" autocapitalize="off">
+              </label>
+              <span class="pub-dot">.</span>
+              <label>Domain
+                <select id="pub-zone"></select>
+              </label>
+            </div>
+            <p class="hint" id="pub-preview">Leave the name empty to use the domain itself.</p>
+            <div id="pub-warning" class="verdict warn" hidden></div>
+            <div class="row">
+              <button type="button" id="pub-go" class="primary">Publish</button>
+            </div>
+            <p class="error" id="pub-error" hidden></p>
+          </article>
+
+          <article class="card span2 danger-zone">
+            <h3>Disconnect</h3>
+            <p class="muted">
+              Takes every name above off the internet, removes their DNS records, stops the
+              connector and forgets the token. The tunnel itself stays in your Cloudflare
+              account, empty, and is picked back up if you connect again.
+            </p>
+            <div class="row">
+              <button type="button" id="tunnel-disconnect" class="danger">Disconnect from Cloudflare</button>
+            </div>
+          </article>
         </div>
       </div>
-
     </section>
 
     <!-- ------------------------------------------------------------ logs -->
@@ -979,7 +925,7 @@
             <p class="muted">
               This updates the panel itself, not the apps it runs. It downloads the
               latest files, rebuilds the panel image and restarts it. Your
-              settings, certificates and app data are untouched, and everything
+              settings, your Cloudflare connection and app data are untouched, and everything
               else keeps running throughout.
             </p>
             <dl class="kv">
@@ -1025,7 +971,7 @@
               and it listens on your whole network so you can open it from a phone
               or a laptop. The password is what makes that safe, and it is required
               before the panel itself can go on a domain. Saving restarts the
-              panel, which takes a few seconds; the proxy and every app keep
+              panel, which takes a few seconds; the tunnel and every app keep
               running throughout.
             </p>
             <p class="hint" id="password-result" hidden></p>
@@ -1087,155 +1033,6 @@
     </main>
   </div>
 </div>
-
-<!-- ---------------------------------------------------------- setup wizard -->
-<dialog id="setup-dialog" class="wide">
-  <form method="dialog" id="setup-form">
-    <h3 id="setup-title">Set up a public address</h3>
-
-    <!-- 0: which name ------------------------------------------------------ -->
-    <section class="setup-step" data-step="0" hidden>
-      <p class="step-head"><span class="step-num">1</span> Which address?</p>
-      <p class="muted">You have names on this panel already. Use one of those, or make another.</p>
-      <div id="setup-domain-list" class="domain-choices"></div>
-    </section>
-
-    <!-- 1: the name ------------------------------------------------------- -->
-    <section class="setup-step" data-step="1">
-      <p class="step-head"><span class="step-num">1</span> Create a free DuckDNS name</p>
-      <p class="muted">
-        DuckDNS gives you a name like <code>myhome.duckdns.org</code> and keeps
-        it pointed at this machine even when your home connection changes
-        address. It is free and needs no card.
-      </p>
-      <ol class="steps">
-        <li>Open <a href="https://www.duckdns.org/" target="_blank" rel="noreferrer noopener">duckdns.org ↗</a> and sign in with an account you already have.</li>
-        <li>Type a name into the <strong>domain</strong> box and press <strong>add domain</strong>.</li>
-        <li>Copy the <strong>token</strong> shown at the top of that page. It is the password for the name.</li>
-      </ol>
-      <label class="inline">
-        Your name
-        <input id="setup-subdomain" placeholder="myhome" size="24" autocomplete="off">
-        <span class="suffix" id="setup-suffix">.duckdns.org</span>
-      </label>
-      <p class="hint">
-        One DuckDNS name covers everything beneath it, so you can put a
-        subdomain in front and give each app an address of its own:
-        <code>cloud.myhome</code> for Nextcloud and <code>media.myhome</code>
-        for Jellyfin both reach you with nothing further to set up. That is
-        better than sharing one name on paths, because an app served under a
-        path has to be told it is there, and one at its own name does not.
-      </p>
-      <p class="hint" id="setup-ip">–</p>
-    </section>
-
-    <!-- 2: the token ------------------------------------------------------ -->
-    <section class="setup-step" data-step="2" hidden>
-      <p class="step-head"><span class="step-num">2</span> Paste the token</p>
-      <p class="muted">
-        The panel keeps the name current from here on, so this is the only time
-        you need it. It is stored on this machine and never leaves it except to
-        talk to DuckDNS.
-      </p>
-      <label class="inline" id="setup-token-row">Token <input id="setup-token" type="password" size="32" autocomplete="off" placeholder="from duckdns.org"></label>
-      <p class="hint" id="setup-token-note" hidden>A token is already saved. Leave this blank to keep it.</p>
-    </section>
-
-    <!-- 3: what it will do ------------------------------------------------ -->
-    <section class="setup-step" data-step="3" hidden>
-      <p class="step-head"><span class="step-num">3</span> What this will do</p>
-      <p class="muted" id="setup-summary">–</p>
-      <ul class="plan" id="setup-plan"></ul>
-
-      <details class="protect">
-        <summary>Lock it down (optional)</summary>
-        <p class="muted">
-          Both of these apply to this address only, and either can be changed
-          later without redoing any of the above.
-        </p>
-        <label class="check">
-          <input type="checkbox" id="setup-auth"> Ask for a username and password
-        </label>
-        <div class="row" id="setup-auth-fields" hidden>
-          <label class="inline">User <input id="setup-auth-user" size="14" autocomplete="off"></label>
-          <label class="inline">Password <input id="setup-auth-pass" type="password" size="18" autocomplete="new-password"></label>
-        </div>
-        <label class="inline">
-          Only allow these addresses
-          <input id="setup-allowlist" size="28" placeholder="203.0.113.4, 10.0.0.0/24">
-        </label>
-        <p class="hint">Leave the address list empty to let anyone reach it.</p>
-      </details>
-
-      <p class="hint" id="setup-after"></p>
-      <p class="error" id="setup-error" hidden></p>
-    </section>
-
-    <menu>
-      <button type="button" class="ghost" id="setup-back">Back</button>
-      <button type="button" class="primary" id="setup-next">Next</button>
-      <button type="button" class="primary" id="setup-run" hidden>Set it up</button>
-      <button value="cancel" class="ghost">Cancel</button>
-    </menu>
-  </form>
-</dialog>
-
-<!-- ---------------------------------------------------------- proxy dialog -->
-<dialog id="proxy-dialog">
-  <form method="dialog" id="proxy-form">
-    <div class="dialog-head">
-      <h3 id="proxy-dialog-title">Add proxy host</h3>
-      <!-- formnovalidate: closing is not submitting, and the domain field is
-           required, which would otherwise refuse to let the dialog go. -->
-      <button value="cancel" class="dialog-close" formnovalidate aria-label="Close">&times;</button>
-    </div>
-
-    <label>Domain
-      <input id="px-domain" placeholder="myhome.duckdns.org" required>
-    </label>
-
-    <label>Forwards to
-      <select id="px-target"></select>
-    </label>
-
-    <div id="px-custom" class="row" hidden>
-      <label>Scheme
-        <select id="px-scheme"><option>http</option><option>https</option></select>
-      </label>
-      <label>Host <input id="px-host" placeholder="127.0.0.1"></label>
-      <label>Port <input id="px-port" type="number" min="1" max="65535"></label>
-      <label class="check"><input type="checkbox" id="px-websocket"> websocket</label>
-    </div>
-
-    <fieldset>
-      <legend>HTTPS</legend>
-      <label class="check"><input type="checkbox" id="px-tls"> Get a free certificate from Let's Encrypt</label>
-      <label class="inline">Contact e-mail <input id="px-email" type="email" placeholder="you@example.com"></label>
-      <label class="check"><input type="checkbox" id="px-forcehttps" checked> Redirect http → https</label>
-      <label class="check"><input type="checkbox" id="px-staging"> Use the staging CA (for testing)</label>
-    </fieldset>
-
-    <fieldset>
-      <legend>Access control</legend>
-      <label class="check"><input type="checkbox" id="px-auth"> Require a username and password</label>
-      <div class="row">
-        <label>User <input id="px-user" autocomplete="off"></label>
-        <label>Password <input id="px-pass" type="password" autocomplete="new-password" placeholder="unchanged"></label>
-      </div>
-      <label>Allow only these IPs / CIDRs
-        <textarea id="px-allow" rows="2" placeholder="one per line, leave empty to allow everyone"></textarea>
-      </label>
-      <label class="inline">Rate limit <input type="number" id="px-rate" min="1" placeholder="off" size="5"> req/s per IP</label>
-    </fieldset>
-
-    <label class="check"><input type="checkbox" id="px-enabled" checked> Enabled</label>
-
-    <p class="error" id="px-error" hidden></p>
-    <div class="row end">
-      <button value="save" class="primary" id="px-save">Save</button>
-    </div>
-  </form>
-</dialog>
 
 <!-- ------------------------------------------------------- confirm dialog -->
 <!-- Every "are you sure" in the panel. The browser's own confirm() names the

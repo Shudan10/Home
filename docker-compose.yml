@@ -178,7 +178,7 @@ services:
     environment:
       STACK_DIR: ${STACK_DIR}
       COMPOSE_PROJECT_NAME: quickstart-home
-      PROXY_CONTAINER: quickstart-home-proxy
+      TUNNEL_CONTAINER: quickstart-home-tunnel
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       STACK_REPO: ${STACK_REPO:-Shudan10/Home}
@@ -196,23 +196,24 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Reverse proxy for domains and HTTPS. Behind a profile like the apps: it
-  # claims ports 80 and 443, which is rude on a machine that may already serve
-  # something there, and a stack with no domains does not need it.
-  proxy:
-    image: nginx:1.27-alpine
-    container_name: quickstart-home-proxy
-    hostname: proxy
-    profiles: ["proxy"]
+  # The Cloudflare Tunnel connector. Every published app is reached through it:
+  # it dials out to Cloudflare, and requests for a published name come back
+  # down that connection to the app on this network. Nothing listens on the
+  # internet, so there are no ports to forward and no certificates to renew.
+  #
+  # Behind a profile because it has nothing to do until an account is
+  # connected; the panel starts it then, with the run token it got from
+  # Cloudflare. The version is pinned so an update is a decision, and the
+  # panel's teardown names the same tag.
+  tunnel:
+    image: cloudflare/cloudflared:${TUNNEL_VERSION:-2026.10.7}
+    container_name: quickstart-home-tunnel
+    hostname: tunnel
+    profiles: ["tunnel"]
     restart: unless-stopped
-    volumes:
-      - ${STACK_DIR}/proxy/conf.d:/etc/nginx/conf.d:ro
-      - ${STACK_DIR}/proxy/snippets:/etc/nginx/snippets:ro
-      - ${STACK_DIR}/proxy/letsencrypt:/etc/letsencrypt:ro
-      - ${STACK_DIR}/proxy/webroot:/var/www/certbot
-    ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     networks:
       - home
     logging:

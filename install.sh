@@ -24,8 +24,6 @@ STACK_DIR="${QSH_STACK_DIR:-$HOME/.quickstart-home}"
 # expects one on 8420, which is the point. --gui-port changes it, and so does
 # the panel itself once it is running.
 GUI_PORT="${QSH_GUI_PORT:-8420}"
-HTTP_PORT="${QSH_HTTP_PORT:-80}"
-HTTPS_PORT="${QSH_HTTPS_PORT:-443}"
 # Every interface, because a home server is a thing you open from the sofa. That
 # is also why the password below is not optional: this panel holds the Docker
 # socket, which is root on the host.
@@ -43,8 +41,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dir) STACK_DIR="$2"; shift 2 ;;
         --gui-port) GUI_PORT="$2"; shift 2 ;;
-        --http-port) HTTP_PORT="$2"; shift 2 ;;
-        --https-port) HTTPS_PORT="$2"; shift 2 ;;
         --bind) MANAGER_BIND="$2"; shift 2 ;;
         --password) ADMIN_PASSWORD="$2"; shift 2 ;;
         --stack-repo) STACK_REPO="$2"; shift 2 ;;
@@ -57,8 +53,6 @@ Usage: install.sh [options]
 
   --dir <path>          Where to install (default: ~/.quickstart-home)
   --gui-port <port>     Web control panel port (default: 8420)
-  --http-port <port>    nginx http port (default: 80)
-  --https-port <port>   nginx https port (default: 443)
   --bind <address>      Address the panel listens on (default: 0.0.0.0)
   --password <pass>     Password for the panel. One is generated and printed
                         if you do not supply one.
@@ -381,8 +375,7 @@ fetch_stack() {
 
     mkdir -p "$STACK_DIR"
     # Only these are replaced wholesale on a re-install. conf/ holds generated
-    # state (manager.json, proxies.json, apps.json) and proxy/ holds issued
-    # certificates and generated vhosts -- wiping either would cost real work.
+    # state (manager.json, apps.json) -- wiping it would cost real work.
     for item in docker-compose.yml manager nextcloud uninstall.sh dev.sh README.md; do
         [ -e "$src_dir/$item" ] || continue
         rm -rf "$STACK_DIR/${item:?}"
@@ -390,14 +383,7 @@ fetch_stack() {
     done
     chmod +x "$STACK_DIR/uninstall.sh" "$STACK_DIR/dev.sh" 2>/dev/null || true
 
-    mkdir -p "$STACK_DIR/conf" "$STACK_DIR/proxy/conf.d" "$STACK_DIR/proxy/snippets" \
-             "$STACK_DIR/proxy/letsencrypt" "$STACK_DIR/proxy/webroot"
-    cp "$src_dir/proxy/nginx-base.conf" "$STACK_DIR/proxy/nginx-base.conf"
-
-    # nginx needs a valid config the moment it starts; the manager regenerates
-    # this file (and the per-host ones) as soon as it boots.
-    [ -f "$STACK_DIR/proxy/conf.d/00-default.conf" ] \
-        || cp "$STACK_DIR/proxy/nginx-base.conf" "$STACK_DIR/proxy/conf.d/00-default.conf"
+    mkdir -p "$STACK_DIR/conf"
 
     ok "Stack files are in $STACK_DIR"
 }
@@ -419,8 +405,6 @@ STACK_DIR=$STACK_DIR
 STACK_REPO=$STACK_REPO
 GUI_PORT=$GUI_PORT
 MANAGER_BIND=$MANAGER_BIND
-HTTP_PORT=$HTTP_PORT
-HTTPS_PORT=$HTTPS_PORT
 SESSION_SECRET=$existing_secret
 ADMIN_PASSWORD_HASH=$existing_hash
 ENVFILE
@@ -527,15 +511,6 @@ ensure_docker
 fetch_stack
 write_env
 
-# Docker accepts a duplicate mapping and then fails to start the container, with
-# an error naming neither of the two things fighting over the port.
-if [ "$GUI_PORT" = "$HTTP_PORT" ] || [ "$GUI_PORT" = "$HTTPS_PORT" ]; then
-    die "The panel and the reverse proxy cannot both use port $GUI_PORT. Pass --gui-port with something else."
-fi
-if [ "$HTTP_PORT" = "$HTTPS_PORT" ]; then
-    die "http and https cannot share port $HTTP_PORT."
-fi
-
 prompt_for_password
 
 # One image, and it is the panel's. Nothing else is built here.
@@ -566,7 +541,7 @@ printf '  Control panel   %shttp://localhost:%s%s\n' "$B" "$GUI_PORT" "$R"
 if ! is_loopback_bind; then
     printf '                  %sand on this machine'"'"'s address on your network, same port%s\n' "$DIM" "$R"
 fi
-printf '  Installed       %sthe panel only. Nextcloud and the proxy are installed from it%s\n' "$DIM" "$R"
+printf '  Installed       %sthe panel only. Every app is installed from it%s\n' "$DIM" "$R"
 
 if [ "$GENERATED_PASSWORD" = "1" ]; then
     printf '\n  %sPassword%s        %s%s%s\n' "$B" "$R" "$B$GRN" "$ADMIN_PASSWORD" "$R"
@@ -586,10 +561,10 @@ cat <<SUMMARY
                    same way, and each has an Uninstall tab that takes its data
                    with it.
 
-  A web address    Proxy & domains sets one up end to end: a free DuckDNS name,
-                   the nginx configuration, and an HTTPS certificate from Let's
-                   Encrypt. It needs ports 80 and 443 forwarded to this machine
-                   on your router, and says so before it starts.
+  A web address    Tunnel & domains puts any app on a domain you have on
+                   Cloudflare, like meals.yourdomain.com, through a Cloudflare
+                   Tunnel. No ports to open on your router and no certificates
+                   to manage: paste one Cloudflare API token and pick a name.
 
   Everything lives in ${STACK_DIR}
   Remove it all with:

@@ -28,10 +28,9 @@ id_rsa*
 # apps.json, the port overrides, and the per-app build and last-run records.
 /conf/
 
-# nginx vhosts the manager generates, issued certificates, and the ACME
-# webroot. nginx-base.conf is the template and is tracked, so it is kept.
-/proxy/*
-!/proxy/nginx-base.conf
+# From before the Cloudflare Tunnel: nginx vhosts and issued certificates that
+# an older install may still have lying in the stack directory.
+/proxy/
 
 # Container data if a volume is ever bound into the checkout.
 /data/
