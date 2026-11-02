@@ -2289,8 +2289,19 @@ async function loadMinecraftConsoles() {
     try {
         c = await api('/api/apps/minecraft/consoles');
     } catch {
+        $('mc-consoles-checked').textContent = 'Could not check just now.';
         return;
     }
+    $('mc-consoles-checked').textContent = `Checked ${new Date().toLocaleTimeString()}`;
+    // Failing to sign in stops the bridge until the server restarts, so these
+    // states need a way forward as well as a way to look again.
+    const retry = { 'sign-in': 'Get a new code', 'no-profile': 'Try again', age: 'Try again', error: 'Try again' }[c.state];
+    $('mc-consoles-actions').hidden = c.state === 'off';
+    $('mc-consoles-retry').hidden = !retry;
+    $('mc-consoles-retry').textContent = retry ?? 'Try again';
+    // Only once an account is known. Before that there is nothing to forget:
+    // the next code can be used with whichever account they like.
+    $('mc-consoles-reset').hidden = !c.gamertag;
     const tag = $('mc-consoles-tag');
     const body = $('mc-consoles-body');
     const words = {
@@ -2298,6 +2309,7 @@ async function loadMinecraftConsoles() {
         stopped: ['waiting', ''],
         starting: ['starting', ''],
         'sign-in': ['needs sign-in', 'warn'],
+        'no-profile': ['needs an Xbox profile', 'warn'],
         age: ['needs attention', 'warn'],
         error: ['not working', 'warn'],
         connecting: ['connecting', ''],
@@ -2338,18 +2350,28 @@ async function loadMinecraftConsoles() {
         body.innerHTML = '<p class="muted">The server is starting. The console bridge signs in once the world has loaded, usually within a minute or two.</p>';
     } else if (c.state === 'sign-in') {
         body.innerHTML = `
-          <p>Sign the server in to its own Microsoft account. Once is enough; it remembers it.</p>
+          <p>Sign the server in to its own Microsoft account. Once is enough; it remembers it.
+            A new account needs an Xbox profile first: sign in to
+            <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a> with it once and pick a gamertag.</p>
           <ol class="steps">
             <li>Open <a href="${escapeHtml(c.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(c.url)} ↗</a> on any device.</li>
             <li>Enter the code <code class="mc-code">${escapeHtml(c.code)}</code></li>
             <li>Sign in with the <strong>spare</strong> account, using its password (not a passwordless sign-in).</li>
           </ol>
-          <p class="hint">This card moves on by itself once it has worked. Codes expire after about fifteen minutes; restarting the server makes a new one.</p>`;
+          <p class="hint">This card moves on by itself once it has worked. Codes expire after about fifteen minutes. Get a new code restarts the server, which takes about a minute.</p>`;
+    } else if (c.state === 'no-profile') {
+        body.innerHTML = `
+          <p class="verdict bad">Microsoft accepted that sign-in, but the account has no Xbox profile yet, so it cannot host a game.</p>
+          <ol class="steps">
+            <li>Open <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a>, sign in with the same account, and follow the prompts to pick a gamertag.</li>
+            <li>Come back and press <strong>Try again</strong>. The server restarts, which takes about a minute.</li>
+            <li>Enter the new code this card shows, and sign in again.</li>
+          </ol>`;
     } else if (c.state === 'age') {
         body.innerHTML = `<p class="verdict bad">Microsoft wants that account's age confirmed before it can play online. Sign in to
-            <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a> with it, finish the age check, then restart the server.</p>`;
+            <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a> with it, finish the age check, then press Try again.</p>`;
     } else if (c.state === 'error') {
-        body.innerHTML = `<p class="verdict bad">The console bridge stopped with an error, so consoles cannot join right now. The Console tab has the full story.</p>
+        body.innerHTML = `<p class="verdict bad">The console bridge stopped with an error, so consoles cannot join right now. Java and Bedrock players are not affected. Try again restarts the server, and the Console tab has the full story.</p>
             <p class="hint">${escapeHtml(c.error ?? '')}</p>`;
     } else {
         body.innerHTML = `
@@ -2358,13 +2380,36 @@ async function loadMinecraftConsoles() {
             <span class="muted">(${fmtNum(c.friends)} of ${fmtNum(c.maxFriends)} friends)</span></p>
           ${joinSteps(c.gamertag)}`;
     }
-
-    if (['sign-in', 'age', 'error', 'connecting', 'ready'].includes(c.state)) {
-        body.insertAdjacentHTML('beforeend',
-            '<div class="row"><button type="button" class="ghost" id="mc-consoles-reset">Use a different account</button></div>');
-        $('mc-consoles-reset').addEventListener('click', resetMinecraftConsoles);
-    }
 }
+
+$('mc-consoles-reset').addEventListener('click', resetMinecraftConsoles);
+
+$('mc-consoles-check').addEventListener('click', async () => {
+    const button = $('mc-consoles-check');
+    button.disabled = true;
+    await loadMinecraftConsoles();
+    button.disabled = false;
+});
+
+$('mc-consoles-retry').addEventListener('click', async () => {
+    const online = mcPlayers?.online?.length ?? 0;
+    if (online) {
+        const sure = await askConfirm({
+            title: 'Restart the server?',
+            body: `${online === 1 ? '1 player is' : `${online} players are`} on the server and will be disconnected for about a minute.`,
+            confirmLabel: 'Restart',
+        });
+        if (!sure) return;
+    }
+    const button = $('mc-consoles-retry');
+    button.disabled = true;
+    await queueAction({
+        title: 'Restarting Minecraft to sign in again',
+        request: (headers) => api('/api/apps/minecraft/restart', { method: 'POST', headers }),
+    });
+    button.disabled = false;
+    loadMinecraftConsoles();
+});
 
 async function resetMinecraftConsoles() {
     const sure = await askConfirm({
@@ -2396,12 +2441,20 @@ async function loadMinecraftConsole() {
             view.textContent = 'Minecraft is not installed yet.';
             return;
         }
-        const { text } = await api('/api/logs?container=minecraft&tail=400');
+        const { text } = await api('/api/logs?container=minecraft&tail=800');
         // Kept at the bottom only if it already was, so scrolling back to read
         // something is not undone by the next refresh.
         const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
         // Paper colours its console, and the codes would show as junk.
-        view.textContent = String(text ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') || 'Nothing logged yet.';
+        view.textContent =
+            String(text ?? '')
+                .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+                .split('\n')
+                // The server logs two lines for every console connection, and
+                // this page's own player list makes one every eight seconds.
+                // Left in, they bury anything worth reading.
+                .filter((line) => !/Thread RCON Client .* (?:started|shutting down)/.test(line))
+                .join('\n') || 'Nothing logged yet.';
         if (atBottom) view.scrollTop = view.scrollHeight;
     } catch {
         /* the next poll tries again */

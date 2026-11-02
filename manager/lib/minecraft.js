@@ -506,10 +506,15 @@ export async function resetConsoleAccount() {
 /**
  * Where the console bridge has got to, read from what it printed.
  *
- * The bridge only talks through the server log, and it says the three things
- * that matter in plain sentences: the code to sign in with, the account it
- * signed in as, and the one failure people hit (a young account that needs age
- * verification). The last of each wins, because the log runs across restarts.
+ * The bridge only talks through the server log, in plain sentences: the code to
+ * sign in with, the account it signed in as, and what went wrong. Whichever it
+ * said most recently is where it is now, so a code stops being shown the moment
+ * something later has happened to it.
+ *
+ * Failing to sign in is worth telling apart because the bridge never recovers
+ * by itself. It logs the failure and goes quiet until the server restarts, and
+ * it only saves the account once every step has worked -- so each attempt after
+ * a failure starts again from a new code.
  */
 export async function consoleStatus(cfg) {
     const enabled = Boolean(cfg.minecraft?.consoles);
@@ -538,21 +543,38 @@ export async function consoleStatus(cfg) {
     const ok = last(/Successfully authenticated as (.+?) \((\d+)\) with (\d+)\/(\d+) friends/);
     const age = last(/requiring age verification/);
     const live = last(/Creation of Xbox LIVE session was successful/);
-    const failed = last(/\[MCXboxBroadcast\].*(?:ERROR|Failed to create xbox session|extension will not start)/i);
+    // The bridge's errors are logged at WARN, with the reason on the next line.
+    const authFailed = last(/\[mcxboxbroadcast\].*(?:Failed to get\/refresh auth token|Failed to refresh tokens|Re-auth still failed)/i);
+    const sessionFailed = last(/\[mcxboxbroadcast\].*(?:Failed to create xbox session|extension will not start)/i);
 
-    if (ok && (!code || ok.i > code.i)) {
-        return {
-            ...base,
-            state: live ? 'ready' : 'connecting',
-            gamertag: ok.m[1].trim(),
-            friends: Number(ok.m[3]),
-            maxFriends: Number(ok.m[4]),
-        };
+    const reasonFor = (hit) => {
+        const context = lines.slice(hit.i, hit.i + 2).join('\n');
+        const reason = /error message: (.+)/.exec(context)?.[1] ?? lines[hit.i + 1]?.replace(/^[\w.$]+(?:Exception|Error):\s*/, '') ?? hit.m[0];
+        return { context, reason: reason.trim().slice(0, 240) };
+    };
+
+    const latest = [code, ok, age, authFailed].filter(Boolean).sort((a, b) => b.i - a.i)[0];
+    if (!latest) {
+        return sessionFailed ? { ...base, state: 'error', error: reasonFor(sessionFailed).reason } : { ...base, state: 'starting' };
     }
-    if (age && (!code || age.i > code.i)) return { ...base, state: 'age' };
-    if (code) return { ...base, state: 'sign-in', url: code.m[1], code: code.m[2] };
-    if (failed) return { ...base, state: 'error', error: failed.m[0].slice(0, 240) };
-    return { ...base, state: 'starting' };
+    if (latest === code) return { ...base, state: 'sign-in', url: code.m[1], code: code.m[2] };
+    if (latest === age) return { ...base, state: 'age' };
+    if (latest === authFailed) {
+        const { context, reason } = reasonFor(authFailed);
+        return /XO_E_ACCOUNT_CREATION_REQUIRED/.test(context)
+            ? { ...base, state: 'no-profile' }
+            : { ...base, state: 'error', error: reason };
+    }
+
+    const account = {
+        gamertag: ok.m[1].trim(),
+        friends: Number(ok.m[3]),
+        maxFriends: Number(ok.m[4]),
+    };
+    if (sessionFailed && sessionFailed.i > ok.i && !(live && live.i > sessionFailed.i)) {
+        return { ...base, ...account, state: 'error', error: reasonFor(sessionFailed).reason };
+    }
+    return { ...base, ...account, state: live && live.i > ok.i ? 'ready' : 'connecting' };
 }
 
 /**

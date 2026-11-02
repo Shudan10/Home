@@ -48,7 +48,8 @@ fetched fresh on every start, so a restart is also the update.
 
 Xbox, PlayStation and Switch have no Add Server button, so one switch under
 Settings adds [MCXboxBroadcast](https://github.com/MCXboxBroadcast/Broadcaster):
-the server signs in to a Microsoft account of its own (use a spare one), and
+the server signs in to a Microsoft account of its own (use a spare one, with an
+Xbox profile made at xbox.com first), and
 anyone who adds that account as a friend sees the server under Minecraft's
 Friends tab and joins from there. Joins are relayed through Xbox Live, so this
 needs no port forwarding. The panel shows the sign-in code and, once it has
