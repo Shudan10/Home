@@ -247,7 +247,10 @@ function selectTab(name) {
     if (name === 'tunnel') loadTunnel();
     // The player lists change by themselves -- people join and leave -- so
     // they are fetched on arrival and then kept fresh while the tab is open.
-    if (name === 'minecraft') loadMinecraftPlayers();
+    if (name === 'minecraft') {
+        loadMinecraftPlayers();
+        if (activeSubtab('minecraft') === 'minecraft-worlds') loadMinecraftWorlds();
+    }
     // On the drawer layout, picking a destination should get out of the way.
     if (MOBILE()) closeDrawer();
 }
@@ -1574,7 +1577,7 @@ function renderAppState(name, state) {
                 health === 'starting'
                     ? 'Starting. The first time, it downloads the game and builds the world, which takes a few minutes. Players can join once this says ready.'
                     : health === 'unhealthy'
-                      ? 'Running, but not answering players. The Console tab shows what it last said.'
+                      ? 'Running, but not answering players. The Log tab shows what it last said.'
                       : 'Running and ready. Players can join with these addresses.';
         } else {
             const note = appStatusNote(state, {
@@ -2189,7 +2192,7 @@ function renderMinecraftPlayers() {
 
     $('mc-ops-list').innerHTML = p.ops.length
         ? p.ops.map((player) => mcRow(player, '', [mcButton(player, 'deop', 'Remove')])).join('')
-        : '<p class="muted">No operators. Without one, nobody can use commands in the game, only here in the Console.</p>';
+        : '<p class="muted">No operators. Without one, nobody can use commands in the game, only in the Log tab here.</p>';
 
     $('mc-bans-list').innerHTML =
         p.bans.length || p.ipBans.length
@@ -2198,7 +2201,7 @@ function renderMinecraftPlayers() {
                   // Address bans are made in the game with /ban-ip. Shown so
                   // they are not invisible, lifted from the console.
                   ...p.ipBans.map(
-                      (b) => `<div class="media-row"><div class="mc-player"><strong>${escapeHtml(b.ip)}</strong><span class="tag">address</span><span class="muted">${escapeHtml(b.reason || '')} · lift with pardon-ip in the Console</span></div></div>`,
+                      (b) => `<div class="media-row"><div class="mc-player"><strong>${escapeHtml(b.ip)}</strong><span class="tag">address</span><span class="muted">${escapeHtml(b.reason || '')} · lift with pardon-ip in the Log tab</span></div></div>`,
                   ),
               ].join('')
             : '<p class="muted">Nobody is banned.</p>';
@@ -2371,7 +2374,7 @@ async function loadMinecraftConsoles() {
         body.innerHTML = `<p class="verdict bad">Microsoft wants that account's age confirmed before it can play online. Sign in to
             <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a> with it, finish the age check, then press Try again.</p>`;
     } else if (c.state === 'error') {
-        body.innerHTML = `<p class="verdict bad">The console bridge stopped with an error, so consoles cannot join right now. Java and Bedrock players are not affected. Try again restarts the server, and the Console tab has the full story.</p>
+        body.innerHTML = `<p class="verdict bad">The console bridge stopped with an error, so consoles cannot join right now. Java and Bedrock players are not affected. Try again restarts the server, and the Log tab has the full story.</p>
             <p class="hint">${escapeHtml(c.error ?? '')}</p>`;
     } else {
         body.innerHTML = `
@@ -2428,14 +2431,174 @@ async function resetMinecraftConsoles() {
     loadMinecraftConsoles();
 }
 
-// --- console ---
+// --- worlds ---
 
-let mcConsoleBusy = false;
+let mcWorlds = null;
 
-async function loadMinecraftConsole() {
-    if (mcConsoleBusy) return;
-    mcConsoleBusy = true;
-    const view = $('mc-console');
+async function loadMinecraftWorlds() {
+    try {
+        mcWorlds = await api('/api/apps/minecraft/worlds');
+    } catch (e) {
+        $('mc-worlds-list').innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+        return;
+    }
+    const list = mcWorlds.worlds;
+    const note = $('mc-worlds-note');
+    const hasCurrent = list.some((w) => w.current);
+    const msg = !mcWorlds.installed
+        ? 'Minecraft is not installed yet, so there are no worlds to show.'
+        : !hasCurrent
+          ? `The server is set to "${mcWorlds.current}", which does not exist yet. It makes a new world with that name the next time it starts.`
+          : null;
+    note.hidden = !msg;
+    note.textContent = msg ?? '';
+
+    $('mc-worlds-list').innerHTML = list.length
+        ? list
+              .map((w) => {
+                  const facts = [
+                      w.version ? `Minecraft ${w.version}` : null,
+                      humanBytes(w.bytes),
+                      w.lastPlayed ? `last played ${new Date(w.lastPlayed).toLocaleDateString()}` : null,
+                  ].filter(Boolean);
+                  // The name inside the world is what people recognise, but the
+                  // folder is what the panel and the server call it.
+                  const title = w.levelName || w.name;
+                  return `<div class="media-row">
+                      <div class="mc-player">
+                        <strong>${escapeHtml(title)}</strong>
+                        ${w.current ? '<span class="tag ok">in use</span>' : ''}
+                        ${w.newer ? '<span class="tag warn">newer than this server</span>' : ''}
+                        <span class="muted">${title === w.name ? '' : `${escapeHtml(w.name)} · `}${escapeHtml(facts.join(' · '))}</span>
+                      </div>
+                      ${w.current ? '' : `<div class="mc-actions"><button type="button" class="ghost mini" data-mc-world="${escapeHtml(w.name)}">Switch to this world</button></div>`}
+                  </div>`;
+              })
+              .join('')
+        : '<p class="muted">No worlds yet. The server makes its first one when it first starts, or add your own below.</p>';
+}
+
+document.querySelector('[data-subtab="minecraft-worlds"]').addEventListener('click', loadMinecraftWorlds);
+
+$('mc-worlds-list').addEventListener('click', async (event) => {
+    const button = event.target.closest?.('[data-mc-world]');
+    if (!button) return;
+    const name = button.dataset.mcWorld;
+    const world = mcWorlds?.worlds?.find((w) => w.name === name);
+    const label = world?.levelName || name;
+
+    if (mcWorlds?.running || world?.newer) {
+        const online = mcPlayers?.online?.length ?? 0;
+        const sure = await askConfirm({
+            title: `Switch to ${label}?`,
+            body: [
+                mcWorlds?.running
+                    ? online
+                        ? `The server restarts, which disconnects ${online === 1 ? 'the 1 player' : `all ${online} players`} for about a minute.`
+                        : 'The server restarts, which takes about a minute.'
+                    : null,
+                'The current world is saved and kept.',
+                world?.newer
+                    ? `\n${label} was made with a newer Minecraft than the world in use. If the server has not moved to that version, it will refuse to start until you switch back or set a newer version.`
+                    : null,
+            ].filter(Boolean).join(' '),
+            confirmLabel: 'Switch',
+        });
+        if (!sure) return;
+    }
+    button.disabled = true;
+    const result = await queueAction({
+        title: `Switching Minecraft to ${label}`,
+        request: (headers) => api('/api/apps/minecraft/worlds/switch', { method: 'POST', headers, body: { name } }),
+    });
+    if (!result.ok && result.error) toast(result.error, 'bad');
+    button.disabled = false;
+    loadMinecraftWorlds();
+    loadApps();
+});
+
+const worldAddResult = (result) => {
+    if (result.ok) toast('World added. Press Switch to this world when you want to play it.');
+    else if (result.error) toast(result.error, 'bad');
+    loadMinecraftWorlds();
+};
+
+/** XHR rather than fetch, because only XHR reports how far an upload has got. */
+function sendWorldFile(file, headers) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/api/apps/minecraft/worlds/upload?filename=${encodeURIComponent(file.name)}`);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
+        xhr.upload.addEventListener('progress', (event) => {
+            if (!event.lengthComputable) return;
+            const pct = Math.round((event.loaded / event.total) * 100);
+            $('mc-world-pct').textContent = `${pct}%`;
+            $('mc-world-bar').style.width = `${pct}%`;
+        });
+        xhr.addEventListener('load', () => {
+            let data = {};
+            try {
+                data = JSON.parse(xhr.responseText);
+            } catch {
+                /* a proxy's error page, for one */
+            }
+            if (xhr.status === 401) showLogin();
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+            else if (xhr.status === 413) reject(new Error(data.error || 'That file is too big to send this way. Open the panel by its home address, or add it from this machine.'));
+            else reject(new Error(data.error || `The upload failed (${xhr.status}).`));
+        });
+        xhr.addEventListener('error', () => reject(new Error('The upload was cut off. Check the connection and try again.')));
+        xhr.send(file);
+    });
+}
+
+$('mc-world-upload').addEventListener('click', async () => {
+    const box = $('mc-world-file');
+    const file = box.files?.[0];
+    if (!file) return toast('Choose a file first.', 'bad');
+    // Said now rather than after sending all of it.
+    if (/\.(?:mcworld|mctemplate)$/i.test(file.name)) {
+        return toast('That is a Bedrock world, and this server runs Java worlds. Convert it with Chunker first (chunker.app).', 'bad');
+    }
+    const button = $('mc-world-upload');
+    button.disabled = true;
+    $('mc-world-progress').hidden = false;
+    $('mc-world-pct').textContent = '0%';
+    $('mc-world-bar').style.width = '0%';
+    const result = await queueAction({
+        title: `Adding ${file.name}`,
+        request: (headers) => sendWorldFile(file, headers),
+    });
+    $('mc-world-progress').hidden = true;
+    button.disabled = false;
+    if (result.ok) box.value = '';
+    worldAddResult(result);
+});
+
+$('mc-world-add').addEventListener('click', async () => {
+    const box = $('mc-world-path');
+    const path = box.value.trim();
+    if (!path) return toast('Type the path first.', 'bad');
+    const button = $('mc-world-add');
+    button.disabled = true;
+    const result = await queueAction({
+        title: `Adding ${path.split('/').filter(Boolean).pop() ?? 'a world'}`,
+        request: (headers) => api('/api/apps/minecraft/worlds/import', { method: 'POST', headers, body: { path } }),
+    });
+    button.disabled = false;
+    if (result.ok) box.value = '';
+    worldAddResult(result);
+});
+
+// --- log ---
+
+let mcLogBusy = false;
+
+async function loadMinecraftLog() {
+    if (mcLogBusy) return;
+    mcLogBusy = true;
+    const view = $('mc-log');
     try {
         if (!appsState?.apps?.minecraft?.container?.exists) {
             view.textContent = 'Minecraft is not installed yet.';
@@ -2459,7 +2622,7 @@ async function loadMinecraftConsole() {
     } catch {
         /* the next poll tries again */
     } finally {
-        mcConsoleBusy = false;
+        mcLogBusy = false;
     }
 }
 
@@ -2474,7 +2637,7 @@ async function sendMinecraftCommand(command) {
         toast(e.message, 'bad');
         return false;
     } finally {
-        loadMinecraftConsole();
+        loadMinecraftLog();
     }
 }
 
@@ -2500,9 +2663,9 @@ setInterval(() => {
     if (mcVisible()) loadMinecraftPlayers();
 }, 8000);
 setInterval(() => {
-    if (mcVisible() && activeSubtab('minecraft') === 'minecraft-console') loadMinecraftConsole();
+    if (mcVisible() && activeSubtab('minecraft') === 'minecraft-log') loadMinecraftLog();
 }, 3000);
-document.querySelector('[data-subtab="minecraft-console"]').addEventListener('click', loadMinecraftConsole);
+document.querySelector('[data-subtab="minecraft-log"]').addEventListener('click', loadMinecraftLog);
 
 // -------------------------------------------------------------- lifecycle ---
 

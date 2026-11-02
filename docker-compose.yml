@@ -194,6 +194,8 @@ services:
       EULA: ${MINECRAFT_EULA:-FALSE}
       TYPE: PAPER
       VERSION: ${MINECRAFT_VERSION:-LATEST}
+      # Which folder in the data volume is the world. Worlds tab in the panel.
+      LEVEL: ${MINECRAFT_LEVEL:-world}
       MEMORY: ${MINECRAFT_MEMORY:-2G}
       USE_AIKAR_FLAGS: "true"
       PLUGINS: |

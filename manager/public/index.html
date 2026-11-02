@@ -756,8 +756,9 @@
       <nav class="subnav" aria-label="Minecraft">
         <button class="subtab-btn active" data-subtab="minecraft-overview">Overview</button>
         <button class="subtab-btn" data-subtab="minecraft-players">Players</button>
+        <button class="subtab-btn" data-subtab="minecraft-worlds">Worlds</button>
         <button class="subtab-btn" data-subtab="minecraft-settings">Settings</button>
-        <button class="subtab-btn" data-subtab="minecraft-console">Console</button>
+        <button class="subtab-btn" data-subtab="minecraft-log">Log</button>
         <button class="subtab-btn" data-subtab="minecraft-updates">Updates</button>
         <button class="subtab-btn" data-subtab="minecraft-uninstall">Uninstall</button>
       </nav>
@@ -893,6 +894,63 @@
               <input id="mc-ban-reason" autocomplete="off" placeholder="Reason (optional, they see this)" aria-label="Ban reason">
               <button type="button" id="mc-ban-add" class="ghost danger">Ban</button>
             </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-minecraft-worlds" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Worlds on this server</h3>
+            <p class="muted">
+              The server plays one world at a time. Switching restarts it, and the
+              world you leave is saved and stays here, ready to switch back to.
+            </p>
+            <div id="mc-worlds-note" class="verdict" hidden></div>
+            <div id="mc-worlds-list" class="media-list"><p class="muted">Loading…</p></div>
+            <p class="hint">
+              The allow list, operators and bans belong to the server, so they
+              carry over. So do the settings, including game mode and difficulty.
+              Each player's inventory and position belong to the world.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Upload a world</h3>
+            <p class="muted">From the computer or phone you are reading this on, as a <code>.zip</code> or <code>.tar.gz</code> of the world folder.</p>
+            <input type="file" id="mc-world-file" accept=".zip,.tar.gz,.tgz,.mcworld" aria-label="World file">
+            <div class="row">
+              <button type="button" id="mc-world-upload" class="primary">Upload</button>
+            </div>
+            <div id="mc-world-progress" class="meter-row" hidden>
+              <span class="meter-pct" id="mc-world-pct">0%</span>
+              <div class="meter"><span class="meter-fill" id="mc-world-bar"></span></div>
+            </div>
+            <p class="hint">
+              On a PC, Java Edition worlds are in <code>%appdata%\.minecraft\saves</code>.
+              Right-click a world's folder and compress it. On a domain through
+              the tunnel, Cloudflare refuses uploads over 100 MB, so open the panel
+              by its home address for anything bigger.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Add from this machine</h3>
+            <p class="muted">A world folder or archive already on this computer, including on a plugged-in drive. It is copied, and the original is left alone.</p>
+            <input id="mc-world-path" autocomplete="off" spellcheck="false" placeholder="/home/you/.minecraft/saves/My World" aria-label="Path to a world">
+            <div class="row">
+              <button type="button" id="mc-world-add" class="primary">Add world</button>
+            </div>
+            <p class="hint">The path as this machine sees it, not as another computer sees it over the network.</p>
+          </article>
+
+          <article class="card span2">
+            <h3>Before you switch</h3>
+            <ul class="steps">
+              <li><strong>Java worlds only.</strong> Bedrock players join them through Geyser. A Bedrock world (<code>.mcworld</code>) has to be converted first; <a href="https://www.chunker.app" target="_blank" rel="noreferrer noopener">Chunker ↗</a> does that.</li>
+              <li><strong>Upgrading is one way.</strong> A world from an older Minecraft is upgraded when the server opens it, and then cannot go back. Keep your original copy.</li>
+              <li><strong>Check all three dimensions</strong> the first time you play an old world, especially one from an older Paper or Spigot server, which kept its Nether and End in separate folders.</li>
+            </ul>
           </article>
         </div>
       </div>
@@ -1038,11 +1096,11 @@
         </div>
       </div>
 
-      <div id="sub-minecraft-console" class="subtab">
+      <div id="sub-minecraft-log" class="subtab">
         <div class="grid">
           <article class="card span2">
-            <h3>Console</h3>
-            <pre id="mc-console" class="logview mc-console">The server is not running.</pre>
+            <h3>Log</h3>
+            <pre id="mc-log" class="logview mc-log">The server is not running.</pre>
             <form class="row" id="mc-command-form">
               <input id="mc-command" autocomplete="off" spellcheck="false" placeholder="A command, like: time set day" aria-label="Server command">
               <button type="submit" class="primary">Send</button>

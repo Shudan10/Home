@@ -1,5 +1,12 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import zlib from 'node:zlib';
+import { MINECRAFT_RESERVED_FOLDERS, MINECRAFT_WORLD_RE } from './apps.js';
 import { containerState, docker } from './dockerctl.js';
+import { STACK_LOCAL, hostPath } from './paths.js';
 
 /**
  * The Minecraft server's players: who is on, who may join, who runs it, who is
@@ -438,6 +445,293 @@ export async function act(input, cfg) {
         default:
             throw userError('Not something the panel knows how to do to a player.');
     }
+}
+
+// ------------------------------------------------------------------ worlds ---
+
+/*
+ * A world is one folder in the data volume, and the server plays whichever one
+ * LEVEL names. So adding a world is copying a folder in, and switching is
+ * changing that name and restarting. Neither touches the world being left: it
+ * stays where it is, and switching back is the same operation.
+ */
+
+const LOAD_LEVEL_DAT_UNDER = 8 * 1024 * 1024;
+
+/** Just enough of Minecraft's NBT format to read a world's name and version. */
+function readNbt(buf) {
+    let p = 0;
+    const str = () => {
+        const n = buf.readUInt16BE(p);
+        p += 2;
+        const s = buf.toString('utf8', p, p + n);
+        p += n;
+        return s;
+    };
+    const skipArray = (width) => {
+        const n = buf.readInt32BE(p);
+        if (n < 0 || p + 4 + n * width > buf.length) throw new Error('Bad array in level.dat');
+        p += 4 + n * width;
+        return null;
+    };
+    const value = (type) => {
+        switch (type) {
+            case 1: p += 1; return buf.readInt8(p - 1);
+            case 2: p += 2; return buf.readInt16BE(p - 2);
+            case 3: p += 4; return buf.readInt32BE(p - 4);
+            case 4: p += 8; return Number(buf.readBigInt64BE(p - 8));
+            case 5: p += 4; return buf.readFloatBE(p - 4);
+            case 6: p += 8; return buf.readDoubleBE(p - 8);
+            case 7: return skipArray(1);
+            case 8: return str();
+            case 9: {
+                const inner = buf.readInt8(p);
+                const n = buf.readInt32BE(p + 1);
+                p += 5;
+                const out = [];
+                for (let i = 0; i < n; i += 1) out.push(value(inner));
+                return out;
+            }
+            case 10: {
+                const out = {};
+                for (;;) {
+                    const t = buf.readInt8(p);
+                    p += 1;
+                    if (t === 0) return out;
+                    const key = str();
+                    out[key] = value(t);
+                }
+            }
+            case 11: return skipArray(4);
+            case 12: return skipArray(8);
+            default: throw new Error(`Unknown NBT type ${type}`);
+        }
+    };
+    if (buf.readInt8(p) !== 10) throw new Error('level.dat does not start with a compound tag');
+    p += 1;
+    str();
+    return value(10);
+}
+
+/** What a level.dat says about its world. Anything unreadable is just not shown. */
+export function describeLevelDat(base64) {
+    try {
+        const nbt = readNbt(zlib.gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: 64 * 1024 * 1024 }));
+        const data = nbt.Data ?? {};
+        return {
+            levelName: typeof data.LevelName === 'string' ? data.LevelName : null,
+            version: typeof data.Version?.Name === 'string' ? data.Version.Name : null,
+            dataVersion: Number(data.DataVersion ?? data.Version?.Id) || null,
+            lastPlayed: Number(data.LastPlayed) || null,
+        };
+    } catch {
+        return { levelName: null, version: null, dataVersion: null, lastPlayed: null };
+    }
+}
+
+/** The worlds in the data volume, and which one the server plays. */
+export async function listWorlds(cfg) {
+    const state = await containerState(CONTAINER);
+    const current = cfg.minecraft.level;
+    const base = { installed: state.exists, running: state.running, current, worlds: [] };
+    if (!state.exists) return base;
+
+    const script =
+        'cd "$D" || exit 1; for f in */level.dat; do [ -f "$f" ] || continue; w="${f%/level.dat}"; ' +
+        's=$(wc -c < "$f"); printf \'\\n@@W %s %s %s\\n\' "$w" "$(du -sk "$w" | cut -f1)" "$s"; ' +
+        `[ "$s" -lt ${LOAD_LEVEL_DAT_UNDER} ] && base64 "$f" | tr -d '\\n'; done; printf '\\n'`;
+    const { stdout } = await inDataDir(state.running, script);
+
+    const rows = [];
+    const parts = stdout.split(/\n@@W (\S+) (\d+) (\d+)\n/);
+    for (let i = 1; i < parts.length; i += 4) {
+        rows.push({ name: parts[i], bytes: Number(parts[i + 1]) * 1024, ...describeLevelDat(parts[i + 3].trim()) });
+    }
+    const names = new Set(rows.map((r) => r.name));
+    const newest = rows.find((r) => r.name === current)?.dataVersion ?? null;
+    base.worlds = rows
+        // Names the panel could not switch to, and the Nether and End of an
+        // older Paper world, which are part of that world rather than their own.
+        .filter((r) => MINECRAFT_WORLD_RE.test(r.name) && !MINECRAFT_RESERVED_FOLDERS.has(r.name))
+        .filter((r) => !names.has(r.name.replace(/_(?:nether|the_end)$/, '')) || !/_(?:nether|the_end)$/.test(r.name))
+        .map((r) => ({ ...r, current: r.name === current, newer: Boolean(newest && r.dataVersion && r.dataVersion > newest) }))
+        .sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name));
+    return base;
+}
+
+/*
+ * Copies one world into the volume, and never over anything.
+ *
+ * Unpacked inside the volume, so that the last step is a rename and a half-done
+ * copy is never mistaken for a world. A Bedrock world has a level.dat too, so
+ * the check for one comes before the check for a world at all. The exit codes
+ * are how importWorld tells these apart.
+ */
+export const IMPORT_SCRIPT = String.raw`
+set -u
+t="/d/.qsh-import-$$"
+trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/x" || exit 1
+if [ -d /in ]; then
+  scan=/in
+  depth="-maxdepth 3"
+else
+  scan="$t/x"
+  depth=""
+  case "$(head -c 2 /in | od -An -tx1 | tr -d ' \n')" in
+    504b) echo "Unpacking the zip..."; unzip -q /in -d "$t/x" || [ $? -eq 1 ] || exit 1 ;;
+    1f8b) echo "Unpacking the archive..."; tar -xzf /in -C "$t/x" -o || exit 1 ;;
+    *) exit 6 ;;
+  esac
+  find "$t/x" -type l -delete
+fi
+
+find "$scan" $depth -type f -name level.dat ! -path '*/__MACOSX/*' > "$t/all"
+[ -s "$t/all" ] || exit 4
+m=$(awk -F/ '{ if (!m || NF<m) m=NF } END { print m }' "$t/all")
+awk -F/ -v m="$m" 'NF==m' "$t/all" | grep -Ev '(_nether|_the_end)/level\.dat$' > "$t/roots"
+[ -s "$t/roots" ] || awk -F/ -v m="$m" 'NF==m' "$t/all" | head -1 > "$t/roots"
+if [ "$(wc -l < "$t/roots")" -gt 1 ]; then
+  while IFS= read -r f; do basename "$(dirname "$f")"; done < "$t/roots"
+  exit 5
+fi
+root="$(dirname "$(cat "$t/roots")")"
+if [ -d "$root/db" ] || [ -f "$root/levelname.txt" ]; then exit 3; fi
+
+name="$QSH_NAME"
+if [ "$root" != "$scan" ]; then
+  b="$(printf %s "$(basename "$root")" | tr -c 'A-Za-z0-9_-' '_' | cut -c1-40)"
+  case "$b" in
+    ""|[!A-Za-z0-9]*|plugins|libraries|logs|versions|config|cache) ;;
+    *) name="$b" ;;
+  esac
+fi
+n="$name"; i=2
+while [ -e "/d/$n" ]; do n="$name-$i"; i=$((i+1)); done
+
+echo "Adding it as $n..."
+parent="$(dirname "$root")"
+oldname="$(basename "$root")"
+# An older Paper world keeps its Nether and End beside it. They go along under
+# the names Paper looks for, so it can find them when it upgrades the world.
+for part in "" _nether _the_end; do
+  src="$parent/$oldname$part"
+  [ -d "$src" ] || continue
+  if [ "$scan" = /in ]; then
+    cp -a "$src" "$t/w$part" || exit 1
+    mv "$t/w$part" "/d/$n$part" || exit 1
+  else
+    mv "$src" "/d/$n$part" || exit 1
+  fi
+  rm -f "/d/$n$part/session.lock"
+  find "/d/$n$part" -type l -delete
+  chown -R "$(stat -c %u:%g /d)" "/d/$n$part"
+done
+echo "QSH_WORLD=$n"
+`;
+
+const IMPORT_HELPER = 'quickstart-home/manager:1';
+
+function worldNameFrom(raw) {
+    const cleaned = path
+        .basename(String(raw ?? '').replace(/\\/g, '/').replace(/\/+$/, ''))
+        .replace(/\.(?:zip|tar\.gz|tgz)$/i, '')
+        .replace(/[^A-Za-z0-9_-]+/g, '_')
+        .replace(/^[^A-Za-z0-9]+/, '')
+        .slice(0, 30);
+    return !cleaned || MINECRAFT_RESERVED_FOLDERS.has(cleaned) ? 'imported-world' : cleaned;
+}
+
+/** Brings a world in from a folder or archive at this path on the host. */
+export async function importWorld({ source, suggestedName, onLine = () => {} }) {
+    const state = await containerState(CONTAINER);
+    if (!state.exists) throw userError('Minecraft is not installed yet.', 409);
+
+    const captured = [];
+    const onOutput = (line) => {
+        captured.push(line);
+        if (!line.startsWith('QSH_WORLD=')) onLine(line);
+    };
+    try {
+        await docker(
+            [
+                'run', '--rm',
+                '-e', `QSH_NAME=${worldNameFrom(suggestedName)}`,
+                // --mount, not -v: for a path that is not there, -v makes an
+                // empty root-owned folder and carries on. This refuses.
+                '--mount', `type=bind,source=${source},target=/in,readonly`,
+                '-v', `${VOLUME}:/d`,
+                IMPORT_HELPER, 'sh', '-c', IMPORT_SCRIPT,
+            ],
+            { onLine: onOutput, timeoutMs: 3 * 60 * 60_000 },
+        );
+    } catch (err) {
+        const found = captured.filter((l) => l && !l.startsWith('Unpacking')).join(', ');
+        const messages = {
+            3: 'That is a Bedrock world. This server runs Java Edition worlds, and Bedrock players see them through Geyser, so it has to be converted first. Chunker (chunker.app) converts Bedrock worlds to Java.',
+            4: 'There is no Minecraft world in that. A world is a folder with a file called level.dat directly inside it.',
+            5: `That holds more than one world (${found}). Add them one at a time.`,
+            6: 'That is not a format the panel can read. Use a .zip or .tar.gz of the world folder.',
+        };
+        if (messages[err.code]) throw userError(messages[err.code]);
+        if (/bind source path does not exist/i.test(err.message)) {
+            throw userError('That path does not exist on this machine. Give it as this machine sees it.');
+        }
+        throw err;
+    }
+    const name = captured.find((l) => l.startsWith('QSH_WORLD='))?.slice('QSH_WORLD='.length);
+    if (!name) throw new Error('The copy finished without saying what it added.');
+    onLine(`Added "${name}". The Worlds tab switches to it.`);
+    return { name };
+}
+
+// Files the browser sends wait here, in the stack directory, because that is
+// somewhere both this container and a helper container can reach.
+const UPLOAD_DIR = path.join(STACK_LOCAL, 'uploads');
+const MAX_UPLOAD = 100 * 1024 * 1024 * 1024;
+
+/** Writes an upload to disk as it arrives, since a world can be far bigger than memory. */
+export async function saveUpload(req) {
+    const state = await containerState(CONTAINER);
+    if (!state.exists) throw userError('Minecraft is not installed yet.', 409);
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    const id = crypto.randomUUID();
+    const file = path.join(UPLOAD_DIR, id);
+    let size = 0;
+    const limit = new Transform({
+        transform(chunk, _encoding, done) {
+            size += chunk.length;
+            done(size > MAX_UPLOAD ? userError('That file is over the 100 GB limit.', 413) : null, chunk);
+        },
+    });
+    try {
+        await pipeline(req, limit, fs.createWriteStream(file, { flags: 'wx', mode: 0o600 }));
+    } catch (err) {
+        fs.rmSync(file, { force: true });
+        throw err;
+    }
+    if (!size) {
+        fs.rmSync(file, { force: true });
+        throw userError('That file is empty.');
+    }
+    return { file, source: hostPath('uploads', id) };
+}
+
+/** Anything an interrupted upload or import left behind. Run at startup. */
+export function clearUploads() {
+    fs.rmSync(UPLOAD_DIR, { recursive: true, force: true });
+}
+
+/**
+ * Checks a typed path before it goes near a mount. The comma matters: --mount
+ * is a comma-separated list, so one in a path would start another option.
+ */
+export function checkImportPath(raw) {
+    const value = String(raw ?? '').trim().replace(/(.)\/+$/, '$1');
+    if (!value.startsWith('/')) throw userError('Give the full path, starting with a /, as this machine sees it.');
+    if (/[\0-\x1f,]/.test(value) || value.split('/').includes('..')) throw userError('That path contains a character this cannot use, such as a comma.');
+    if (value === '/') throw userError('That is the whole machine. Give the world folder itself.');
+    return value;
 }
 
 // ---------------------------------------------------------------- consoles ---

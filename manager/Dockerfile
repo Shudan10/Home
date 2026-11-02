@@ -17,6 +17,9 @@ RUN apk add --no-cache \
     # image, because it is the one image certainly present -- pulling something
     # would make a backup depend on the network reaching a registry.
     rsync \
+    # Unpacks uploaded Minecraft worlds. BusyBox has an unzip of its own, but
+    # it cannot read zip64 archives, which is what a world over 4 GB comes as.
+    unzip \
     tini
 
 WORKDIR /app

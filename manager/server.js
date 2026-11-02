@@ -1072,6 +1072,82 @@ route('POST', /^\/api\/apps\/minecraft\/consoles\/reset$/, async (req, res) => {
     sendJson(res, 202, { ok: true, restarting: true, jobId: job.id });
 });
 
+/*
+ * The worlds in the server's volume. Adding one is a job, since a world can be
+ * gigabytes, and it only ever adds: nothing here can overwrite or delete one.
+ */
+route('GET', /^\/api\/apps\/minecraft\/worlds$/, async (req, res) => {
+    try {
+        sendJson(res, 200, await minecraft.listWorlds(apps.loadAppsConfig()));
+    } catch (err) {
+        fail(res, err.status ?? 500, err.message);
+    }
+});
+
+// Before readBody on purpose: the body is the file, and it is not JSON.
+route('POST', /^\/api\/apps\/minecraft\/worlds\/upload$/, async (req, res, match, url) => {
+    let saved;
+    try {
+        saved = await minecraft.saveUpload(req);
+    } catch (err) {
+        if (res.destroyed) return;
+        return fail(res, err.status ?? 500, err.message);
+    }
+    const suggestedName = url.searchParams.get('filename') ?? '';
+    const job = jobs.start('Add a Minecraft world', async (onLine) => {
+        try {
+            return await minecraft.importWorld({ source: saved.source, suggestedName, onLine });
+        } finally {
+            fs.rmSync(saved.file, { force: true });
+        }
+    });
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/apps\/minecraft\/worlds\/import$/, async (req, res) => {
+    const body = await readBody(req);
+    let source;
+    try {
+        source = minecraft.checkImportPath(body.path);
+    } catch (err) {
+        return fail(res, err.status ?? 400, err.message);
+    }
+    const job = jobs.start('Add a Minecraft world', async (onLine) =>
+        minecraft.importWorld({ source, suggestedName: source, onLine }));
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/apps\/minecraft\/worlds\/switch$/, async (req, res) => {
+    const body = await readBody(req);
+    const cfg = apps.loadAppsConfig();
+    const { worlds, running } = await minecraft.listWorlds(cfg);
+    const target = worlds.find((w) => w.name === body.name);
+    if (!target) return fail(res, 404, 'That world is not on this server.');
+    if (target.current) return sendJson(res, 200, { ok: true, message: `${target.name} is already the world in use.` });
+
+    const apply = () => {
+        cfg.minecraft.level = target.name;
+        apps.saveAppsConfig(cfg);
+        apps.writeAppsEnv(cfg);
+    };
+    if (!running) {
+        apply();
+        return sendJson(res, 200, { ok: true, message: `Minecraft will play ${target.name} the next time it starts.` });
+    }
+    const app = apps.APPS.minecraft;
+    const job = jobs.start(`Switch Minecraft to ${target.name}`, async (onLine) => {
+        apply();
+        onLine(`Switching to ${target.name}. The current world is saved and kept.`);
+        await minecraft.syncConsoleBridge(cfg.minecraft.consoles, onLine);
+        await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...app.services], {
+            onLine,
+            profile: app.profile,
+            timeoutMs: 10 * 60_000,
+        });
+    });
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
 route('GET', /^\/api\/apps\/minecraft\/public-address$/, async (req, res) => {
     try {
         sendJson(res, 200, { address: await minecraft.publicAddress() });
@@ -1427,7 +1503,12 @@ async function retireOldProxy() {
 
 // ------------------------------------------------------------------- server --
 
-const server = http.createServer(async (req, res) => {
+// Node gives a whole request five minutes by default, which an upload of a
+// large world over Wi-Fi can outlast. headersTimeout stays at its default, so a
+// client that never finishes sending its headers is still dropped.
+const WHOLE_REQUEST_TIMEOUT_MS = 12 * 60 * 60_000;
+
+const server = http.createServer({ requestTimeout: WHOLE_REQUEST_TIMEOUT_MS }, async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
     const isApi = url.pathname.startsWith('/api/') || url.pathname === '/healthz';
@@ -1511,6 +1592,7 @@ async function bootstrap() {
     }
 
     await retireOldProxy();
+    minecraft.clearUploads();
 
     // Queued rather than run directly, so a scheduled copy shares the one-at-a-
     // time queue with everything else and cannot start while an image is

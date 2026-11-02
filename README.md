@@ -43,8 +43,10 @@ Floodgate, so Bedrock players sign in with their Xbox account and need no Java
 one. The panel holds the settings worth having (game mode, difficulty, PvP,
 memory, version, world seed) and manages who can play: an allow list,
 operators, bans and kicks, by Java name or Bedrock gamertag, whether or not the
-server is running. There is a console for anything else. Paper and Geyser are
-fetched fresh on every start, so a restart is also the update.
+server is running. Add your own Java Edition worlds by uploading them or from a
+folder on this machine, and switch between them under Worlds; the one you leave
+is kept. The Log tab shows what the server says and takes commands. Paper and
+Geyser are fetched fresh on every start, so a restart is also the update.
 
 Xbox, PlayStation and Switch have no Add Server button, so one switch under
 Settings adds [MCXboxBroadcast](https://github.com/MCXboxBroadcast/Broadcaster):

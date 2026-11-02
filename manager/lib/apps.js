@@ -186,11 +186,21 @@ export const DEFAULT_APPS_CONFIG = {
         // tab. Off by default because it signs a Microsoft account into the
         // server, and which account that is should be somebody's decision.
         consoles: false,
+        // The folder in the data volume that is the world. Changed from the
+        // Worlds tab, and always a folder name: see MINECRAFT_WORLD_RE.
+        level: 'world',
         // Only read when the world is first made.
         seed: '',
         levelType: 'minecraft:normal',
     },
 };
+
+/**
+ * A world's folder name. It goes through .env and server.properties and sits
+ * beside the server's own folders, so it stays plain.
+ */
+export const MINECRAFT_WORLD_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
+export const MINECRAFT_RESERVED_FOLDERS = new Set(['plugins', 'libraries', 'logs', 'versions', 'config', 'cache']);
 
 /** What the Minecraft settings can be. The page builds its menus from the same words. */
 export const MINECRAFT_CHOICES = {
@@ -535,6 +545,10 @@ function validateMinecraft(m, cfg, errors) {
         out.motd = motd;
     }
 
+    const level = String(m.level ?? d.level).trim();
+    if (!MINECRAFT_WORLD_RE.test(level) || MINECRAFT_RESERVED_FOLDERS.has(level)) errors.push(`"${level}" cannot be a world's folder name.`);
+    else out.level = level;
+
     const seed = String(m.seed ?? '').trim();
     if (!SEED_RE.test(seed)) errors.push('A seed is a number or a word: letters, digits, - and _, up to 32 of them.');
     else out.seed = seed;
@@ -653,6 +667,7 @@ function minecraftEnv(m) {
     return {
         MINECRAFT_EULA: m.eula ? 'TRUE' : 'FALSE',
         MINECRAFT_VERSION: m.version,
+        MINECRAFT_LEVEL: m.level,
         MINECRAFT_MEMORY: m.memory,
         MINECRAFT_MOTD: m.motd,
         MINECRAFT_MODE: m.gamemode,

@@ -2079,9 +2079,12 @@ main {
 .mc-add input { flex: 1 1 140px; min-width: 0; margin: 0; }
 .mc-add select { flex: none; }
 
-.mc-console { height: min(56vh, 520px); }
+.mc-log { height: min(56vh, 520px); }
 #mc-players-note { margin: 0 0 16px; }
 .mc-command-out[hidden] { display: none; }
 .mc-command-out { margin-top: 10px; max-height: 160px; }
 .mc-code { font-family: var(--mono); font-size: 15px; font-weight: 650; letter-spacing: 0.04em; user-select: all; }
 .mc-consoles-actions { align-items: center; }
+#mc-world-progress[hidden] { display: none; }
+#mc-world-progress { margin-top: 12px; }
+#mc-world-file { padding: 6px; }
