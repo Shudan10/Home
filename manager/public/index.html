@@ -307,55 +307,29 @@
 
       <div id="sub-nextcloud-settings" class="subtab">
         <div class="grid">
-          <!--
-            Access and Apply share the left column so Apply fills the space
-            under a short Access card, instead of waiting for the taller
-            password card beside it and leaving a hole.
-          -->
-          <div class="col">
-            <article class="card">
-              <h3>Access</h3>
-              <label class="check"><input type="checkbox" id="nextcloud-pub-web"> Publish on the host</label>
-              <label class="inline">Port <input type="number" id="nextcloud-port" min="1024" max="65535"></label>
-              <label class="inline">Admin user <input id="nextcloud-user"></label>
-              <label>Trusted domains
-                <input id="nextcloud-domains" placeholder="localhost cloud.example.com">
-              </label>
-              <p class="hint">
-                Nextcloud turns away requests for names it has not been told about.
-                Publishing it on your domain from Tunnel &amp; domains adds that name here
-                for you; this is where to add any others, separated by spaces.
-              </p>
-            </article>
-            <article class="card span2">
-              <h3>Shared folders</h3>
-              <p class="muted">
-                Folders already on this machine, shown inside Nextcloud where
-                they are. Nothing is copied &mdash; the same files appear in
-                Nextcloud, in Jellyfin, and on the disk.
-              </p>
-              <div id="nextcloud-shared-list" class="media-list"></div>
-              <div class="row">
-                <input id="nextcloud-shared-new" size="40" placeholder="/home/you/Media" autocomplete="off">
-                <button type="button" id="nextcloud-shared-add" class="ghost">Share folder</button>
-              </div>
-              <p class="hint">
-                The path as <strong>this machine</strong> sees it. Each appears
-                in Nextcloud named after its last folder. Use this instead of
-                pointing the desktop sync client at a folder on this same
-                machine &mdash; syncing would store everything twice on one disk.
-              </p>
-            </article>
+          <article class="card span2">
+            <h3>Apply</h3>
+            <p class="muted">Changes here restart Nextcloud.</p>
+            <div class="row">
+              <button type="button" id="nextcloud-save" class="primary">Apply settings</button>
+              <button type="button" class="ghost" data-app-action="nextcloud/restart">Restart</button>
+            </div>
+          </article>
 
-            <article class="card span2">
-              <h3>Apply</h3>
-              <p class="muted">Changes here restart Nextcloud.</p>
-              <div class="row">
-                <button type="button" id="nextcloud-save" class="primary">Apply settings</button>
-                <button type="button" class="ghost" data-app-action="nextcloud/restart">Restart</button>
-              </div>
-            </article>
-          </div>
+          <article class="card">
+            <h3>Access</h3>
+            <label class="check"><input type="checkbox" id="nextcloud-pub-web"> Publish on the host</label>
+            <label class="inline">Port <input type="number" id="nextcloud-port" min="1024" max="65535"></label>
+            <label class="inline">Admin user <input id="nextcloud-user"></label>
+            <label>Trusted domains
+              <input id="nextcloud-domains" placeholder="localhost cloud.example.com">
+            </label>
+            <p class="hint">
+              Nextcloud turns away requests for names it has not been told about.
+              Publishing it on your domain from Tunnel &amp; domains adds that name here
+              for you; this is where to add any others, separated by spaces.
+            </p>
+          </article>
 
           <article class="card">
             <h3>Admin password</h3>
@@ -377,6 +351,26 @@
             <p class="hint">
               This changes it inside Nextcloud straight away and remembers the new
               one here. Anyone already signed in stays signed in.
+            </p>
+          </article>
+
+          <article class="card span2">
+            <h3>Shared folders</h3>
+            <p class="muted">
+              Folders already on this machine, shown inside Nextcloud where
+              they are. Nothing is copied &mdash; the same files appear in
+              Nextcloud, in Jellyfin, and on the disk.
+            </p>
+            <div id="nextcloud-shared-list" class="media-list"></div>
+            <div class="row">
+              <input id="nextcloud-shared-new" size="40" placeholder="/home/you/Media" autocomplete="off">
+              <button type="button" id="nextcloud-shared-add" class="ghost">Share folder</button>
+            </div>
+            <p class="hint">
+              The path as <strong>this machine</strong> sees it. Each appears
+              in Nextcloud named after its last folder. Use this instead of
+              pointing the desktop sync client at a folder on this same
+              machine &mdash; syncing would store everything twice on one disk.
             </p>
           </article>
         </div>
@@ -540,6 +534,15 @@
       <div id="sub-jellyfin-settings" class="subtab">
         <div class="grid">
           <article class="card span2">
+            <h3>Apply</h3>
+            <p class="muted">Changes here recreate the Jellyfin container. Your libraries and watch history are kept.</p>
+            <div class="row">
+              <button type="button" id="jellyfin-save" class="primary">Apply settings</button>
+              <button type="button" class="ghost" data-app-action="jellyfin/restart">Restart</button>
+            </div>
+          </article>
+
+          <article class="card span2">
             <h3>Media folders</h3>
             <p class="muted">
               The folders on this machine that hold your media, as full paths.
@@ -559,27 +562,16 @@
             </p>
           </article>
 
-          <div class="col">
-            <article class="card">
-              <h3>Access</h3>
-              <label class="check"><input type="checkbox" id="jellyfin-pub-web"> Publish on the host</label>
-              <label class="inline">Port <input type="number" id="jellyfin-port" min="1024" max="65535"></label>
-              <p class="hint">
-                Publishing puts Jellyfin on this machine's address so anything on
-                your network can reach it. Leave it off if you would rather it
-                were only reachable through your domain, under Tunnel &amp; domains.
-              </p>
-            </article>
-
-            <article class="card">
-              <h3>Apply</h3>
-              <p class="muted">Changes here recreate the Jellyfin container. Your libraries and watch history are kept.</p>
-              <div class="row">
-                <button type="button" id="jellyfin-save" class="primary">Apply settings</button>
-                <button type="button" class="ghost" data-app-action="jellyfin/restart">Restart</button>
-              </div>
-            </article>
-          </div>
+          <article class="card">
+            <h3>Access</h3>
+            <label class="check"><input type="checkbox" id="jellyfin-pub-web"> Publish on the host</label>
+            <label class="inline">Port <input type="number" id="jellyfin-port" min="1024" max="65535"></label>
+            <p class="hint">
+              Publishing puts Jellyfin on this machine's address so anything on
+              your network can reach it. Leave it off if you would rather it
+              were only reachable through your domain, under Tunnel &amp; domains.
+            </p>
+          </article>
 
           <article class="card">
             <h3>Hardware transcoding</h3>
@@ -720,7 +712,7 @@
 
       <div id="sub-mealplan-updates" class="subtab">
         <div class="grid">
-          <article class="card">
+          <article class="card span2">
             <h3>Source</h3>
             <p class="muted">
               Meal Plan is built from its own repository,
@@ -961,67 +953,27 @@
       <div id="sub-minecraft-settings" class="subtab">
         <div class="grid">
           <article class="card span2">
-            <h3>Minecraft's licence</h3>
+            <h3>Apply</h3>
             <p class="muted">
-              Mojang only lets a server run once whoever runs it has agreed to the
-              <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noreferrer noopener">Minecraft End User Licence Agreement ↗</a>.
-              Read it, and tick the box if you agree. The server will not start until you do.
+              The server reads the settings below when it starts. If it is running, applying
+              restarts it, which disconnects everyone for about a minute. The world is kept.
             </p>
-            <label class="check"><input type="checkbox" id="mc-eula"> I have read and agree to the Minecraft EULA</label>
-          </article>
-
-          <article class="card span2">
-            <h3>Console players</h3>
-            <label class="check"><input type="checkbox" id="mc-consoles"> Let Xbox, PlayStation and Switch players join</label>
-            <p class="muted">
-              Consoles cannot type in a server address. With this on, the server
-              signs in to a Microsoft account of its own and shows up in
-              Minecraft's <strong>Friends</strong> tab for anyone who adds that
-              account as a friend. It uses
-              <a href="https://github.com/MCXboxBroadcast/Broadcaster" target="_blank" rel="noreferrer noopener">MCXboxBroadcast ↗</a>,
-              fetched fresh each time the server starts.
-            </p>
-            <p class="hint">
-              <strong>Use a spare Microsoft account, not your own.</strong> The
-              project imitates parts of a game client, which Microsoft may treat
-              as against its terms, and the account is shown to every player
-              who adds it. A free new account from
-              <a href="https://signup.live.com" target="_blank" rel="noreferrer noopener">signup.live.com ↗</a>
-              is fine and does not need to own Minecraft, but it does need an
-              Xbox profile: sign in to
-              <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a>
-              with it once and pick a gamertag before using it here.
-            </p>
-          </article>
-
-          <article class="card">
-            <h3>Gameplay</h3>
-            <label class="inline">Game mode
-              <select id="mc-gamemode">
-                <option value="survival">Survival</option>
-                <option value="creative">Creative</option>
-                <option value="adventure">Adventure</option>
-                <option value="spectator">Spectator</option>
-              </select>
-            </label>
-            <label class="inline">Difficulty
-              <select id="mc-difficulty">
-                <option value="peaceful">Peaceful (no monsters)</option>
-                <option value="easy">Easy</option>
-                <option value="normal">Normal</option>
-                <option value="hard">Hard</option>
-              </select>
-            </label>
-            <label class="inline">Max players <input type="number" id="mc-max-players" min="1" max="200"></label>
-            <label class="check"><input type="checkbox" id="mc-pvp"> Players can hurt each other (PvP)</label>
-            <label class="check"><input type="checkbox" id="mc-hardcore"> Hardcore: one life, then spectator</label>
-            <label class="check"><input type="checkbox" id="mc-force-gamemode"> Put everyone in this game mode when they join</label>
-            <label class="check"><input type="checkbox" id="mc-allow-nether"> The Nether is open</label>
-            <label class="check"><input type="checkbox" id="mc-allow-flight"> Allow flying in survival (needed by some mods; otherwise flying gets you kicked)</label>
-            <label class="check"><input type="checkbox" id="mc-command-blocks"> Command blocks work</label>
+            <div class="row">
+              <button type="button" id="minecraft-save" class="primary">Apply settings</button>
+              <button type="button" class="ghost" data-app-action="minecraft/restart">Restart</button>
+            </div>
           </article>
 
           <div class="col">
+            <article class="card">
+              <h3>Minecraft's licence</h3>
+              <p class="muted">
+                Mojang only lets a server run once whoever runs it has agreed to the
+                <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noreferrer noopener">Minecraft End User Licence Agreement ↗</a>.
+                Read it, and tick the box if you agree. The server will not start until you do.
+              </p>
+              <label class="check"><input type="checkbox" id="mc-eula"> I have read and agree to the Minecraft EULA</label>
+            </article>
             <article class="card">
               <h3>Server</h3>
               <label>Message in the server list
@@ -1054,7 +1006,6 @@
                 including yours. Bedrock players sign in with Xbox either way.
               </p>
             </article>
-
             <article class="card">
               <h3>Network</h3>
               <label class="inline">Java port (TCP) <input type="number" id="mc-java-port" min="1024" max="65535"></label>
@@ -1063,38 +1014,78 @@
             </article>
           </div>
 
-          <article class="card">
-            <h3>World</h3>
-            <label class="inline">View distance <input type="number" id="mc-view-distance" min="3" max="32"></label>
-            <label class="inline">Simulation distance <input type="number" id="mc-sim-distance" min="3" max="32"></label>
-            <label class="inline">Spawn protection <input type="number" id="mc-spawn-protection" min="0" max="256"></label>
-            <p class="hint">
-              Distances are in chunks of 16 blocks. Lower is lighter on this
-              machine. Spawn protection is how far around spawn only operators
-              can build, and 0 turns it off.
-            </p>
-            <label class="inline">Seed <input id="mc-seed" autocomplete="off" placeholder="random"></label>
-            <label class="inline">World type
-              <select id="mc-level-type">
-                <option value="minecraft:normal">Normal</option>
-                <option value="minecraft:flat">Superflat</option>
-                <option value="minecraft:large_biomes">Large biomes</option>
-                <option value="minecraft:amplified">Amplified</option>
-              </select>
-            </label>
-            <p class="hint">Seed and world type are only used when the world is first made. To start a fresh world, uninstall without keeping the data and install again.</p>
-          </article>
+          <div class="col">
+            <article class="card">
+              <h3>Gameplay</h3>
+              <label class="inline">Game mode
+                <select id="mc-gamemode">
+                  <option value="survival">Survival</option>
+                  <option value="creative">Creative</option>
+                  <option value="adventure">Adventure</option>
+                  <option value="spectator">Spectator</option>
+                </select>
+              </label>
+              <label class="inline">Difficulty
+                <select id="mc-difficulty">
+                  <option value="peaceful">Peaceful (no monsters)</option>
+                  <option value="easy">Easy</option>
+                  <option value="normal">Normal</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </label>
+              <label class="inline">Max players <input type="number" id="mc-max-players" min="1" max="200"></label>
+              <label class="check"><input type="checkbox" id="mc-pvp"> Players can hurt each other (PvP)</label>
+              <label class="check"><input type="checkbox" id="mc-hardcore"> Hardcore: one life, then spectator</label>
+              <label class="check"><input type="checkbox" id="mc-force-gamemode"> Put everyone in this game mode when they join</label>
+              <label class="check"><input type="checkbox" id="mc-allow-nether"> The Nether is open</label>
+              <label class="check"><input type="checkbox" id="mc-allow-flight"> Allow flying in survival (needed by some mods; otherwise flying gets you kicked)</label>
+              <label class="check"><input type="checkbox" id="mc-command-blocks"> Command blocks work</label>
+            </article>
+            <article class="card">
+              <h3>World</h3>
+              <label class="inline">View distance <input type="number" id="mc-view-distance" min="3" max="32"></label>
+              <label class="inline">Simulation distance <input type="number" id="mc-sim-distance" min="3" max="32"></label>
+              <label class="inline">Spawn protection <input type="number" id="mc-spawn-protection" min="0" max="256"></label>
+              <p class="hint">
+                Distances are in chunks of 16 blocks. Lower is lighter on this
+                machine. Spawn protection is how far around spawn only operators
+                can build, and 0 turns it off.
+              </p>
+              <label class="inline">Seed <input id="mc-seed" autocomplete="off" placeholder="random"></label>
+              <label class="inline">World type
+                <select id="mc-level-type">
+                  <option value="minecraft:normal">Normal</option>
+                  <option value="minecraft:flat">Superflat</option>
+                  <option value="minecraft:large_biomes">Large biomes</option>
+                  <option value="minecraft:amplified">Amplified</option>
+                </select>
+              </label>
+              <p class="hint">Seed and world type are only used when the world is first made. To start a fresh world, uninstall without keeping the data and install again.</p>
+            </article>
+          </div>
 
-          <article class="card">
-            <h3>Apply</h3>
+          <article class="card span2">
+            <h3>Console players</h3>
+            <label class="check"><input type="checkbox" id="mc-consoles"> Let Xbox, PlayStation and Switch players join</label>
             <p class="muted">
-              The server reads these when it starts. If it is running, applying
-              restarts it, which disconnects everyone for about a minute. The world is kept.
+              Consoles cannot type in a server address. With this on, the server
+              signs in to a Microsoft account of its own and shows up in
+              Minecraft's <strong>Friends</strong> tab for anyone who adds that
+              account as a friend. It uses
+              <a href="https://github.com/MCXboxBroadcast/Broadcaster" target="_blank" rel="noreferrer noopener">MCXboxBroadcast ↗</a>,
+              fetched fresh each time the server starts.
             </p>
-            <div class="row">
-              <button type="button" id="minecraft-save" class="primary">Apply settings</button>
-              <button type="button" class="ghost" data-app-action="minecraft/restart">Restart</button>
-            </div>
+            <p class="hint">
+              <strong>Use a spare Microsoft account, not your own.</strong> The
+              project imitates parts of a game client, which Microsoft may treat
+              as against its terms, and the account is shown to every player
+              who adds it. A free new account from
+              <a href="https://signup.live.com" target="_blank" rel="noreferrer noopener">signup.live.com ↗</a>
+              is fine and does not need to own Minecraft, but it does need an
+              Xbox profile: sign in to
+              <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a>
+              with it once and pick a gamertag before using it here.
+            </p>
           </article>
         </div>
       </div>
