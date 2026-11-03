@@ -137,6 +137,14 @@ certificate only covers that. And Cloudflare's terms limit serving a lot of
 video through it on the free plan, so Jellyfin through a tunnel works but is
 the kind of use Cloudflare reserves the right to slow down.
 
+## Staying up to date
+
+The panel checks once an hour whether it, or any app you have installed, has a
+newer version, and shows a banner along the top when one does. Nothing updates
+by itself: See update goes to the page that does it, and Later hides the banner
+in that browser until a newer version comes along. Checking asks GitHub and
+Docker Hub and sends them nothing about your server beyond the request itself.
+
 ## Where things live
 
 Everything is in one directory (`~/.quickstart-home` by default):

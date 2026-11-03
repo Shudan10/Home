@@ -1806,6 +1806,35 @@ main {
     }
 }
 
+/* ------------------------------------------------------ update banner ----- */
+/* Directly under the topbar, so it is seen from every page. */
+.update-banner { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); background: var(--panel); }
+.update-banner[hidden] { display: none; }
+.update-banner-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 10px 20px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.update-banner-row + .update-banner-row { border-top: 1px solid var(--line); }
+.update-banner-row.is-major { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.update-banner-row .status-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; background: var(--accent); }
+.update-banner-row.is-major .status-dot { background: var(--warn); }
+/* A wide basis, so on a phone the buttons drop below the text rather than
+   squeezing it into a column. */
+.update-banner-body { flex: 1 1 260px; min-width: 0; font-size: 13px; }
+.update-banner-body strong { display: block; }
+.update-banner-detail {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+}
+.update-banner-actions { display: flex; gap: 8px; }
+
 /* ------------------------------------------- topbar system screens ------- */
 /* All logs, the Update Queue and Global settings sit in the top banner on
    every page. They used to be a sidebar group, which meant opening the menu

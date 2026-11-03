@@ -175,6 +175,9 @@
       </nav>
     </header>
 
+    <!-- What the hourly scan found. Filled in by loadUpdateBanner. -->
+    <div id="update-banner" class="update-banner" role="status" hidden></div>
+
     <main>
 
     <!-- -------------------------------------------------------- overview -->
@@ -466,7 +469,7 @@
               <button type="button" id="nextcloud-check" class="ghost">Check for update</button>
               <button type="button" id="nextcloud-update" class="primary" disabled>Update Nextcloud</button>
             </div>
-            <p class="status-line" id="nextcloud-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub when you ask, never on its own.</span></span></p>
+            <p class="status-line" id="nextcloud-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub every hour. Check for update asks right now.</span></span></p>
             <p class="hint">
               Nextcloud upgrades its own database schema on first start after an
               image change, so give it a minute before signing in. It is worth
@@ -612,7 +615,7 @@
               <button type="button" id="jellyfin-check" class="ghost">Check for update</button>
               <button type="button" id="jellyfin-update" class="primary" disabled>Update Jellyfin</button>
             </div>
-            <p class="status-line" id="jellyfin-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub when you ask, never on its own.</span></span></p>
+            <p class="status-line" id="jellyfin-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub every hour. Check for update asks right now.</span></span></p>
             <p class="hint">
               Jellyfin migrates its own database on the first start after an
               update, so give it a minute before expecting the web page to load.
@@ -734,7 +737,7 @@
               <button type="button" id="mealplan-check" class="ghost">Check for update</button>
               <button type="button" id="mealplan-update" class="primary" disabled>Update Meal Plan</button>
             </div>
-            <p class="status-line" id="mealplan-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub when you ask, never on its own.</span></span></p>
+            <p class="status-line" id="mealplan-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub every hour. Check for update asks right now.</span></span></p>
             <p class="hint">
               Your meals and planned weeks live in a Docker volume, so a rebuild
               never touches them.
@@ -1134,7 +1137,7 @@
               <button type="button" id="minecraft-update" class="primary" disabled>Update the image</button>
               <button type="button" class="ghost" data-app-action="minecraft/restart">Restart for the newest Paper and Geyser</button>
             </div>
-            <p class="status-line" id="minecraft-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub when you ask, never on its own.</span></span></p>
+            <p class="status-line" id="minecraft-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub every hour. Check for update asks right now.</span></span></p>
             <p class="hint">When Bedrock players suddenly cannot join, it is usually because their game updated before Geyser did. A restart a day or two later fixes it.</p>
           </article>
         </div>
@@ -1426,7 +1429,7 @@
               <button id="global-check-btn" class="ghost">Check for update</button>
               <button id="global-update-btn" class="primary">Update the panel</button>
             </div>
-            <p class="status-line" id="global-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub when you ask, never on its own.</span></span></p>
+            <p class="status-line" id="global-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub every hour. Check for update asks right now.</span></span></p>
             <p class="hint">
               The panel goes offline for a minute or two while it rebuilds. This
               page will say so and come back on its own.

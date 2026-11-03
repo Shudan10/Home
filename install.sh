@@ -356,7 +356,7 @@ dc() {
 # ------------------------------------------------------------------ stack ----
 
 fetch_stack() {
-    local src_dir="" tmp
+    local src_dir="" tmp stack_sha=""
     # Running from a checkout? Use the files next to this script.
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/docker-compose.yml" ]; then
         src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -364,9 +364,14 @@ fetch_stack() {
     else
         tmp="$(mktemp -d)"
         say "Downloading the stack from $STACK_REPO@$STACK_REF"
+        # Pinned to a resolved commit, so what is recorded below is exactly what
+        # was downloaded. Without that record the panel cannot tell a newer
+        # version exists. Best effort: an install must not fail over it.
+        stack_sha="$(curl -fsSL "https://api.github.com/repos/$STACK_REPO/commits/$STACK_REF" 2>/dev/null \
+            | grep -o '"sha": *"[0-9a-f]\{40\}"' | head -n 1 | grep -o '[0-9a-f]\{40\}')" || stack_sha=""
         # GitHub wraps the archive in a <repo>-<ref>/ directory; --strip-components
         # peels it off so the stack lands directly in $tmp.
-        curl -fsSL "https://codeload.github.com/$STACK_REPO/tar.gz/$STACK_REF" \
+        curl -fsSL "https://codeload.github.com/$STACK_REPO/tar.gz/${stack_sha:-$STACK_REF}" \
             | tar -xz -C "$tmp" --strip-components=1 \
             || die "Could not download the stack from $STACK_REPO@$STACK_REF."
         src_dir="$tmp"
@@ -384,6 +389,13 @@ fetch_stack() {
     chmod +x "$STACK_DIR/uninstall.sh" "$STACK_DIR/dev.sh" 2>/dev/null || true
 
     mkdir -p "$STACK_DIR/conf"
+
+    # The same file the panel's own updater writes. Skipped when installing from
+    # a checkout, which may not match any commit.
+    if [ -n "$stack_sha" ]; then
+        printf 'kind=install\nrepo=%s\nref=%s\nsha=%s\nat=%s\nresult=ok\n' \
+            "$STACK_REPO" "$STACK_REF" "$stack_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STACK_DIR/conf/last-update.txt"
+    fi
 
     ok "Stack files are in $STACK_DIR"
 }

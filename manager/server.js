@@ -15,6 +15,7 @@ import * as selfservice from './lib/selfservice.js';
 import * as tunnel from './lib/tunnel.js';
 import * as lifecycle from './lib/lifecycle.js';
 import * as minecraft from './lib/minecraft.js';
+import * as updates from './lib/updates.js';
 import { jobs, requestContext } from './lib/jobs.js';
 import {
     authConfigured,
@@ -923,24 +924,8 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
 });
 
 route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/check$/, async (req, res, match) => {
-    const name = match[1];
     try {
-        // Nextcloud and Jellyfin come from a Docker Hub tag, not a repository:
-        // for them "up to date" means built on what that tag points at now.
-        if (!apps.APPS[name].tracksRepo) {
-            return sendJson(res, 200, { kind: 'image', ...(await apps.checkBaseImage(name, dockerctl.docker)) });
-        }
-        const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());
-        const built = apps.readBuildRecord(name);
-        sendJson(res, 200, {
-            ...upstream,
-            builtSha: built.sha,
-            builtAt: built.builtAt,
-            // No published releases upstream, so "up to date" means the running
-            // image was built from the commit the branch currently points at.
-            updateAvailable: Boolean(built.sha) && built.sha !== upstream.latestSha,
-            neverBuilt: !built.sha,
-        });
+        sendJson(res, 200, await updates.checkApp(match[1]));
     } catch (err) {
         fail(res, 502, err.message);
     }
@@ -983,9 +968,18 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, 
                 timeoutMs: 20 * 60_000,
             });
         } else {
+            // Recreated without starting, because a container keeps the image it
+            // was made from. Left alone, this one would still be on the old image
+            // and the app would go on reporting the update just installed.
+            await dockerctl.compose(['create', '--force-recreate', ...app.services], {
+                onLine,
+                profile: app.profile,
+                timeoutMs: 20 * 60_000,
+            });
             onLine(`${app.label} is stopped, so it stays stopped. It runs the new image when you start it.`);
         }
         await recordBuild(name, cfg[name], onLine);
+        await updates.rescan(name);
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -1236,7 +1230,10 @@ route('POST', /^\/api\/services\/([a-z-]+)\/install$/, async (req, res, match) =
         // Installing is what builds the image, so it is what has something to
         // record. Without this the Updates tab says "not built yet" about an
         // app that was just built.
-        if (apps.APPS[key]) await recordBuild(key, appsCfg[key], onLine);
+        if (apps.APPS[key]) {
+            await recordBuild(key, appsCfg[key], onLine);
+            await updates.rescan(key);
+        }
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -1282,6 +1279,7 @@ route('POST', /^\/api\/services\/([a-z-]+)\/uninstall$/, async (req, res, match)
     const keepData = body.keepData === true;
     const job = jobs.start(`Uninstall ${unit.label}`, async (onLine) => {
         const removed = await lifecycle.uninstall(key, { keepData, onLine });
+        updates.forget(key);
 
         // Back to how it looked before it was ever installed.
         const appsCfg = apps.loadAppsConfig();
@@ -1314,20 +1312,15 @@ route('GET', /^\/api\/system\/panel-latest$/, async (req, res, match, url) => {
     const repo = (url.searchParams.get('repo') || selfservice.STACK_REPO).trim();
     const ref = (url.searchParams.get('ref') || 'main').trim();
     try {
-        const latest = await selfservice.latestCommit({ repo, ref });
-        const installed = selfservice.lastUpdate();
-        // Only meaningful once something has recorded which commit is installed,
-        // which is the first time this panel updates itself.
-        const known = installed?.repo === repo ? installed.sha : null;
-        sendJson(res, 200, {
-            latest,
-            installedSha: known || null,
-            upToDate: known ? known === latest.sha : null,
-            compare: known ? await selfservice.compareToInstalled({ repo, base: known, head: latest.sha }) : null,
-        });
+        sendJson(res, 200, await updates.checkPanel({ repo, ref }));
     } catch (err) {
         fail(res, 400, err.message);
     }
+});
+
+// What the background scan has found, for the banner along the top of the panel.
+route('GET', /^\/api\/system\/updates$/, async (req, res) => {
+    sendJson(res, 200, { items: await updates.pending() });
 });
 
 /*
@@ -1608,6 +1601,8 @@ async function bootstrap() {
     // reporting an empty library rather than an error. This notices and
     // restarts it.
     mountwatch.watch(log, () => jobs.busy);
+
+    updates.start(log);
 }
 
 bootstrap()

@@ -1839,6 +1839,7 @@ for (const name of APP_KEYS) {
             setAppStatus(name, 'current',
                 name === 'mealplan' ? 'Built from the newest commit' : 'Updated to the newest image',
                 'Check again whenever you want to know if it has moved on.');
+            loadUpdateBanner();
         }
     });
 }
@@ -1965,6 +1966,7 @@ for (const name of APP_KEYS) {
             setAppStatus(name, 'error', 'Could not check', e.message);
         } finally {
             button.disabled = false;
+            loadUpdateBanner();
         }
     });
 }
@@ -1977,7 +1979,7 @@ $('mealplan-ref').addEventListener('input', () => {
     $('mealplan-update').disabled = !changed;
     setMealPlanStatus(null, changed
         ? 'Branch changed. Updating will build from it.'
-        : 'Checked against GitHub when you ask, never on its own.');
+        : 'Checked against GitHub every hour. Check for update asks right now.');
 });
 
 /* The branches and tags the repository actually has, offered as a datalist
@@ -3973,17 +3975,12 @@ async function loadGlobal() {
     kResult(
         'global-update-result',
         last.ok
-            ? `Updated from ${last.repo}@${last.ref} at ${new Date(last.at).toLocaleString()}.`
+            ? `${last.kind === 'install' ? 'Installed' : 'Updated'} from ${last.repo}@${last.ref} at ${new Date(last.at).toLocaleString()}.`
             : `Last update failed: ${last.error || 'no reason recorded'}`,
         !last.ok,
     );
 }
 
-/**
- * Nothing here polls GitHub in the background. A control panel that phones home
- * on a timer is a surprise, and the answer is only interesting at the moment
- * somebody is thinking about updating.
- */
 /**
  * The result of the update check, as a state rather than a sentence.
  *
@@ -4051,6 +4048,7 @@ $('global-check-btn').addEventListener('click', async () => {
         setUpdateStatus('error', 'Could not check', e.message);
     } finally {
         button.disabled = false;
+        loadUpdateBanner();
     }
 });
 
@@ -4172,6 +4170,104 @@ $('global-teardown-btn').addEventListener('click', async () => {
     if (!job?.ok) $('global-teardown-btn').disabled = false;
 });
 
+// --------------------------------------------------------- update banner ---
+
+/*
+ * Later is remembered per version, so a newer one brings the banner back. One
+ * entry per service, so this cannot grow. It lives in this browser because it is
+ * one person's "not now": everybody else should still be told.
+ */
+const DISMISSED_KEY = 'qsh-updates-later';
+let dismissedUpdates = {};
+try {
+    dismissedUpdates = JSON.parse(localStorage.getItem(DISMISSED_KEY)) ?? {};
+} catch {
+    /* Private window or blocked storage: Later then lasts until the page reloads. */
+}
+
+function dismissUpdate(item) {
+    dismissedUpdates[item.key] = item.id;
+    try {
+        localStorage.setItem(DISMISSED_KEY, JSON.stringify(dismissedUpdates));
+    } catch {
+        /* As above. */
+    }
+}
+
+/*
+ * Runs the check on arrival because the Update buttons on those pages only open
+ * after one, and this is what shows the full detail, major version warning included.
+ */
+function openUpdate(item) {
+    selectTab(item.tab);
+    document.querySelector(`[data-subtab="${item.subtab}"]`)?.click();
+    if (item.key === 'panel') {
+        $('global-repo').value = item.repo;
+        $('global-ref').value = item.ref;
+        $('global-check-btn').click();
+    } else {
+        $(`${item.key}-check`)?.click();
+    }
+}
+
+function updateBannerRow(item) {
+    const row = document.createElement('div');
+    row.className = `update-banner-row${item.major ? ' is-major' : ''}`;
+
+    const dot = document.createElement('span');
+    dot.className = 'status-dot';
+
+    // textContent, because the detail carries a commit subject from GitHub.
+    const body = document.createElement('div');
+    body.className = 'update-banner-body';
+    const head = document.createElement('strong');
+    head.textContent = item.head;
+    const detail = document.createElement('span');
+    detail.className = 'update-banner-detail';
+    detail.textContent = item.detail;
+    body.append(head, detail);
+
+    const see = document.createElement('button');
+    see.type = 'button';
+    see.className = 'primary';
+    see.textContent = 'See update';
+    see.addEventListener('click', () => openUpdate(item));
+
+    const later = document.createElement('button');
+    later.type = 'button';
+    later.className = 'ghost';
+    later.textContent = 'Later';
+    later.addEventListener('click', () => {
+        dismissUpdate(item);
+        row.remove();
+        $('update-banner').hidden = !$('update-banner').childElementCount;
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'update-banner-actions';
+    actions.append(see, later);
+
+    row.append(dot, body, actions);
+    return row;
+}
+
+async function loadUpdateBanner() {
+    let items;
+    try {
+        ({ items } = await api('/api/system/updates'));
+    } catch {
+        return;
+    }
+    const banner = $('update-banner');
+    banner.replaceChildren(...items.filter((i) => dismissedUpdates[i.key] !== i.id).map(updateBannerRow));
+    banner.hidden = !banner.childElementCount;
+}
+
+// The scan is hourly and lives on the server, so this only reads its answer.
+setInterval(() => {
+    if (!document.hidden && !$('app').classList.contains('hidden')) loadUpdateBanner();
+}, 60_000);
+
 // ------------------------------------------------------------------- boot ---
 
 // Which services exist at all, which decides whether each row shows a button or
@@ -4201,6 +4297,7 @@ api('/api/session')
         if (s.authenticated) {
             showApp();
             loadServices().catch(() => {});
+            loadUpdateBanner();
         } else showLogin();
     })
     .catch(() => showLogin());
