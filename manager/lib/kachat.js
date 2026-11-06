@@ -25,12 +25,9 @@ import { loadManagerConfig, readEnvFile, readJson, saveManagerConfig, updateEnvF
  * a long random password nobody is shown.
  */
 
-export const PROFILE = 'kachat';
-export const SERVICES = ['kachat-db', 'kachat-redis', 'kachat-nextcloud'];
+// Its services, volumes and image are listed once, in lifecycle.js's UNITS.
 export const CONTAINER = 'quickstart-home-kachat-nextcloud';
 export const CONTAINERS = [CONTAINER, 'quickstart-home-kachat-db', 'quickstart-home-kachat-redis'];
-export const VOLUMES = ['quickstart-home-kachat-data', 'quickstart-home-kachat-db-data'];
-export const IMAGE = 'quickstart-home/kachat-nextcloud:1';
 /** Where the tunnel sends a name published for it, on the stack network. */
 export const ORIGIN = 'http://kachat-nextcloud:80';
 const INTERNAL = process.env.KACHAT_INTERNAL_URL || ORIGIN;
@@ -249,62 +246,62 @@ export async function applyPublicHost(onLine = () => {}) {
     onLine(host ? `KaChat Nextcloud now answers on https://${host}.` : 'KaChat Nextcloud has no public name now.');
 }
 
-// ---------------------------------------------------------------- install ---
+// ------------------------------------------------------------- lifecycle ---
 
-export async function install(username, onLine = () => {}) {
-    const user = checkUsername(username || 'kachat');
-    ensureSecrets();
-    onLine('Building the KaChat Nextcloud image. The first time takes a few minutes...');
-    await deps.compose(['build', 'kachat-nextcloud'], { onLine, profile: PROFILE, timeoutMs: 60 * 60_000 });
-    onLine('Starting its database, cache and Nextcloud...');
-    await deps.compose(['up', '-d', ...SERVICES], { onLine, profile: PROFILE, timeoutMs: 20 * 60_000 });
-    if (!(await waitReady(onLine))) throw new KachatError('It did not finish setting itself up in ten minutes. Its log is under All logs.', 504);
+/*
+ * Installing, the switch and uninstalling are the panel's usual ones
+ * (lifecycle.js), like every other app. Three things are KaChat's own: the
+ * secrets it needs before its first build, the setup it does the first time
+ * it is started, and what it leaves behind when it is removed.
+ */
 
-    onLine('Setting it up for KaChat: Talk for calls, previews for photos and videos, public links...');
+/** Before install: the database and admin passwords compose reads. */
+export { ensureSecrets };
+
+/**
+ * Every start. Waits for Nextcloud, reapplies the settings, and the first
+ * time also makes the account the apps sign in to -- there is nothing to set
+ * up in a container that has never run, which is why it happens here and
+ * not at install.
+ */
+export async function afterStart(onLine = () => {}) {
+    if (!(await waitReady(onLine))) {
+        onLine('KaChat Nextcloud did not finish starting in time, so its settings were left for the next start.');
+        return;
+    }
+    const first = !isInstalled();
+    if (first) onLine('Setting it up for KaChat: Talk for calls, previews for photos and videos, public links...');
     await configure(onLine);
-    saveConfig({ installedAt: new Date().toISOString() });
-
-    await addAccount(user, onLine);
-    onLine(`Done. Make an app password for "${user}" on the KaChat Nextcloud page, then put it in KaChat.`);
-}
-
-export async function setRunning(on, onLine = () => {}) {
-    if (on) {
-        await deps.compose(['up', '-d', ...SERVICES], { onLine, profile: PROFILE, timeoutMs: 10 * 60_000 });
-        if (await waitReady(onLine, 5 * 60_000)) await configure(onLine).catch((err) => onLine(`Settings not reapplied: ${err.message}`));
-    } else {
-        await deps.compose(['stop', ...SERVICES], { onLine, profile: PROFILE, timeoutMs: 5 * 60_000 });
+    if (first) {
+        const existing = (await occJson(['user:list']).catch(() => ({}))) ?? {};
+        // Reinstalled over kept data: its accounts are already there.
+        if (!Object.keys(existing).some((u) => u !== 'admin')) await addAccount('kachat', onLine);
+        saveConfig({ installedAt: new Date().toISOString() });
+        onLine('Ready. Make an app password on its page and put it in KaChat.');
     }
 }
 
-/** Removes it. Without keepData, every photo, video and backup in it goes too. */
-export async function uninstall({ keepData = false } = {}, onLine = () => {}) {
-    onLine('Removing the KaChat Nextcloud containers...');
-    await deps.compose(['rm', '-sf', ...SERVICES], { onLine, profile: PROFILE, timeoutMs: 10 * 60_000 }).catch(() => {});
-    for (const c of CONTAINERS) await deps.docker(['rm', '-f', c], { timeoutMs: 60_000 }).catch(() => {});
-    if (!keepData) {
-        for (const v of VOLUMES) {
-            await deps.docker(['volume', 'rm', '-f', v], { timeoutMs: 60_000 }).catch(() => {});
-            onLine(`Removed ${v}.`);
-        }
-        // Each step on its own: one that fails (a file that cannot be written)
-        // must not leave the rest -- the image, the config -- behind.
-        try {
-            updateEnvFile({ KACHAT_DB_ROOT_PASSWORD: '', KACHAT_DB_PASSWORD: '', KACHAT_ADMIN_PASSWORD: '' });
-        } catch (err) {
-            onLine(`Could not clear its passwords from .env: ${err.message}`);
-        }
-        try {
-            savePanelTokens({});
-        } catch (err) {
-            onLine(`Could not clear the panel's tokens for it: ${err.message}`);
-        }
-    }
-    await deps.docker(['rmi', IMAGE], { timeoutMs: 60_000 }).catch(() => {});
+/**
+ * After uninstall. The panel's own record of it goes; with its data, so do
+ * its passwords and the panel's tokens, which would mean nothing to a fresh
+ * one. Kept data keeps them, so installing again picks everything back up.
+ */
+export function forget({ keepData = false } = {}, onLine = () => {}) {
     const cfg = loadManagerConfig();
     delete cfg.kachat;
     saveManagerConfig(cfg);
-    onLine(keepData ? 'Removed. Its files and database are kept, and installing again picks them up.' : 'Removed, with everything in it.');
+    if (keepData) return;
+    // Each on its own: one that fails must not leave the other behind.
+    try {
+        updateEnvFile({ KACHAT_DB_ROOT_PASSWORD: '', KACHAT_DB_PASSWORD: '', KACHAT_ADMIN_PASSWORD: '' });
+    } catch (err) {
+        onLine(`Could not clear its passwords from .env: ${err.message}`);
+    }
+    try {
+        savePanelTokens({});
+    } catch (err) {
+        onLine(`Could not clear the panel's tokens for it: ${err.message}`);
+    }
 }
 
 // --------------------------------------------------------------- accounts ---
@@ -453,14 +450,16 @@ export async function status() {
     const states = Object.fromEntries(await Promise.all(CONTAINERS.map(async (c) => [c, await deps.containerState(c).catch(() => ({ exists: false }))])));
     const main = states[CONTAINER];
     const out = {
-        installed: Boolean(main?.exists) && isInstalled(),
-        exists: Boolean(main?.exists),
+        // Installed is the container existing, as for every app. Set up is
+        // the first start having finished, which is when it has an account.
+        installed: Boolean(main?.exists),
+        setUp: Boolean(main?.exists) && isInstalled(),
         running: Boolean(main?.running),
         containers: states,
         publicHost: publicHost(),
         server: publicHost() ? `https://${publicHost()}` : null,
     };
-    if (!out.running || !out.installed) return out;
+    if (!out.running || !out.setUp) return out;
 
     try {
         const users = (await occJson(['user:list'])) ?? {};

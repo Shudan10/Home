@@ -1575,6 +1575,9 @@ route('POST', /^\/api\/services\/([a-z-]+)\/install$/, async (req, res, match) =
             apps.renderAppsPortsOverride(appsCfg);
         }
 
+        // Its database and admin passwords, before compose first reads them.
+        if (key === 'kachat') kachat.ensureSecrets();
+
         await lifecycle.install(key, onLine);
         // Installing is what builds the image, so it is what has something to
         // record. Without this the Updates tab says "not built yet" about an
@@ -1614,6 +1617,8 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
         // Settings that live inside the app rather than in compose have to be
         // reapplied to the container that has just come up.
         if (running && match[1] === 'nextcloud') await reconcileNextcloud(onLine);
+        // The first start is also when it sets itself up and makes its account.
+        if (running && match[1] === 'kachat') await kachat.afterStart(onLine);
     }, { key: `power:${match[1]}:${running ? 'start' : 'stop'}`, app: match[1] });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -1630,9 +1635,16 @@ route('POST', /^\/api\/services\/([a-z-]+)\/uninstall$/, async (req, res, match)
         return fail(res, 400, 'The uninstall request did not confirm which service it meant.');
     }
 
+    // A name on the internet pointing at nothing is a broken link in every
+    // chat it was sent in; it is taken off first, on purpose.
+    if (key === 'kachat' && tunnel.originFor('kachat')) {
+        return fail(res, 409, 'Take its name off the internet first, under Tunnel & domains.');
+    }
+
     const keepData = body.keepData === true;
     const job = jobs.start(`Uninstall ${unit.label}`, async (onLine) => {
         const removed = await lifecycle.uninstall(key, { keepData, onLine });
+        if (key === 'kachat') kachat.forget({ keepData }, onLine);
         updates.forget(key);
 
         // Back to how it looked before it was ever installed.
@@ -1949,10 +1961,10 @@ route('POST', /^\/api\/mullvad\/remove$/, async (req, res) => {
 // ------------------------------------------------------------- kachat ---
 
 /*
- * KaChat Nextcloud: lib/kachat.js has the why. Installing, starting and
- * removing are jobs; accounts, app passwords and shares are answered on the
- * spot -- an app password has to come back in the answer, since it is shown
- * once and never kept.
+ * KaChat Nextcloud: lib/kachat.js has the why. Installing, the switch and
+ * uninstalling go through /api/services like every app; these are the rest,
+ * answered on the spot -- an app password has to come back in the answer,
+ * since it is shown once and never kept.
  */
 const kachatTry = (fn) => async (req, res, match, url) => {
     try {
@@ -1964,33 +1976,6 @@ const kachatTry = (fn) => async (req, res, match, url) => {
 };
 
 route('GET', /^\/api\/kachat$/, kachatTry(() => kachat.status()));
-
-route('POST', /^\/api\/kachat\/install$/, async (req, res) => {
-    const body = await readBody(req);
-    let username;
-    try {
-        username = kachat.checkUsername(body.username || 'kachat');
-    } catch (err) {
-        return fail(res, 400, err.message);
-    }
-    const job = jobs.start('Installing KaChat Nextcloud', (onLine) => kachat.install(username, onLine));
-    sendJson(res, 202, { ok: true, jobId: job.id });
-});
-
-route('POST', /^\/api\/kachat\/running$/, async (req, res) => {
-    const on = (await readBody(req)).on === true;
-    const job = jobs.start(on ? 'Starting KaChat Nextcloud' : 'Stopping KaChat Nextcloud', (onLine) => kachat.setRunning(on, onLine));
-    sendJson(res, 202, { ok: true, jobId: job.id });
-});
-
-route('POST', /^\/api\/kachat\/uninstall$/, async (req, res) => {
-    const body = await readBody(req);
-    if (body.confirm !== 'kachat') return fail(res, 400, 'Type kachat to confirm.');
-    if (tunnel.originFor('kachat')) return fail(res, 409, 'Take its name off the internet first, under Tunnel & domains.');
-    const keepData = body.keepData === true;
-    const job = jobs.start('Uninstalling KaChat Nextcloud', (onLine) => kachat.uninstall({ keepData }, onLine));
-    sendJson(res, 202, { ok: true, jobId: job.id });
-});
 
 route('POST', /^\/api\/kachat\/accounts$/, kachatTry(async (req) => kachat.addAccount((await readBody(req)).username)));
 

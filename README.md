@@ -101,9 +101,11 @@ the host's kernel (see the comment on the service in `docker-compose.yml`).
 **KaChat Nextcloud** — a second Nextcloud, separate from the personal one, for
 the KaChat and KaPay apps: the photo, video and voice messages KaChat sends as
 links, the contacts backup both apps share (encrypted on the phone), and
-Nextcloud Talk for KaChat calls. It is run entirely from its page under Apps:
-install, accounts, app passwords to paste into the apps, the links that have
-been shared with a Stop sharing button, and the call settings. Published
+Nextcloud Talk for KaChat calls. It installs, switches on and off, and
+uninstalls like every other app; the first time its switch starts it, it sets
+itself up and makes the account the apps sign in to. Its page has the rest:
+accounts, app passwords to paste into the apps, the links that have been
+shared with a Stop sharing button, and the call settings. Published
 through the tunnel, its name lets through only what the two apps use
 (`ALLOWED_PATHS` in `manager/lib/kachat.js`); Nextcloud's web login and pages
 are not on the internet. Calls use a public STUN server, so no port is opened

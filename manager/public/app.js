@@ -3085,6 +3085,7 @@ const UNINSTALL_COPY = {
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
     mealplan: 'the meal library and every week that has been planned',
     minecraft: 'the world and everything built in it, and the allow list, operators and bans',
+    kachat: 'every photo, video and voice message sent from it, and the contacts backups in it. Every link sent from it stops working',
 };
 const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';
 
@@ -3099,6 +3100,10 @@ async function loadServices() {
         renderInstallGate(key, state);
     }
     renderUninstallCards();
+    // Its page reads more than this poll knows, so it is read again whenever
+    // the switch or an install changes what this poll does know.
+    const kc = serviceState.kachat;
+    if (kc && kcState && (kc.installed !== kcState.installed || kc.running !== kcState.running)) loadKachat();
 }
 
 /** The sidebar row: a button before it exists, a switch after. */
@@ -3930,11 +3935,22 @@ const kcCurrent = () => kcAccounts().find((a) => a.username === kcAccount) ?? kc
 function renderKachat() {
     const k = kcState;
     if (!k) return;
-    setNavHealth('kachat', !k.installed ? 'absent' : k.running ? (k.error ? 'warn' : 'ok') : 'off');
-
-    $('kc-install').hidden = k.installed;
-    for (const id of ['kc-live', 'kc-connect-card', 'kc-calls-card']) $(id).hidden = !k.installed;
-    if (!k.installed) return;
+    // Installing, the switch and the sidebar dot are the panel's usual ones;
+    // this page is what comes after. Before the first start there is nothing
+    // set up to show, so it says what the switch will do.
+    // Not installed, the cards stay as a preview under the install screen,
+    // the way every other app's page does.
+    if (!k.installed) {
+        for (const id of ['kc-live', 'kc-connect-card', 'kc-calls-card']) $(id).hidden = false;
+        $('kc-setup').hidden = true;
+        return;
+    }
+    $('kc-setup').hidden = k.setUp;
+    $('kc-live').hidden = !k.setUp;
+    // Accounts and calls are read from Nextcloud itself, which a switched-off
+    // one cannot answer; the status card says it is off instead.
+    for (const id of ['kc-connect-card', 'kc-calls-card']) $(id).hidden = !k.setUp || !k.running;
+    if (!k.setUp) return;
 
     const accounts = kcAccounts();
     if (!kcCurrent() && accounts.length) kcAccount = accounts[0].username;
@@ -3946,15 +3962,18 @@ function renderKachat() {
     const ready = k.running && k.server && hasPw;
     tag.textContent = !k.running ? 'stopped' : ready ? 'ready' : 'needs finishing';
     tag.className = `tag ${ready ? 'ok' : k.running ? 'warn' : 'off'}`;
-    $('kc-toggle').textContent = k.running ? 'Stop' : 'Start';
 
     const check = (done, text) => `<li><span class="svc-dot ${done ? 'ok' : 'bad'}"></span><span>${text}</span></li>`;
-    $('kc-checks').innerHTML = [
-        check(k.running, k.running ? 'Running.' : 'Stopped. Links sent from it do not open while it is stopped.'),
-        check(Boolean(k.server), k.server ? `On your domain at <strong>${escapeHtml(k.server)}</strong>.` : 'Not on your domain yet.'),
-        check(Boolean(acct), acct ? `Account <strong>${escapeHtml(acct.username)}</strong> is ready.` : 'No account yet. Add one under Accounts.'),
-        check(hasPw, hasPw ? 'It has an app password.' : 'No app password yet. Make one below.'),
-    ].join('');
+    // Switched off, the one thing worth saying is that; the rest is read
+    // from a Nextcloud that is not answering.
+    $('kc-checks').innerHTML = !k.running
+        ? check(false, 'Switched off. Links sent from it do not open until its switch in the sidebar starts it again.')
+        : [
+              check(true, 'Running.'),
+              check(Boolean(k.server), k.server ? `On your domain at <strong>${escapeHtml(k.server)}</strong>.` : 'Not on your domain yet.'),
+              check(Boolean(acct), acct ? `Account <strong>${escapeHtml(acct.username)}</strong> is ready.` : 'No account yet. Add one under Accounts.'),
+              check(hasPw, hasPw ? 'It has an app password.' : 'No app password yet. Make one below.'),
+          ].join('');
 
     $('kc-next').innerHTML =
         k.running && !k.server
@@ -4162,27 +4181,6 @@ $('tab-kachat').addEventListener('click', async (event) => {
     }
 });
 
-$('kc-install-go').addEventListener('click', async () => {
-    $('kc-install-go').disabled = true;
-    await queueAction({
-        title: 'Installing KaChat Nextcloud',
-        request: (headers) => api('/api/kachat/install', { method: 'POST', body: { username: $('kc-install-user').value.trim() }, headers }),
-    });
-    $('kc-install-go').disabled = false;
-    loadKachat();
-});
-
-$('kc-toggle').addEventListener('click', async () => {
-    const on = !kcState?.running;
-    $('kc-toggle').disabled = true;
-    await queueAction({
-        title: on ? 'Starting KaChat Nextcloud' : 'Stopping KaChat Nextcloud',
-        request: (headers) => api('/api/kachat/running', { method: 'POST', body: { on }, headers }),
-    });
-    $('kc-toggle').disabled = false;
-    loadKachat();
-});
-
 $('kc-pw-go').addEventListener('click', async () => {
     const name = $('kc-pw-name').value.trim() || 'KaChat';
     const box = $('kc-pw-new');
@@ -4213,25 +4211,6 @@ $('kc-new-user-go').addEventListener('click', async () => {
         toast(e.message, 'bad');
     }
     $('kc-new-user-go').disabled = false;
-    loadKachat();
-});
-
-$('kc-remove-go').addEventListener('click', async () => {
-    const keepData = !$('kc-remove-data').checked;
-    const sure = await askConfirm({
-        title: keepData ? 'Uninstall KaChat Nextcloud, keeping its data?' : 'Uninstall KaChat Nextcloud and delete everything in it?',
-        body: keepData
-            ? 'Its containers are removed. Its files and database stay, and installing again picks them up.'
-            : 'Every photo, video, voice message and contacts backup in it is deleted, and every link sent from it stops working. Your personal Nextcloud is not affected.',
-        confirmLabel: 'Uninstall',
-        danger: true,
-        requireText: 'kachat',
-    });
-    if (!sure) return;
-    await queueAction({
-        title: 'Uninstalling KaChat Nextcloud',
-        request: (headers) => api('/api/kachat/uninstall', { method: 'POST', body: { confirm: 'kachat', keepData }, headers }),
-    });
     loadKachat();
 });
 
@@ -5103,6 +5082,9 @@ function openJobStream() {
         // Anyone holding a button until this finished hears about it first --
         // before the early returns below, which are about the overlay.
         settleQueueJob(job);
+        // Before the early returns: a switch's job is a queued one, and the
+        // KaChat page shows what that job's first start set up.
+        loadKachat();
         if (job.queued) {
             peekEnded(job);
             loadServices().catch(() => {});

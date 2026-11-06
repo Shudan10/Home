@@ -87,6 +87,20 @@ export const UNITS = {
         pullable: ['minecraft'],
         data: 'the world and everything built in it, plus the allow list, operators and bans',
     },
+    // The Nextcloud for the KaChat and KaPay apps. Separate from the one above
+    // in every way; lib/kachat.js has the rest, including what happens the
+    // first time its switch starts it.
+    kachat: {
+        label: 'KaChat Nextcloud',
+        profile: 'kachat',
+        services: ['kachat-db', 'kachat-redis', 'kachat-nextcloud'],
+        containers: ['quickstart-home-kachat-nextcloud', 'quickstart-home-kachat-db', 'quickstart-home-kachat-redis'],
+        primary: 'quickstart-home-kachat-nextcloud',
+        volumes: ['quickstart-home-kachat-data', 'quickstart-home-kachat-db-data'],
+        images: ['quickstart-home/kachat-nextcloud'],
+        buildable: ['kachat-nextcloud'],
+        data: 'every photo, video and voice message sent from it, and the contacts backups in it',
+    },
 };
 
 export const unitFor = (key) => UNITS[key] ?? null;
