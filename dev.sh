@@ -35,12 +35,21 @@ else
 fi
 say()  { printf '%s==>%s %s\n' "$CYN" "$R" "$*"; }
 ok()   { printf '%s  ok%s %s\n' "$GRN" "$R" "$*"; }
+warn() { printf '%swarn%s %s\n' "$YLW" "$R" "$*" >&2; }
 die()  { printf '%sfail%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
 
 [ -d "$STACK_DIR" ] || die "No install found at $STACK_DIR. Run install.sh first."
+# The installer copies this script into the install directory too. Run from
+# there, "the repo" and "the install" are the same folder, and copying one
+# over the other starts by deleting the files it was about to copy.
+[ "$(cd "$STACK_DIR" && pwd -P)" != "$(cd "$REPO" && pwd -P)" ] \
+    || die "This is the install directory's copy of dev.sh. Run the one in your checkout instead."
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
 
 DOCKER_SUDO=""
-docker info >/dev/null 2>&1 || DOCKER_SUDO="sudo"
+docker info >/dev/null 2>&1 || DOCKER_SUDO="$SUDO"
 
 dc() {
     local files=(-f "$STACK_DIR/docker-compose.yml")
@@ -55,14 +64,47 @@ dc() {
 # Files the running stack reads from the install directory, not from the mount.
 # The manager's own code can be mounted over the image; a compose file cannot,
 # because it is the docker CLI inside the container that reads it, from /stack.
-STACK_ITEMS="docker-compose.yml manager nextcloud uninstall.sh README.md"
+#
+# The same list as CODE_ITEMS in install.sh and manager/lib/selfservice.js, so
+# that `sync` leaves the install exactly as a re-install or an Update would.
+# dev.sh was missing here, which left the install directory's copy of this
+# script as whatever the last real install put there.
+STACK_ITEMS="docker-compose.yml manager nextcloud uninstall.sh dev.sh README.md"
+
+# Hands back anything in the install directory this user does not own --
+# root's, usually, from an in-panel Update before it learned to chown what it
+# copies. The `rm -rf` below cannot get into a root-owned directory, and under
+# set -e that ended `link` or `sync` half-way with only "Permission denied".
+# Same check, same message, as install.sh.
+reclaim_stack_files() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    local uid gid owner p stuck=()
+    uid="$(id -u)"; gid="$(id -g)"; owner="$uid:$gid"
+    for p in "$@"; do
+        [ -e "$STACK_DIR/$p" ] || continue
+        if [ -n "$(find "$STACK_DIR/$p" ! -user "$uid" -print 2>/dev/null | head -n 1)" ]; then
+            stuck+=("$STACK_DIR/$p")
+        fi
+    done
+    [ "${#stuck[@]}" -gt 0 ] || return 0
+    warn "Some files in $STACK_DIR belong to another user, usually root (an Update from"
+    warn "the panel before this version left them that way). Giving them back to $(id -un):"
+    for p in "${stuck[@]}"; do warn "  $p"; done
+    [ -n "$SUDO" ] || die "That needs root, and sudo is not installed. As root, run:  chown -R $owner \"$STACK_DIR\""
+    $SUDO chown -R "$owner" "${stuck[@]}" \
+        || die "Could not take them back. Run:  sudo chown -R $owner \"$STACK_DIR\"  and try again."
+    ok "Files in $STACK_DIR belong to $(id -un) again"
+}
 
 copy_stack_items() {
+    # shellcheck disable=SC2086 # STACK_ITEMS is a word list on purpose
+    reclaim_stack_files $STACK_ITEMS conf
     for item in $STACK_ITEMS; do
         [ -e "$REPO/$item" ] || continue
-        rm -rf "${STACK_DIR:?}/${item:?}"
-        cp -R "$REPO/$item" "$STACK_DIR/$item"
+        rm -rf "${STACK_DIR:?}/${item:?}" || die "Could not remove the old $STACK_DIR/$item."
+        cp -R "$REPO/$item" "$STACK_DIR/$item" || die "Could not copy $item into $STACK_DIR."
     done
+    chmod +x "$STACK_DIR/uninstall.sh" "$STACK_DIR/dev.sh" 2>/dev/null || true
 }
 
 link_repo() {
@@ -126,6 +168,7 @@ case "${1:-status}" in
         ;;
 
     unlink)
+        reclaim_stack_files conf
         rm -f "$OVERRIDE"
         say "Restoring the files baked into the image"
         dc up -d --force-recreate manager >/dev/null

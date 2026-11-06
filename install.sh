@@ -79,10 +79,19 @@ ok()   { printf '%s  ok%s %s\n' "$GRN" "$R" "$*"; }
 warn() { printf '%swarn%s %s\n' "$YLW" "$R" "$*" >&2; }
 die()  { printf '%sfail%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
 
+# Whether there is a terminal to ask questions on.
+#
+# `[ -e /dev/tty ]` is not that question. The device node exists in every
+# container, cron job, CI runner and `ssh host 'bash -s'`, and opening it there
+# fails with "No such device or address" -- which, under set -e, ended the
+# install half-way with nothing on screen to say why. Only an actual open says,
+# and the subshell keeps a failed redirection from taking this shell with it.
+have_tty() { ( : </dev/tty ) 2>/dev/null; }
+
 confirm() {
     [ "$ASSUME_YES" = "1" ] && return 0
     # When piped from curl, stdin is the script itself -- read from the tty.
-    [ -e /dev/tty ] || return 0
+    have_tty || die "No terminal to ask on: \"$1\". Re-run with --yes to answer yes to it."
     printf '%s [Y/n] ' "$1" > /dev/tty
     local reply; read -r reply < /dev/tty || reply=""
     case "$reply" in ""|y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
@@ -355,6 +364,55 @@ dc() {
 
 # ------------------------------------------------------------------ stack ----
 
+# Exactly the set the panel's own Update replaces (CODE_ITEMS in
+# manager/lib/selfservice.js) and dev.sh copies. Keep the three in step: an item
+# one of them forgets is an item that silently stops being updated.
+CODE_ITEMS="docker-compose.yml manager nextcloud uninstall.sh dev.sh README.md"
+
+# Hands back anything under the stack directory that the person running this
+# does not own.
+#
+# The panel's Update runs in a container as root, and before it learned to
+# chown what it copies it left manager/, nextcloud/ and the rest owned by root.
+# Nothing looked wrong until the next re-install, whose `rm -rf` could not get
+# into a root-owned directory and ended the install under set -e, part-way and
+# with only "Permission denied" to go on. Files the panel creates in conf/ are
+# root's too, for the same reason.
+#
+# Root on the host can write anything, so there is nothing to do as root. On
+# macOS, Docker Desktop writes bind mounts as the user anyway and this never
+# finds anything.
+reclaim_stack_files() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    [ -d "$STACK_DIR" ] || return 0
+    local uid gid owner p stuck=()
+    uid="$(id -u)"; gid="$(id -g)"; owner="$uid:$gid"
+    [ -w "$STACK_DIR" ] || stuck+=("$STACK_DIR")
+    for p in "$@"; do
+        [ -e "$STACK_DIR/$p" ] || continue
+        if [ -n "$(find "$STACK_DIR/$p" ! -user "$uid" -print 2>/dev/null | head -n 1)" ]; then
+            stuck+=("$STACK_DIR/$p")
+        fi
+    done
+    [ "${#stuck[@]}" -gt 0 ] || return 0
+
+    warn "Some files in $STACK_DIR belong to another user, usually root (an Update from"
+    warn "the panel before this version left them that way). Giving them back to $(id -un):"
+    for p in "${stuck[@]}"; do warn "  $p"; done
+    [ -n "$SUDO" ] || die "That needs root, and sudo is not installed. As root, run:  chown -R $owner \"$STACK_DIR\"  and then re-run this."
+    # Only the stack directory itself, never -R on it: anything else in there
+    # is not this script's to change.
+    if [ "${stuck[0]}" = "$STACK_DIR" ]; then
+        $SUDO chown "$owner" "$STACK_DIR" || die "Could not take $STACK_DIR back. Run:  sudo chown $owner \"$STACK_DIR\"  and re-run this."
+        stuck=("${stuck[@]:1}")
+    fi
+    if [ "${#stuck[@]}" -gt 0 ]; then
+        $SUDO chown -R "$owner" "${stuck[@]}" \
+            || die "Could not take them back. Run:  sudo chown -R $owner \"$STACK_DIR\"  and re-run this."
+    fi
+    ok "Files in $STACK_DIR belong to $(id -un) again"
+}
+
 fetch_stack() {
     local src_dir="" tmp stack_sha=""
     # Running from a checkout? Use the files next to this script.
@@ -378,13 +436,15 @@ fetch_stack() {
         [ -f "$src_dir/docker-compose.yml" ] || die "The downloaded archive did not contain the stack."
     fi
 
-    mkdir -p "$STACK_DIR"
+    mkdir -p "$STACK_DIR" || die "Could not create $STACK_DIR."
+    # shellcheck disable=SC2086 # CODE_ITEMS is a word list on purpose
+    reclaim_stack_files $CODE_ITEMS conf .env
     # Only these are replaced wholesale on a re-install. conf/ holds generated
     # state (manager.json, apps.json) -- wiping it would cost real work.
-    for item in docker-compose.yml manager nextcloud uninstall.sh dev.sh README.md; do
+    for item in $CODE_ITEMS; do
         [ -e "$src_dir/$item" ] || continue
-        rm -rf "$STACK_DIR/${item:?}"
-        cp -R "$src_dir/$item" "$STACK_DIR/$item"
+        rm -rf "${STACK_DIR:?}/${item:?}" || die "Could not remove the old $STACK_DIR/$item."
+        cp -R "$src_dir/$item" "$STACK_DIR/$item" || die "Could not copy $item into $STACK_DIR."
     done
     chmod +x "$STACK_DIR/uninstall.sh" "$STACK_DIR/dev.sh" 2>/dev/null || true
 
@@ -402,25 +462,133 @@ fetch_stack() {
 
 random_hex() { head -c "${1:-32}" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
+# Keys .env no longer means anything by. HTTP_PORT and HTTPS_PORT were the
+# ports of the nginx proxy that published apps before the Cloudflare Tunnel
+# replaced it; nothing reads them now, and leaving them suggests something
+# still listens there.
+OBSOLETE_ENV_KEYS="HTTP_PORT HTTPS_PORT"
+
+# Sets KEY=VALUE pairs in .env and leaves every other line exactly as it was.
+#
+# The file is not the installer's alone. The panel writes the Nextcloud
+# passwords, the Cloudflare and Mullvad tokens, the Minecraft settings and the
+# rest into it, and the old version of this rewrote it from a heredoc of the
+# seven keys it knew -- so re-running the installer to change a port quietly
+# deleted the database password of a Nextcloud that was still using it.
+#
+# A key already in the file is replaced where it stands, and any later copy of
+# it dropped, so there is one value and no question which one counts; a key not
+# there yet is added at the end. Values go to awk through the environment, not
+# -v, because -v expands backslash escapes and these are secrets.
+#
+# Each value is quoted the way the panel quotes (formatEnvValue in
+# manager/lib/store.js), because compose reads this file by rules of its own:
+# `$NAME` is interpolated, ` #` starts a comment. A path with a space in it, or
+# an old `scrypt$...` password hash, reached the container altered. Single
+# quotes are taken literally by compose and by the panel's reader.
+#
+# Written back with `cat >` rather than moved into place, so the file keeps its
+# inode, owner and mode: the panel holds it open through a bind mount, and a
+# rename would leave it looking at the old one. sed -i would do the same harm,
+# and differs between GNU and BSD besides.
+env_quote() {
+    local v="$1"
+    case "$v" in *$'\n'*|*$'\r'*) die "A value for .env cannot contain a line break." ;; esac
+    if [[ "$v" =~ ^[A-Za-z0-9_./:@%+=,~-]*$ ]]; then
+        printf '%s' "$v"
+    elif [[ "$v" != *"'"* ]]; then
+        printf "'%s'" "$v"
+    elif [[ "$v" != *[\$\\\"\`]* ]]; then
+        printf '"%s"' "$v"
+    else
+        die "A value for .env has an apostrophe together with a \$, a backslash or a double quote, which .env cannot hold as written."
+    fi
+}
+
+# The value of KEY in .env as the panel and compose read it: the last copy,
+# with the quotes env_quote (or the panel) put round it taken off again.
+env_get() {
+    local v
+    [ -f "$STACK_DIR/.env" ] || return 0
+    v="$(sed -n "s/^$1=//p" "$STACK_DIR/.env" | tail -n 1)"
+    case "$v" in
+        \'*\') v="${v#\'}"; v="${v%\'}" ;;
+        \"*\") v="${v#\"}"; v="${v%\"}"; v="$(printf '%s' "$v" | sed 's/\\\([\\"$]\)/\1/g')" ;;
+    esac
+    printf '%s' "$v"
+}
+
+env_set() {
+    local env_file="$STACK_DIR/.env" tmp pair key quoted keys=""
+    [ -f "$env_file" ] || ( umask 077; : > "$env_file" ) || die "Could not create $env_file."
+    chmod 600 "$env_file" || die "Could not restrict $env_file to its owner."
+    tmp="$(mktemp)"
+    for pair in "$@"; do
+        key="${pair%%=*}"
+        # Its own statement, so a refusal from env_quote stops here rather
+        # than vanishing inside the export.
+        quoted="$(env_quote "${pair#*=}")" || { rm -f "$tmp"; exit 1; }
+        keys="$keys $key"
+        export "QSH_ENV_$key=$quoted"
+    done
+    QSH_ENV_KEYS="$keys" QSH_ENV_DROP="$OBSOLETE_ENV_KEYS" awk '
+        BEGIN {
+            n = split(ENVIRON["QSH_ENV_KEYS"], order, " ")
+            for (i = 1; i <= n; i++) want[order[i]] = 1
+            split(ENVIRON["QSH_ENV_DROP"], d, " ")
+            for (i in d) drop[d[i]] = 1
+        }
+        {
+            line = $0
+            if (match(line, /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=/)) {
+                key = substr(line, RSTART, RLENGTH - 1)
+                gsub(/[ \t]/, "", key)
+                if (key in drop) next
+                if (key in want) {
+                    if (key in done) next
+                    print key "=" ENVIRON["QSH_ENV_" key]
+                    done[key] = 1
+                    next
+                }
+            }
+            print line
+        }
+        END {
+            for (i = 1; i <= n; i++)
+                if (!(order[i] in done)) print order[i] "=" ENVIRON["QSH_ENV_" order[i]]
+        }
+    ' "$env_file" > "$tmp" || { rm -f "$tmp"; die "Could not update $env_file."; }
+    for pair in "$@"; do unset "QSH_ENV_${pair%%=*}"; done
+    cat "$tmp" > "$env_file" || { rm -f "$tmp"; die "Could not write $env_file."; }
+    rm -f "$tmp"
+    chmod 600 "$env_file"
+}
+
 write_env() {
     local env_file="$STACK_DIR/.env"
-    local existing_hash="" existing_secret=""
+    local existing_hash="" existing_secret="" key
     if [ -f "$env_file" ]; then
-        existing_hash="$(sed -n 's/^ADMIN_PASSWORD_HASH=//p' "$env_file" | head -n1)"
-        existing_secret="$(sed -n 's/^SESSION_SECRET=//p' "$env_file" | head -n1)"
+        existing_hash="$(env_get ADMIN_PASSWORD_HASH)"
+        existing_secret="$(env_get SESSION_SECRET)"
+        for key in $OBSOLETE_ENV_KEYS; do
+            if grep -q "^$key=" "$env_file"; then
+                say "Dropping $key from .env: it belonged to the nginx proxy the Cloudflare Tunnel replaced"
+            fi
+        done
+    else
+        # A fresh file gets the warning line; an existing one keeps whatever
+        # it starts with, since everything outside the keys below is left alone.
+        ( umask 077; printf '# Generated by install.sh. Delete this file only if you also remove the stack.\n' > "$env_file" )
     fi
     [ -n "$existing_secret" ] || existing_secret="$(random_hex 32)"
 
-    cat > "$env_file" <<ENVFILE
-# Generated by install.sh. Delete this file only if you also remove the stack.
-STACK_DIR=$STACK_DIR
-STACK_REPO=$STACK_REPO
-GUI_PORT=$GUI_PORT
-MANAGER_BIND=$MANAGER_BIND
-SESSION_SECRET=$existing_secret
-ADMIN_PASSWORD_HASH=$existing_hash
-ENVFILE
-    chmod 600 "$env_file"
+    env_set \
+        "STACK_DIR=$STACK_DIR" \
+        "STACK_REPO=$STACK_REPO" \
+        "GUI_PORT=$GUI_PORT" \
+        "MANAGER_BIND=$MANAGER_BIND" \
+        "SESSION_SECRET=$existing_secret" \
+        "ADMIN_PASSWORD_HASH=$existing_hash"
     ENV_HAD_PASSWORD=$([ -n "$existing_hash" ] && echo 1 || echo 0)
 }
 
@@ -428,13 +596,7 @@ ENVFILE
 # server agree on the algorithm. The password goes in over stdin so it never
 # appears in a process listing.
 write_password_hash() {
-    # sed -i differs between GNU and BSD; rewrite the file instead.
-    local tmp; tmp="$(mktemp)"
-    grep -v '^ADMIN_PASSWORD_HASH=' "$STACK_DIR/.env" > "$tmp"
-    printf 'ADMIN_PASSWORD_HASH=%s\n' "${1:-}" >> "$tmp"
-    cat "$tmp" > "$STACK_DIR/.env"
-    rm -f "$tmp"
-    chmod 600 "$STACK_DIR/.env"
+    env_set "ADMIN_PASSWORD_HASH=${1:-}"
 }
 
 set_password() {
@@ -468,17 +630,36 @@ random_password() {
     head -c 18 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-20
 }
 
+# With no terminal, the questions this install may ask have to be answered on
+# the command line -- and that is worth finding out before Docker is installed
+# and the stack downloaded, not after. A re-install whose .env already has a
+# password asks nothing about it, so only a missing one counts.
+preflight_noninteractive() {
+    [ "$ASSUME_YES" = "1" ] && return 0
+    have_tty && return 0
+    [ -n "$ADMIN_PASSWORD" ] && return 0
+    if [ -f "$STACK_DIR/.env" ] && grep -q '^ADMIN_PASSWORD_HASH=.' "$STACK_DIR/.env" 2>/dev/null; then
+        return 0
+    fi
+    die "There is no terminal to ask for a panel password on (no usable /dev/tty).
+     Re-run with --password <pass>, or with --yes to generate one and print it.
+     --yes also agrees to installing Docker if it is missing."
+}
+
 prompt_for_password() {
     [ -n "$ADMIN_PASSWORD" ] && return 0
     [ "$ENV_HAD_PASSWORD" = "1" ] && return 0
 
-    # No terminal to ask at (piped from curl with no tty, or --yes): generate
-    # one and print it in the summary. Better than leaving the panel open.
-    if [ "$ASSUME_YES" = "1" ] || [ ! -e /dev/tty ]; then
+    # --yes: generate one and print it in the summary. Better than leaving the
+    # panel open.
+    if [ "$ASSUME_YES" = "1" ]; then
         ADMIN_PASSWORD="$(random_password)"
         GENERATED_PASSWORD=1
         return 0
     fi
+    # preflight_noninteractive has already refused this case; kept so a
+    # change to the order of main cannot bring the silent abort back.
+    have_tty || die "No terminal to ask for a panel password on. Re-run with --password <pass>, or --yes to generate one."
 
     printf '\n%sThis panel controls the Docker daemon on this machine.%s\n' "$B" "$R" > /dev/tty
     printf '%sIt listens on %s so you can open it from another device, so it needs\n' "$DIM" "$MANAGER_BIND" > /dev/tty
@@ -519,6 +700,7 @@ printf '\n%sQuick Start Home%s\n' "$B" "$R"
 printf '%sinstall dir%s %s\n' "$DIM" "$R" "$STACK_DIR"
 printf '%spanel%s       http://localhost:%s\n\n' "$DIM" "$R" "$GUI_PORT"
 
+preflight_noninteractive
 ensure_docker
 fetch_stack
 write_env
@@ -580,7 +762,7 @@ cat <<SUMMARY
 
   Everything lives in ${STACK_DIR}
   Remove it all with:
-      bash ${STACK_DIR}/uninstall.sh
+      bash "${STACK_DIR}/uninstall.sh"
 
 SUMMARY
 printf '%s─────────────────────────────────────────────────%s\n\n' "$DIM" "$R"

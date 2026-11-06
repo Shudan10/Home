@@ -25,9 +25,13 @@ password-protected and that is not optional.
 **Nextcloud** — your own cloud for files, photos, calendars and contacts, with
 its own database, Redis cache and preview generator. The panel switches the
 preview providers on for you every time Nextcloud starts, so video thumbnails
-(via ffmpeg) and the whole image set including iPhone HEIC and HEIF (via
-Imaginary) work without touching a config file. Nextcloud's own default covers
-only PNG, JPEG, GIF, BMP and WebP.
+(via ffmpeg), PDFs and the whole image set including iPhone HEIC and HEIF, TIFF
+and SVG (via Imaginary) work without touching a config file. Nextcloud's own
+default covers the common web image formats (PNG, JPEG, GIF, BMP, WebP) plus
+text, Markdown, MP3 covers and OpenDocument files, with no HEIC, no video and
+no PDF. Its background jobs (clean-up, preview pre-generation, notifications)
+run from the panel every five minutes, through Nextcloud's own `cron.php` in
+its container, so there is no cron entry to set up on this machine.
 
 **Jellyfin** — your own media server for films, TV and music, streamed to
 phones, browsers, smart TVs, Roku, Fire TV and Kodi. You give the panel the
@@ -87,7 +91,12 @@ apps keep working, while its web traffic leaves through Mullvad; neither needs
 the Mullvad app. It runs in its own container (`manager/mullvad/`), and only
 traffic from the tailnet goes through Mullvad: this machine, its apps and the
 Cloudflare tunnel keep using the home connection. If the tunnel to Mullvad
-drops, tailnet traffic stops rather than falling back to the home address.
+drops, tailnet traffic stops rather than falling back to the home address, and
+the container stops rather than run if that kill switch cannot be set up.
+IPv6 goes through Mullvad too; on a host where it cannot be routed that way,
+devices get IPv4 only and their IPv6 is refused at once rather than sent out
+the home connection. The `net.ipv6` settings it runs with need IPv6 enabled in
+the host's kernel (see the comment on the service in `docker-compose.yml`).
 
 ## Installing
 
@@ -107,16 +116,41 @@ from any other device on your network.
 
 ### Options
 
-| Flag | Default | What it does |
-|---|---|---|
-| `--dir <path>` | `~/.quickstart-home` | Where everything lives |
-| `--gui-port <port>` | `8420` | The panel's port |
-| `--bind <address>` | `0.0.0.0` | What the panel listens on |
-| `--password <pass>` | generated | The panel password |
-| `--yes, -y` | | Do not ask anything |
+`install.sh`:
 
-Every flag has a `QSH_`-prefixed environment variable (`QSH_STACK_DIR`,
-`QSH_GUI_PORT`, …) for scripted installs.
+| Flag | Environment variable | Default | What it does |
+|---|---|---|---|
+| `--dir <path>` | `QSH_STACK_DIR` | `~/.quickstart-home` | Where everything lives |
+| `--gui-port <port>` | `QSH_GUI_PORT` | `8420` | The panel's port |
+| `--bind <address>` | `QSH_MANAGER_BIND` | `0.0.0.0` | What the panel listens on |
+| `--password <pass>` | `QSH_ADMIN_PASSWORD` | generated | The panel password |
+| `--stack-repo <owner/repo>` | `QSH_STACK_REPO` | `Shudan10/Home` | The GitHub repository to fetch the stack from (ignored when run from a checkout) |
+| `--stack-ref <ref>` | `QSH_STACK_REF` | `main` | The branch or tag of that repository |
+| `--yes, -y` | `QSH_YES=1` | | Do not ask anything: install Docker if it is missing, and generate a password if none is given |
+| `--skip-docker-install` | `QSH_SKIP_DOCKER_INSTALL=1` | | Stop with an error instead of installing Docker |
+
+`QSH_DOCKER_PROBE_TIMEOUT` (default `10`, seconds) is how long one check of
+the Docker daemon may take before it counts as not answering.
+
+With no terminal to ask on — a CI job, `ssh host 'bash -s'`, a container
+without `-t` — the installer cannot ask for a password or for permission to
+install Docker, so it stops before doing anything and says so. Give it
+`--password` (and `--yes` if Docker may need installing), or `--yes` alone to
+have a password generated and printed.
+
+Re-running the installer is safe: it replaces the code, keeps `conf/`, and in
+`.env` changes only its own settings (the directory, repository, port and
+bind address, the session secret and the password hash), keeping everything
+the panel wrote there.
+
+`uninstall.sh`:
+
+| Flag | Environment variable | What it does |
+|---|---|---|
+| `--dir <path>` | `QSH_STACK_DIR` | The install to remove (default: the directory the script is in, if that is an install, else `~/.quickstart-home`) |
+| `--keep-data` | | Keep the app data volumes, and `.env` and `conf/` with the passwords they need |
+| `--keep-base-images` | | Keep the pulled base images (node, alpine, mariadb, cloudflared, …), which other projects may share |
+| `--yes, -y` | `QSH_YES=1` | Do not ask for confirmation |
 
 ### About the password
 
@@ -177,7 +211,8 @@ manager/               the control panel (Node, no dependencies)
 nextcloud/             the Nextcloud image build
 conf/                  generated state: settings, port and mount overrides,
                        build records
-.env                   generated secrets and the panel password hash
+.env                   generated secrets, app passwords and tokens, and the
+                       panel password hash
 ```
 
 App data lives in Docker volumes (`quickstart-home-nextcloud-data` and friends),
@@ -195,9 +230,30 @@ can touch it.
 bash ~/.quickstart-home/uninstall.sh
 ```
 
-`--keep-data` preserves the volumes. Docker itself is never touched: it is
-shared machine-wide, and removing it would take every unrelated container with
-it. The panel has the same thing under Global settings → Remove everything.
+It removes the containers, images, volumes and networks, the install
+directory, and the panel's `tailscale serve` HTTPS addresses (only the ones it
+made: ports 443, 8443, 8444 and 8445, pointing at this stack's own ports). If
+something cannot be removed, it says what, and running it again picks up where
+it stopped. Files an older in-panel Update left owned by root are removed with
+`sudo`.
+
+`--keep-data` keeps the volumes and, in the install directory, `.env` and
+`conf/`: the Nextcloud database and the rest are no use without the passwords
+in `.env`. Installing again with the same `--dir` picks all of it back up.
+
+Docker itself is never touched: it is shared machine-wide, and removing it
+would take every unrelated container with it.
+
+The panel has the same thing under Global settings → Remove everything, and
+that one also tidies up what lives outside this machine, which `uninstall.sh`
+cannot: the Cloudflare tunnel and its DNS records, and the Mullvad device. If
+you used either and uninstall from the command line, the script reminds you;
+remove them by hand at dash.cloudflare.com (Zero Trust → Networks → Tunnels,
+and each domain's DNS records) and at mullvad.net (Account → Devices), and the
+exit node's machine at login.tailscale.com/admin/machines. Remove everything
+leaves one thing of its own behind, the small `docker:29.9.3-cli` image it runs
+in, since Docker will not delete an image while it is running; it says so, and
+`docker rmi docker:29.9.3-cli` takes it away afterwards.
 
 ## Adding another app
 
@@ -223,7 +279,8 @@ is built here from a Dockerfile, Jellyfin is pulled as a published image
 4. **`manager/lib/tunnel.js`** — a `SERVICES` entry so it can be put on a
    domain. Its address comes from the `publish` hostname and port in `APPS`.
 5. **The container lists** — `STACK_CONTAINERS` in `manager/lib/dockerctl.js`,
-   and the teardown lists in `manager/lib/selfservice.js` and `uninstall.sh`.
+   and the teardown lists in `manager/lib/selfservice.js` and `uninstall.sh`:
+   containers, named volumes, and the base image at the tag it is pulled at.
    Miss these and "remove everything" quietly leaves the app running with its
    data, which is how Jellyfin and Meal Plan went unremoved for a while.
 6. **`manager/public/`** — a sidebar row and a `<section id="tab-...">`, and add

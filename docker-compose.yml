@@ -46,12 +46,22 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Only a cache and Nextcloud's file-locking store, both rebuilt on demand, so
+  # nothing here is worth keeping across a restart. The image declares
+  # VOLUME /data, which without a mount there means a fresh anonymous volume
+  # every time the container is recreated -- each one orphaned by the next,
+  # and invisible to every teardown list because it has no name. A tmpfs
+  # satisfies the VOLUME, and with snapshots and the append-only log off
+  # Redis never writes to it anyway.
   nextcloud-redis:
     image: redis:7-alpine
     container_name: quickstart-home-nextcloud-redis
     hostname: nextcloud-redis
     profiles: ["nextcloud"]
     restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data:size=16m
     networks:
       - home
     logging:
@@ -78,6 +88,10 @@ services:
     image: quickstart-home/nextcloud:1
     build:
       context: ./nextcloud
+      # The upstream tag the image is built FROM. "stable" unless .env says
+      # otherwise; teardown and uninstall.sh read the same key to remove it.
+      args:
+        NEXTCLOUD_TAG: ${NEXTCLOUD_TAG:-stable}
     container_name: quickstart-home-nextcloud
     hostname: nextcloud
     profiles: ["nextcloud"]
@@ -304,6 +318,10 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
+    # The ipv6 ones need IPv6 in the host kernel. On a host booted with
+    # ipv6.disable=1 those keys do not exist and Docker refuses to create the
+    # container at all; drop the three net.ipv6 lines there (the exit node
+    # then carries IPv4 only, which the entrypoint already copes with).
     sysctls:
       net.ipv4.ip_forward: "1"
       net.ipv6.conf.all.forwarding: "1"

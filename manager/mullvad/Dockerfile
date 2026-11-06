@@ -14,6 +14,9 @@
 # tailscaled here always match and an update is a decision.
 FROM tailscale/tailscale:v1.104
 
+# iptables and ip6tables carry both backends, iptables-nft and the legacy one.
+# The entrypoint uses nft (and tells tailscaled to), keeping legacy only for a
+# kernel without nf_tables; plain `iptables` here is the legacy one.
 RUN apk add --no-cache wireguard-tools-wg iproute2 iptables ip6tables curl
 
 COPY entrypoint.sh /usr/local/bin/mullvad-exit
