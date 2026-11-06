@@ -3986,8 +3986,10 @@ function renderKachat() {
     };
     pick('kc-account-pick');
     pick('kc-media-pick');
+    pick('kc-files-pick');
     $('kc-account-pick-row').hidden = accounts.length < 2;
     $('kc-media-pick-row').hidden = accounts.length < 2;
+    $('kc-files-pick-row').hidden = accounts.length < 2;
 
     $('kc-server').textContent = k.server ?? 'publish it on your domain first';
     $('kc-server-copy').innerHTML = k.server ? copyButton(k.server) : '';
@@ -4096,6 +4098,79 @@ $('kc-media').addEventListener(
     true,
 );
 
+// What a file is, in the words of the apps that wrote it. Anything else is
+// shown by its name alone.
+function kcFileNote(f) {
+    if (/(^|\/)kachat-contacts\.json$/i.test(f.path)) return 'Contacts backup, shared by KaChat and KaPay. Encrypted with your wallet seed.';
+    if (/(^|\/)kachat-backup\.json$/i.test(f.path)) return 'KaChat backup.';
+    if (/portfolio/i.test(f.path) && /\.json$/i.test(f.path)) return 'KaPay portfolio. Not encrypted: readable on this server.';
+    if (/^KaChat\/Media\//.test(f.path)) return f.shared ? 'Sent media, its link is open.' : 'Sent media, no open link.';
+    return '';
+}
+
+async function loadKachatFiles() {
+    const user = $('kc-files-pick').value || kcAccount;
+    const box = $('kc-files');
+    if (!user || !kcState?.running) {
+        box.innerHTML = '<p class="muted">Nothing to show while it is stopped or has no account.</p>';
+        $('kc-files-count').textContent = '–';
+        return;
+    }
+    box.innerHTML = '<p class="muted">Reading the folder…</p>';
+    let out;
+    try {
+        out = await api(`/api/kachat/accounts/${encodeURIComponent(user)}/files`);
+    } catch (e) {
+        box.innerHTML = `<p class="verdict bad">${escapeHtml(e.message)}</p>`;
+        return;
+    }
+    const files = out.files.filter((f) => !f.folder);
+    const total = files.reduce((n, f) => n + f.size, 0);
+    $('kc-files-count').textContent = `${files.length} file${files.length === 1 ? '' : 's'} · ${humanBytes(total)}`;
+    if (!files.length) {
+        box.innerHTML = '<p class="muted">Nothing backed up yet. Once KaChat or KaPay is signed in to this account, its backups and sent media show up here.</p>';
+        return;
+    }
+    // Grouped by the folder each file sits in, the KaChat folder first and
+    // its media last, newest first inside each.
+    const groups = new Map();
+    for (const f of files) {
+        const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
+        if (!groups.has(dir)) groups.set(dir, []);
+        groups.get(dir).push(f);
+    }
+    const rank = (d) => (d === 'KaChat' ? 0 : d.startsWith('KaChat/Media') ? 2 : 1);
+    const dirs = [...groups.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    const href = (f) => `/api/kachat/accounts/${encodeURIComponent(user)}/file?path=${encodeURIComponent(f.path)}`;
+    box.innerHTML =
+        dirs
+            .map((dir) => {
+                const list = groups.get(dir).sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
+                const size = list.reduce((n, f) => n + f.size, 0);
+                const rows = list
+                    .map((f) => {
+                        const note = kcFileNote(f);
+                        return `<div class="kc-file">
+                            <div class="ts-row-main">
+                                <span class="ts-row-title">${escapeHtml(f.name)}</span>
+                                <span class="muted">${humanBytes(f.size)}${f.modified ? ` · ${relativeTime(f.modified)}` : ''}${note ? ` · ${escapeHtml(note)}` : ''}</span>
+                            </div>
+                            <button type="button" class="ghost" data-kc-download="${escapeHtml(href(f))}">Download</button>
+                        </div>`;
+                    })
+                    .join('');
+                return `<details class="kc-dir" ${list.length <= 30 ? 'open' : ''}>
+                    <summary><strong>${escapeHtml(dir ? `${dir}/` : 'Top level')}</strong> <span class="muted">${list.length} file${list.length === 1 ? '' : 's'} · ${humanBytes(size)}</span></summary>
+                    ${rows}
+                </details>`;
+            })
+            .join('') + (out.truncated ? '<p class="hint">Only the first 5,000 entries are shown.</p>' : '');
+}
+
+document.querySelector('[data-subtab="kc-files"]').addEventListener('click', loadKachatFiles);
+$('kc-files-refresh').addEventListener('click', loadKachatFiles);
+$('kc-files-pick').addEventListener('change', loadKachatFiles);
+
 document.querySelector('[data-subtab="kc-media"]').addEventListener('click', loadKachatMedia);
 $('kc-media-refresh').addEventListener('click', loadKachatMedia);
 $('kc-media-pick').addEventListener('change', loadKachatMedia);
@@ -4129,6 +4204,12 @@ $('tab-kachat').addEventListener('click', async (event) => {
             toast(e.message, 'bad');
         }
         return loadKachat();
+    }
+    const download = event.target.closest('[data-kc-download]');
+    if (download) {
+        // The panel answers it as an attachment, so this saves and stays put.
+        Object.assign(document.createElement('a'), { href: download.dataset.kcDownload, download: '' }).click();
+        return;
     }
     const unshare = event.target.closest('[data-kc-unshare]');
     if (unshare) {

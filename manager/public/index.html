@@ -1194,6 +1194,7 @@
       <nav class="subnav" aria-label="KaChat Nextcloud">
         <button class="subtab-btn active" data-subtab="kc-connect">Connect apps</button>
         <button class="subtab-btn" data-subtab="kc-media">Shared media</button>
+        <button class="subtab-btn" data-subtab="kc-files">KaChat folder</button>
         <button class="subtab-btn" data-subtab="kc-accounts">Accounts</button>
         <button class="subtab-btn" data-subtab="kc-remove">Uninstall</button>
       </nav>
@@ -1281,6 +1282,29 @@
             <div id="kc-media" class="kc-media"></div>
             <div class="row">
               <button type="button" class="ghost" id="kc-media-refresh">Refresh</button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-kc-files" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <div class="node-head">
+              <h3>KaChat folder</h3>
+              <span id="kc-files-count" class="tag">–</span>
+            </div>
+            <p class="muted">
+              Everything KaChat and KaPay have backed up to this account, read live from
+              KaChat Nextcloud: the contacts and portfolio backups, and every photo, video and
+              voice message sent. Download saves a copy; nothing here changes or deletes a file.
+            </p>
+            <label id="kc-files-pick-row">Account
+              <select id="kc-files-pick"></select>
+            </label>
+            <div id="kc-files" class="kc-files"></div>
+            <div class="row">
+              <button type="button" class="ghost" id="kc-files-refresh">Refresh</button>
             </div>
           </article>
         </div>

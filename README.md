@@ -105,7 +105,8 @@ Nextcloud Talk for KaChat calls. It installs, switches on and off, and
 uninstalls like every other app; the first time its switch starts it, it sets
 itself up and makes the account the apps sign in to. Its page has the rest:
 accounts, app passwords to paste into the apps, the links that have been
-shared with a Stop sharing button, and the call settings. Published
+shared with a Stop sharing button, the KaChat folder (every file the two
+apps have backed up, read live, each one downloadable), and the call settings. Published
 through the tunnel, its name lets through only what the two apps use
 (`ALLOWED_PATHS` in `manager/lib/kachat.js`); Nextcloud's web login and pages
 are not on the internet. Calls use a public STUN server, so no port is opened

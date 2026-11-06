@@ -2223,6 +2223,23 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
     background: var(--panel);
 }
 .kc-thumb-voice { display: grid; place-items: center; color: var(--muted); font-size: 20px; }
+.kc-files { display: grid; gap: 8px; margin: 10px 0; }
+.kc-dir {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 4px 10px;
+}
+.kc-dir > summary { cursor: pointer; padding: 6px 0; }
+.kc-file {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--line);
+}
+.kc-file .ts-row-main { flex: 1 1 0; min-width: 0; }
+.kc-file .ts-row-title { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
     .kc-media-item { flex-wrap: wrap; }
     .kc-media-item > button { margin-left: 68px; }

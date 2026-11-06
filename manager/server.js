@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 import { COMPOSE_FILE, CONF_DIR, ensureDirs, STACK_HOST } from './lib/paths.js';
@@ -2000,6 +2001,27 @@ route('GET', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/preview\/(\d+)$/, async 
         res.writeHead(err.status === 404 ? 404 : 502);
         res.end();
     }
+});
+
+route('GET', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/files$/, kachatTry(async (req, res, m) => kachat.folder(m[1])));
+
+// Always a download, never shown in the panel's page: a file an app put in
+// the account is not something the panel's own origin should render.
+route('GET', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/file$/, async (req, res, m, url) => {
+    let file;
+    try {
+        file = await kachat.download(m[1], url.searchParams.get('path'));
+    } catch (err) {
+        return fail(res, err.status ?? 500, err.message);
+    }
+    res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        ...(file.length ? { 'Content-Length': file.length } : {}),
+    });
+    Readable.fromWeb(file.body).on('error', () => res.destroy()).pipe(res);
 });
 
 /**
