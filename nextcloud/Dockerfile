@@ -3,7 +3,15 @@
 # Stock Nextcloud plus ffmpeg, which is what lets uploaded videos generate
 # thumbnails. Image previews (including iPhone HEIC) are handled by the separate
 # Imaginary container, not here.
-FROM nextcloud:stable
+#
+# The tag is a build argument rather than written into the FROM. It is
+# `stable` almost always; the panel sets NEXTCLOUD_TAG in .env to one major
+# version's own tag (`nextcloud:31`) when stable has moved more than one major
+# past what is installed, because Nextcloud refuses to upgrade across more than
+# one at a time. Compose passes the .env value in; this default covers a build
+# without it.
+ARG NEXTCLOUD_TAG=stable
+FROM nextcloud:${NEXTCLOUD_TAG}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
@@ -22,6 +30,17 @@ RUN apt-get update \
 # folder already is. Apache sources envvars before starting, so this covers the
 # processes that actually write uploads.
 RUN echo 'umask 0002' >> /etc/apache2/envvars
+
+# HSTS, on the addresses that are HTTPS.
+#
+# Apache in here only ever speaks plain http; HTTPS is Cloudflare's edge or
+# Tailscale serve, and both say so in X-Forwarded-Proto. Nextcloud's own
+# security check reads the header off its https address and warns until it is
+# there. Sent only when the request arrived as https: browsers ignore it over
+# plain http anyway, so on the house network's http address it would only be
+# noise, and it must never be what decides that the LAN address needs TLS.
+COPY hsts.conf /etc/apache2/conf-available/quickstart-home-hsts.conf
+RUN a2enmod headers && a2enconf quickstart-home-hsts
 
 LABEL org.opencontainers.image.title="quickstart-home-nextcloud" \
       org.opencontainers.image.source="https://github.com/Shudan10/Home"

@@ -56,7 +56,7 @@ export async function diskSpace() {
  */
 let cachedHostname = null;
 
-async function hostname() {
+export async function hostname() {
     if (cachedHostname) return cachedHostname;
     try {
         const { stdout } = await run('docker', ['info', '--format', '{{.Name}}'], { timeoutMs: 10_000 });
@@ -99,13 +99,35 @@ export async function containers() {
  * only picks a route. The panel's own image is used because it is certainly
  * present; pulling something would make a landing page depend on the network.
  */
-let lanCache = null;
+let lanCache = { at: 0, value: undefined };
+/*
+ * A probe that found nothing is kept too, for a while. It starts a container,
+ * and it is on the status poll: answering "no address" by asking again every
+ * few seconds meant a machine with no private address -- or a daemon that was
+ * busy the once -- started a container per poll, for every open tab, forever.
+ * Ten minutes is long enough to stop that and short enough that a network
+ * which comes up later is noticed without a restart.
+ */
+const LAN_RETRY_MS = 10 * 60_000;
+
+let lanProbe = null;
 
 export async function lanAddress() {
-    if (lanCache !== null) return lanCache;
+    if (lanCache.value) return lanCache.value;
+    if (lanCache.value === null && Date.now() - lanCache.at < LAN_RETRY_MS) return null;
+    // Several tabs polling at once share the one probe rather than each
+    // starting a container of its own.
+    lanProbe ??= probeLanAddress().finally(() => {
+        lanProbe = null;
+    });
+    return lanProbe;
+}
+
+async function probeLanAddress() {
     const probe = "const s=require('node:dgram').createSocket('udp4');" +
         "s.connect(53,'1.1.1.1',()=>{console.log(s.address().address);s.close()});" +
         "setTimeout(()=>process.exit(0),2000);";
+    let value = null;
     try {
         const { stdout } = await run(
             'docker',
@@ -116,11 +138,14 @@ export async function lanAddress() {
         // Only a private address is an answer. A public one means this machine
         // is not behind a router at all, and there is no "on this network" to
         // offer -- better to say nothing than to print its public address.
-        lanCache = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) ? ip : null;
+        value = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) ? ip : null;
     } catch {
-        lanCache = null;
+        value = null;
     }
-    return lanCache;
+    // A found address is kept for the process, as before: it is what the
+    // machine is, not something that changes while the panel runs.
+    lanCache = { at: Date.now(), value };
+    return value;
 }
 
 /*

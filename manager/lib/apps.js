@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { COMPOSE_FILE, CONF_DIR } from './paths.js';
 import { readJson, writeJson, updateEnvFile, readEnvFile } from './store.js';
-import { builtOn, envMap, resolveTag } from './registry.js';
+import { builtOn, envMap, resolveTag, tagExists } from './registry.js';
 
 /**
  * The applications this home server can run.
@@ -117,7 +117,14 @@ export const DEFAULT_APPS_CONFIG = {
         // panel's own link was opened from. The private ranges are wildcarded
         // so a LAN address works wherever it is reached from; a public name is
         // added to this list when one is attached.
-        trustedDomains: 'localhost 192.168.*.* 10.*.*.* 172.16.*.*',
+        //
+        // Not 172.16.*.*: Nextcloud's wildcard is per octet, so that only ever
+        // covered 172.16.x.x and not the rest of the 172.16/12 private range,
+        // and the only thing that was meant to come from there -- the docker
+        // networks -- is a proxy, which TRUSTED_PROXIES handles. A home
+        // network that really is numbered 172.x gets its own address added
+        // when Nextcloud starts.
+        trustedDomains: 'localhost 192.168.*.* 10.*.*.*',
         // Folders that already exist on this machine, shown inside Nextcloud
         // where they are rather than copied into it.
         //
@@ -217,12 +224,13 @@ export const MINECRAFT_CHOICES = {
  * simply to pick another number.
  */
 export function reservedHostPorts() {
-    const panel = Number(process.env.GUI_PORT || 8420);
-    return new Map([
-        [panel, 'this control panel'],
-        [80, 'the reverse proxy'],
-        [443, 'the reverse proxy'],
-    ]);
+    // Read from .env as well as this process's environment: the panel's port
+    // can be moved, and .env is what the next start of this container uses.
+    const panel = Number(readEnvFile().GUI_PORT || process.env.GUI_PORT || 8420);
+    // Only the panel. 80 and 443 were held for the nginx proxy an older
+    // version ran; publishing goes through the tunnel now, and nothing here
+    // listens on either.
+    return new Map([[panel, 'this control panel']]);
 }
 
 export function loadAppsConfig() {
@@ -261,14 +269,29 @@ const REF_RE = /^(?!.*\.\.)[A-Za-z0-9._\/-]{1,100}$/;
 // Asterisks allowed: Nextcloud's trusted-domain matching takes wildcards, and
 // a home server needs them to accept its own address on a network whose
 // numbering it does not control.
-const DOMAIN_LIST_RE = /^[A-Za-z0-9.*\-, ]{0,300}$/;
+//
+// Checked one name at a time, with no limit on the length of the whole list.
+// There used to be one, of 300 characters, and the panel itself is what grows
+// this list -- every public name, the Tailscale name and address -- so an
+// install that had been given a few names reached it on its own, and from then
+// on every save of Nextcloud's settings was refused for a list nobody typed.
+const TRUSTED_DOMAIN_RE = /^[A-Za-z0-9*](?:[A-Za-z0-9.*-]{0,252})$/;
+const MAX_TRUSTED_DOMAINS = 100;
 
 // A media folder is a host path, so it has to be absolute and it has to be safe
 // to paste into the generated compose override. Spaces are allowed -- "My
 // Movies" is an ordinary directory name -- but quotes, colons, newlines and
 // control characters are not: the override writes each mount as a quoted
 // "source:target:ro" string, and any of those would break out of it.
-const MEDIA_PATH_RE = /^\/[^\0-\x1f"':]*$/;
+//
+// Nor $, ` or a backslash. Compose interpolates $NAME inside that file too, so
+// a folder called "$HOME" mounted whatever HOME was; a backslash is an escape
+// inside a double-quoted YAML string; and a backtick has no business in a path
+// that also travels through shell scripts in throwaway containers.
+const MEDIA_PATH_RE = /^\/[^\0-\x1f\x7f"':$`\\]*$/;
+
+/** Whether a host path can be mounted and handed to a script safely. */
+export const isSafeHostPath = (p) => typeof p === 'string' && MEDIA_PATH_RE.test(p) && !p.split('/').includes('..');
 const MAX_MEDIA_PATHS = 24;
 
 /** '/srv/Media/Films/' and '/srv/Media/Films' are the same folder. */
@@ -323,7 +346,7 @@ function validateMediaPaths(input, errors, label = 'Jellyfin') {
         if (!path.startsWith('/')) {
             errors.push(`"${path}" is not a full path. It has to start with a / and be the path on this machine.`);
         } else if (!MEDIA_PATH_RE.test(path)) {
-            errors.push(`"${path}" contains a character that cannot be used in a folder path here (quotes and colons).`);
+            errors.push(`"${path}" contains a character that cannot be used in a folder path here (quotes, colons, $, \` or backslashes).`);
         } else if (path.split('/').includes('..')) {
             errors.push(`"${path}" contains "..", so write the real path instead.`);
         } else if (path === '/') {
@@ -365,9 +388,12 @@ export async function verifyHostPaths(docker, paths) {
                 'alpine:3.21',
                 'sh',
                 '-c',
-                // NUL-separated in, one verdict per line out, so a path with a
-                // space or a newline in it cannot be split into two arguments.
-                paths.map((p) => `[ -d "/host${p.replace(/"/g, '')}" ] && echo yes || echo no`).join('; '),
+                // The paths go in as arguments rather than pasted into the
+                // script, so no character in one can become shell syntax; one
+                // verdict per line comes out, in the same order.
+                'for p in "$@"; do [ -d "/host$p" ] && echo yes || echo no; done',
+                'sh',
+                ...paths,
             ],
             { timeoutMs: 60_000 },
         );
@@ -381,7 +407,13 @@ export async function verifyHostPaths(docker, paths) {
     }
 }
 
-export function validateAppsConfig(input) {
+/**
+ * Checks a whole apps document and returns the clean version of it.
+ *
+ * `lockedAdminUser` is the admin account Nextcloud was installed with, once it
+ * has been installed: see below.
+ */
+export function validateAppsConfig(input, { lockedAdminUser = null } = {}) {
     const errors = [];
     const cfg = structuredClone(DEFAULT_APPS_CONFIG);
 
@@ -408,18 +440,37 @@ export function validateAppsConfig(input) {
         cfg.nextcloud.hostPort = port;
     }
 
+    /*
+     * The admin account's name is Nextcloud's business once it is installed.
+     *
+     * It is only read by the first-time install, which creates the account
+     * with it; after that, changing it here renames nothing -- it only makes
+     * the panel show, and try to reset the password of, an account that does
+     * not exist. So it is fixed from then on, and the way to have another name
+     * is to make that user in Nextcloud itself.
+     */
     const user = String(n.adminUser ?? 'admin').trim();
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(user)) errors.push('Nextcloud admin user is invalid.');
-    else cfg.nextcloud.adminUser = user;
+    else if (lockedAdminUser && user !== lockedAdminUser) {
+        errors.push(
+            `Nextcloud is already installed with the admin account "${lockedAdminUser}", and that name cannot be changed from here: ` +
+                'Nextcloud only reads it when it first installs. Add another user in Nextcloud itself, or uninstall Nextcloud to start again with a different name.',
+        );
+    } else cfg.nextcloud.adminUser = user;
 
-    const domains = String(n.trustedDomains ?? 'localhost').trim();
-    if (!DOMAIN_LIST_RE.test(domains)) {
-        errors.push('Trusted domains may only contain hostnames, separated by spaces or commas.');
+    // Stored space separated whatever was typed. NEXTCLOUD_TRUSTED_DOMAINS is
+    // read by a shell `for` loop over an unquoted variable, so it splits on
+    // whitespace and a comma would stay stuck to the hostname before it.
+    const domains = [...new Set(String(n.trustedDomains ?? 'localhost').split(/[\s,]+/).filter(Boolean))];
+    const badDomains = domains.filter((d) => !TRUSTED_DOMAIN_RE.test(d));
+    if (badDomains.length) {
+        errors.push(
+            `Trusted domains may only contain hostnames and addresses, separated by spaces or commas: ${badDomains.slice(0, 3).map((d) => `"${d.slice(0, 40)}"`).join(', ')} cannot be one.`,
+        );
+    } else if (domains.length > MAX_TRUSTED_DOMAINS) {
+        errors.push(`That is more than ${MAX_TRUSTED_DOMAINS} trusted domains, which is more than this is meant for.`);
     } else {
-        // Stored space separated whatever was typed. NEXTCLOUD_TRUSTED_DOMAINS is
-        // read by a shell `for` loop over an unquoted variable, so it splits on
-        // whitespace and a comma would stay stuck to the hostname before it.
-        cfg.nextcloud.trustedDomains = domains.split(/[\s,]+/).filter(Boolean).join(' ') || 'localhost';
+        cfg.nextcloud.trustedDomains = domains.join(' ') || 'localhost';
     }
 
     cfg.nextcloud.sharedPaths = validateMediaPaths(n.sharedPaths, errors, 'Nextcloud');
@@ -739,7 +790,10 @@ export function renderAppsPortsOverride(cfg) {
         // that is read-only at the Docker layer produces errors in the web UI
         // that name no cause. Whether a given folder is writable is decided per
         // mount inside Nextcloud instead, where it can say so.
-        const shared = sharedMounts(cfg.nextcloud.sharedPaths ?? []);
+        // Filtered again here as well as at validation: this file is merged
+        // into every compose call, so a path saved by an older version that
+        // would now be refused must not reach it either.
+        const shared = sharedMounts((cfg.nextcloud.sharedPaths ?? []).filter(isSafeHostPath));
         if (shared.length) {
             blocks.push('    volumes:');
             for (const m of shared) blocks.push(`      - "${m.path}:${m.target}"`);
@@ -766,7 +820,7 @@ export function renderAppsPortsOverride(cfg) {
         // Compose merges volumes by their target path rather than replacing the
         // list, so naming only the media here keeps the config and cache
         // volumes the base file declares.
-        const mounts = mediaMounts(cfg.jellyfin.mediaPaths ?? []);
+        const mounts = mediaMounts((cfg.jellyfin.mediaPaths ?? []).filter(isSafeHostPath));
         if (mounts.length) {
             blocks.push('    volumes:');
             // `ro` is not a default worth leaving to chance: this is somebody's
@@ -985,9 +1039,17 @@ export function summarizeError(error) {
  */
 export const NEXTCLOUD_CONTAINER = APPS.nextcloud.container;
 
-/** Runs an `occ` command as the web user inside the Nextcloud container. */
-function occArgs(args, { env = {} } = {}) {
-    const envFlags = Object.keys(env).flatMap((k) => ['-e', `${k}=${env[k]}`]);
+/**
+ * Runs an `occ` command as the web user inside the Nextcloud container.
+ *
+ * `env` names variables to hand to the container, by name only. Their values
+ * go in the environment of the docker command itself (dockerctl.run's `env`),
+ * and docker copies a variable named without a value from there -- so a
+ * password reaches `occ` without ever being on a command line, where every
+ * user on the host could read it from the process list while it ran.
+ */
+function occArgs(args, { env = [] } = {}) {
+    const envFlags = env.flatMap((k) => ['-e', k]);
     return ['exec', '-u', 'www-data', ...envFlags, NEXTCLOUD_CONTAINER, 'php', 'occ', ...args];
 }
 
@@ -1007,11 +1069,14 @@ export async function syncTrustedDomains(docker, cfg, onLine = () => {}) {
     for (const [i, domain] of wanted.entries()) {
         await docker(occArgs(['config:system:set', 'trusted_domains', String(i), '--value', domain]));
     }
-    // Clear stale trailing entries. `occ` exits non-zero once there is nothing
-    // at an index, which is the signal to stop rather than an error.
-    for (let i = wanted.length; i < wanted.length + 10; i++) {
+    // Clear stale trailing entries. With --error-if-not-exists `occ` exits
+    // non-zero once there is nothing at an index, which is the signal to stop
+    // rather than an error -- without it, deleting a key that is not there
+    // succeeds, and this ran its whole bound every time. Bounded generously,
+    // since the list can now shrink by more than a handful at once.
+    for (let i = wanted.length; i < wanted.length + MAX_TRUSTED_DOMAINS; i++) {
         try {
-            await docker(occArgs(['config:system:delete', 'trusted_domains', String(i)]));
+            await docker(occArgs(['config:system:delete', 'trusted_domains', String(i), '--error-if-not-exists']));
         } catch {
             break;
         }
@@ -1045,12 +1110,12 @@ async function upstreamImage(name, docker) {
         // so the check follows the FROM if it is ever changed.
         try {
             const file = path.join(path.dirname(COMPOSE_FILE), 'nextcloud', 'Dockerfile');
-            const from = fs.readFileSync(file, 'utf8').match(/^\s*FROM\s+(\S+)/im)?.[1];
-            if (from && !from.includes('$')) return from;
+            const from = resolveFrom(fs.readFileSync(file, 'utf8'), readEnvFile());
+            if (from) return from;
         } catch {
             /* fall through */
         }
-        return 'nextcloud:stable';
+        return `nextcloud:${readEnvFile().NEXTCLOUD_TAG || 'stable'}`;
     }
     if (name === 'jellyfin') {
         // The tag an Update would fetch, which is the .env pin -- the same
@@ -1065,6 +1130,37 @@ async function upstreamImage(name, docker) {
         return `itzg/minecraft-server:${readEnvFile().MINECRAFT_IMAGE_VERSION || 'latest'}`;
     }
     throw new Error(`${APPS[name]?.label ?? name} is not made from a Docker Hub image.`);
+}
+
+/**
+ * The image a Dockerfile's first FROM names, with its build arguments filled in.
+ *
+ * Nextcloud's is `FROM nextcloud:${NEXTCLOUD_TAG}`: compose passes the tag from
+ * .env as a build argument, and the ARG line above the FROM holds the default
+ * for when .env has none. Both are read here the same way, so the check asks
+ * Docker Hub about the tag a build would actually use. Null when a variable is
+ * left unresolved, rather than a guess.
+ */
+export function resolveFrom(dockerfile, env = {}) {
+    const defaults = {};
+    for (const line of String(dockerfile).split('\n')) {
+        const arg = /^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(\S*))?\s*$/i.exec(line);
+        if (arg) {
+            defaults[arg[1]] = (arg[2] ?? '').replace(/^"(.*)"$/, '$1');
+            continue;
+        }
+        const from = /^\s*FROM\s+(\S+)/i.exec(line);
+        if (!from) continue;
+        let unresolved = false;
+        const image = from[1].replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, braced, fallback, bare) => {
+            const key = braced ?? bare;
+            const value = env[key] || defaults[key] || fallback || '';
+            if (!value) unresolved = true;
+            return value;
+        });
+        return unresolved ? null : image;
+    }
+    return null;
 }
 
 /** The versions worth showing for an app, read from an image's env and labels. */
@@ -1130,13 +1226,144 @@ export async function checkBaseImage(name, docker) {
     // both apps migrate their database on the way up, and neither comes back.
     const majorChanges = versions.filter((v) => v.running && v.latest && major(v.running) !== major(v.latest));
 
-    return {
+    const result = {
         ...base,
         neverBuilt: false,
         updateAvailable: !builtOn(local.RootFS?.Layers ?? [], upstream.diffIds),
         versions,
         majorChanges: majorChanges.map((v) => v.label),
     };
+
+    /*
+     * Nextcloud partway up a staircase.
+     *
+     * An Update that would cross more than one major version is taken one
+     * major at a time (see nextcloudTagFor), which pins the build to that
+     * major's own tag. Checked against only that tag, a Nextcloud that has
+     * just reached it reads as up to date -- and nothing would ever say that
+     * another press is needed to carry on to stable.
+     */
+    if (name === 'nextcloud' && !/:stable$/.test(image)) {
+        try {
+            const stable = await resolveTag('nextcloud:stable');
+            const running = runVersions[1]?.[1];
+            const latest = stable.env.NEXTCLOUD_VERSION;
+            if (running && latest && Number(major(latest)) > Number(major(running))) {
+                result.updateAvailable = true;
+                result.versions = [...versions.filter((v) => v.label !== 'Nextcloud'), { label: 'Nextcloud', running, latest }];
+                result.majorChanges = [...new Set([...result.majorChanges, 'Nextcloud'])];
+                result.steppedFrom = image;
+            }
+        } catch {
+            /* the pinned tag's answer stands */
+        }
+    }
+    return result;
+}
+
+/**
+ * The Nextcloud major version the data volume holds, or null.
+ *
+ * Read from version.php in the volume rather than asked of `occ`, so it works
+ * with the container stopped or gone -- which is exactly when an Update or a
+ * reinstall over kept data needs to know it. The array is the version the
+ * database was last upgraded to, which is what matters for the next step.
+ */
+export async function nextcloudInstalledMajor(docker) {
+    try {
+        const { stdout } = await docker(
+            ['run', '--rm', '-v', 'quickstart-home-nextcloud-data:/v:ro', 'alpine:3.21', 'cat', '/v/version.php'],
+            { timeoutMs: 60_000 },
+        );
+        const m = /\$OC_Version\s*=\s*(?:array\(|\[)\s*(\d+)/.exec(stdout);
+        return m ? Number(m[1]) : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Which `nextcloud:` tag the next build should start from.
+ *
+ * Nextcloud upgrades one major version at a time and refuses anything else:
+ * a 29 that is handed a 31 image stops at boot with "Updates between multiple
+ * major versions are unsupported", and stays stopped. `stable` moves a major
+ * every few months, so a Nextcloud left alone for a while would be broken by
+ * its own Update button.
+ *
+ * So when stable is more than one major ahead of what is installed, the build
+ * uses the next major's own tag instead, and the next press of Update carries
+ * on from there. Docker Hub is asked whether that tag exists before it is
+ * used; if it cannot be checked, stable is left in place and the reason said.
+ */
+export async function nextcloudTagFor(docker, onLine = () => {}) {
+    const installed = await nextcloudInstalledMajor(docker);
+    if (!installed) return { tag: 'stable', installed: null };
+    let upstream = null;
+    try {
+        upstream = Number(major((await resolveTag('nextcloud:stable')).env.NEXTCLOUD_VERSION)) || null;
+    } catch (err) {
+        onLine(`Could not ask Docker Hub which version nextcloud:stable is (${err.message}).`);
+    }
+    if (!upstream || upstream <= installed + 1) return { tag: 'stable', installed, upstream };
+
+    const step = String(installed + 1);
+    const exists = await tagExists(`nextcloud:${step}`).catch(() => false);
+    if (!exists) {
+        onLine(`nextcloud:stable is version ${upstream} and this Nextcloud is ${installed}, but nextcloud:${step} could not be found on Docker Hub to step through. Leaving the update for now.`);
+        return { tag: null, installed, upstream };
+    }
+    onLine(
+        `This Nextcloud is version ${installed} and the newest is ${upstream}. Nextcloud can only move up one major version at a time, ` +
+            `so this update goes to ${step}. Press Update again afterwards to continue.`,
+    );
+    return { tag: step, installed, upstream, stepped: true };
+}
+
+/*
+ * Database housekeeping after Nextcloud has moved to a new version.
+ *
+ * The image runs `occ upgrade` itself when it starts on a newer version, and
+ * that is all it runs. The rest is what Nextcloud's own admin overview then
+ * nags about -- missing indices, columns and primary keys that an upgrade adds
+ * the definitions for but leaves to be created, because on a big instance they
+ * can take a while -- plus the repair steps, and the apps, which are updated
+ * separately from the server and are what breaks first when they are not.
+ *
+ * Each one is attempted and reported on its own. None is worth failing an
+ * update that has already succeeded: a Nextcloud with a missing index works,
+ * just slower, and the next update tries again.
+ */
+const NEXTCLOUD_AFTER_UPDATE = [
+    { args: ['db:add-missing-indices'], label: 'Adding missing database indices' },
+    { args: ['db:add-missing-columns'], label: 'Adding missing database columns' },
+    { args: ['db:add-missing-primary-keys'], label: 'Adding missing primary keys' },
+    { args: ['maintenance:repair'], label: 'Running the repair steps' },
+    { args: ['app:update', '--all'], label: 'Updating apps' },
+];
+
+export async function nextcloudAfterUpdate(docker, onLine = () => {}) {
+    for (const step of NEXTCLOUD_AFTER_UPDATE) {
+        onLine(`${step.label}...`);
+        try {
+            await docker(occArgs(step.args), { onLine, timeoutMs: 30 * 60_000 });
+        } catch (err) {
+            onLine(`${step.label} did not finish: ${summarizeError(err.message)}`);
+        }
+    }
+}
+
+/**
+ * Has Nextcloud run its background jobs from the system's cron rather than on
+ * page loads. The panel is that cron: see the timer in server.js.
+ */
+export async function setNextcloudCronMode(docker) {
+    await docker(occArgs(['background:cron']), { timeoutMs: 60_000 });
+}
+
+/** One run of Nextcloud's background jobs, as cron would start it. */
+export async function runNextcloudCron(docker, { timeoutMs = 15 * 60_000 } = {}) {
+    await docker(['exec', '-u', 'www-data', NEXTCLOUD_CONTAINER, 'php', '-f', '/var/www/html/cron.php'], { timeoutMs });
 }
 
 export async function nextcloudVersion(docker) {
@@ -1448,10 +1675,11 @@ async function listPanelMounts(docker) {
  */
 export async function ownerGids(docker, paths) {
     if (!paths.length) return [];
-    const script = paths.map((p) => `stat -c '%g' "/host${p}" 2>/dev/null`).join('\n');
+    // Arguments, not interpolated, for the same reason as verifyHostPaths.
+    const script = 'for p in "$@"; do stat -c %g "/host$p" 2>/dev/null; done';
     try {
         const { stdout } = await docker(
-            ['run', '--rm', '-v', '/:/host:ro', 'quickstart-home/manager:1', 'sh', '-c', script],
+            ['run', '--rm', '-v', '/:/host:ro', 'quickstart-home/manager:1', 'sh', '-c', script, 'sh', ...paths],
             { timeoutMs: 30_000 },
         );
         const gids = stdout.split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
@@ -1468,11 +1696,11 @@ export async function syncPreviewSettings(docker, onLine = () => {}) {
         await docker(occArgs(['config:system:set', 'enabledPreviewProviders', String(i), '--value', provider]));
     }
     // Indices are positional, so a list that used to be longer would keep its
-    // tail. `occ` exits non-zero once there is nothing at an index, which is
-    // the signal to stop rather than an error.
+    // tail. `occ` exits non-zero once there is nothing at an index (asked to,
+    // with --error-if-not-exists), which is the signal to stop.
     for (let i = PREVIEW_PROVIDERS.length; i < PREVIEW_PROVIDERS.length + 10; i++) {
         try {
-            await docker(occArgs(['config:system:delete', 'enabledPreviewProviders', String(i)]));
+            await docker(occArgs(['config:system:delete', 'enabledPreviewProviders', String(i), '--error-if-not-exists']));
         } catch {
             break;
         }
@@ -1482,8 +1710,23 @@ export async function syncPreviewSettings(docker, onLine = () => {}) {
     // The hostname is the one compose gives it on the internal network, so this
     // never depends on a published port.
     await docker(occArgs(['config:system:set', 'preview_imaginary_url', '--value', 'http://nextcloud-imaginary:9000/']));
-    if (env.NEXTCLOUD_IMAGINARY_SECRET) {
-        await docker(occArgs(['config:system:set', 'preview_imaginary_key', '--value', env.NEXTCLOUD_IMAGINARY_SECRET]));
+    // Not `config:system:set --value <secret>`, which would put the secret on
+    // a command line. `config:import` reads JSON from a file instead, and the
+    // file is written by the shell's own printf -- a builtin, so no process is
+    // started with the secret in its arguments. A private temporary file
+    // rather than a pipe: occ reads stdin without waiting, so a pipe could be
+    // read before anything was in it. The secret is base64url, so it needs no
+    // escaping inside the JSON string.
+    if (env.NEXTCLOUD_IMAGINARY_SECRET && /^[A-Za-z0-9_-]+$/.test(env.NEXTCLOUD_IMAGINARY_SECRET)) {
+        await docker(
+            [
+                'exec', '-u', 'www-data', '-e', 'QSH_IMAGINARY_KEY', NEXTCLOUD_CONTAINER, 'sh', '-c',
+                't=$(mktemp) || exit 1; ' +
+                    'printf \'{"system":{"preview_imaginary_key":"%s"}}\' "$QSH_IMAGINARY_KEY" > "$t"; ' +
+                    'php occ config:import "$t"; rc=$?; rm -f "$t"; exit $rc',
+            ],
+            { env: { QSH_IMAGINARY_KEY: env.NEXTCLOUD_IMAGINARY_SECRET } },
+        );
     }
 
     onLine('Previews: images and iPhone HEIC via Imaginary, video thumbnails via ffmpeg.');
@@ -1505,9 +1748,194 @@ export function nextcloudAdmin() {
  * appears in the container's process list.
  */
 export async function setNextcloudAdminPassword(docker, password) {
+    // Checked here as well as in the route: this is stored in .env, which is
+    // read a line at a time, and a quote is the one character that file cannot
+    // always hold as typed. Refused before Nextcloud is touched, so the two
+    // never disagree about what the password is.
+    const problem = adminPasswordProblem(password);
+    if (problem) throw Object.assign(new Error(problem), { status: 400 });
     const { user } = nextcloudAdmin();
-    await docker(occArgs(['user:resetpassword', '--password-from-env', user], { env: { OC_PASS: password } }), {
+    await docker(occArgs(['user:resetpassword', '--password-from-env', user], { env: ['OC_PASS'] }), {
         timeoutMs: 120_000,
+        env: { OC_PASS: password },
     });
     updateEnvFile({ NEXTCLOUD_ADMIN_PASSWORD: password });
+}
+
+/** Why a new Nextcloud admin password cannot be used, or null. */
+export function adminPasswordProblem(password) {
+    const text = String(password ?? '');
+    if (text.length < 10) return 'The password needs to be at least 10 characters.';
+    if (text.length > 200) return 'That password is too long.';
+    if (/[\r\n\0]/.test(text)) return 'The password cannot contain a line break.';
+    if (/['"`\\]/.test(text)) return 'Leave quotes, backticks and backslashes out of the password: the stack keeps it in a settings file that cannot always hold them as typed.';
+    return null;
+}
+
+// ------------------------------------------------------- trusted domains ----
+
+/** The trusted-domain list as a list. */
+export const trustedDomainList = (cfg) => String(cfg.nextcloud.trustedDomains || '').split(/[\s,]+/).filter(Boolean);
+
+/**
+ * Adds names to Nextcloud's trusted domains in the panel's config, and says
+ * which were new. Saved and written to .env when anything changed; pushing the
+ * list into a running Nextcloud is the caller's, since only it knows whether
+ * now is a good moment.
+ *
+ * Always loaded fresh rather than taking a config from the caller: this runs
+ * from timers and from jobs that were queued a while ago, and saving a copy
+ * read before the wait would quietly undo whatever was saved during it.
+ */
+export function addTrustedDomains(names) {
+    const cfg = loadAppsConfig();
+    const have = new Set(trustedDomainList(cfg));
+    const add = names.filter((n) => n && TRUSTED_DOMAIN_RE.test(n) && !have.has(n));
+    if (add.length) {
+        cfg.nextcloud.trustedDomains = [...have, ...add].slice(0, MAX_TRUSTED_DOMAINS).join(' ');
+        saveAppsConfig(cfg);
+        writeAppsEnv(cfg);
+    }
+    return { cfg, added: add };
+}
+
+/*
+ * Two kinds of entry an older version left in the list.
+ *
+ * *.duckdns.org names, from when publishing went through DuckDNS. That is
+ * gone, its names no longer lead here, and all they still do is take up room
+ * in a list the panel keeps adding to.
+ *
+ * And 172.16.*.*, the old default, which looked like it covered the 172.16/12
+ * private range and only covered its first /16 (Nextcloud's wildcards are per
+ * part). The docker networks it was there for are proxies, which
+ * TRUSTED_PROXIES covers; a home network that genuinely uses 172.x addresses
+ * gets the machine's own address trusted when Nextcloud starts.
+ *
+ * Done once, recorded in manager.json, so somebody who deliberately puts
+ * 172.16.*.* back is not overruled on every start.
+ */
+export function migrateTrustedDomains(loadManager, saveManager) {
+    const mgr = loadManager();
+    if (mgr.migrations?.trustedDomains2026) return { changed: false, removed: [] };
+    const cfg = loadAppsConfig();
+    const before = trustedDomainList(cfg);
+    const keep = before.filter((d) => !/(^|\.)duckdns\.org$/i.test(d) && d !== '172.16.*.*');
+    const removed = before.filter((d) => !keep.includes(d));
+    if (removed.length) {
+        cfg.nextcloud.trustedDomains = keep.join(' ') || 'localhost';
+        saveAppsConfig(cfg);
+        writeAppsEnv(cfg);
+    }
+    mgr.migrations = { ...(mgr.migrations ?? {}), trustedDomains2026: true };
+    saveManager(mgr);
+    return { changed: removed.length > 0, removed };
+}
+
+// ------------------------------------------------------ jellyfin hardware ----
+
+/*
+ * Turning the GPU on in Jellyfin as well as handing it over.
+ *
+ * The checkbox passes /dev/dri into the container, and on its own that does
+ * nothing: Jellyfin transcodes with whatever its Playback settings say, and a
+ * new install says "none". So the box was ticked, the device was there, and
+ * every stream still went through the processor.
+ *
+ * Set once, on the way from off to on, and only over "none": a choice somebody
+ * made in Jellyfin's own settings -- QSV, a different render node -- is theirs
+ * and stays. VAAPI because it is what works across Intel and AMD on Linux, and
+ * this machine's GPU is AMD. The record of having done it lives next to the
+ * panel's other state and is cleared when the box is unticked, so ticking it
+ * again is a new transition.
+ */
+const JELLYFIN_HWACCEL_FILE = path.join(CONF_DIR, 'jellyfin-hwaccel.json');
+const JELLYFIN_CONFIG_VOLUME = 'quickstart-home-jellyfin-config';
+const RENDER_NODE = '/dev/dri/renderD128';
+
+export function clearJellyfinHwaccelMark() {
+    fs.rmSync(JELLYFIN_HWACCEL_FILE, { force: true });
+}
+
+/** The encoding.xml with VAAPI switched on, or null when it should be left as it is. */
+export function withVaapi(xml) {
+    const type = /<HardwareAccelerationType>\s*([^<]*?)\s*<\/HardwareAccelerationType>/.exec(xml);
+    if (type && type[1].toLowerCase() !== 'none' && type[1] !== '') return null;
+    let out = type
+        ? xml.replace(type[0], '<HardwareAccelerationType>vaapi</HardwareAccelerationType>')
+        : xml.replace(/<\/EncodingOptions>/, '  <HardwareAccelerationType>vaapi</HardwareAccelerationType>\n</EncodingOptions>');
+    if (out === xml) return null;
+    out = /<VaapiDevice>[^<]*<\/VaapiDevice>/.test(out)
+        ? out.replace(/<VaapiDevice>[^<]*<\/VaapiDevice>/, `<VaapiDevice>${RENDER_NODE}</VaapiDevice>`)
+        : out.replace(/<VaapiDevice\s*\/>/, `<VaapiDevice>${RENDER_NODE}</VaapiDevice>`);
+    if (!out.includes(`<VaapiDevice>${RENDER_NODE}</VaapiDevice>`)) {
+        out = out.replace(/<\/EncodingOptions>/, `  <VaapiDevice>${RENDER_NODE}</VaapiDevice>\n</EncodingOptions>`);
+    }
+    return out;
+}
+
+/**
+ * Applies the above if it is due. Jellyfin rewrites its settings files from
+ * memory as it runs, so the edit is made with it stopped; it is stopped here
+ * if need be, and left for the caller's `up` to start again.
+ */
+export async function syncJellyfinHwaccel(docker, cfg, onLine = () => {}) {
+    if (!cfg.jellyfin.hardwareAcceleration) {
+        clearJellyfinHwaccelMark();
+        return { changed: false };
+    }
+    if (fs.existsSync(JELLYFIN_HWACCEL_FILE)) return { changed: false };
+
+    try {
+        await docker(['run', '--rm', '-v', '/:/host:ro', 'alpine:3.21', 'test', '-c', `/host${RENDER_NODE}`], { timeoutMs: 60_000 });
+    } catch {
+        onLine(`There is no ${RENDER_NODE} on this machine, so Jellyfin's transcoding setting is left as it is.`);
+        return { changed: false };
+    }
+
+    const file = '/config/config/encoding.xml';
+    let xml;
+    try {
+        ({ stdout: xml } = await docker(['run', '--rm', '-v', `${JELLYFIN_CONFIG_VOLUME}:/config:ro`, 'alpine:3.21', 'cat', file], { timeoutMs: 60_000 }));
+    } catch {
+        // Jellyfin writes this the first time it starts. Until then there is
+        // nothing to change, and the next apply looks again.
+        onLine('Jellyfin has not written its transcoding settings yet. Apply again after it has started once to switch the GPU on in them.');
+        return { changed: false };
+    }
+
+    const next = withVaapi(xml);
+    const mark = () => writeJson(JELLYFIN_HWACCEL_FILE, { setAt: new Date().toISOString(), device: RENDER_NODE });
+    if (!next) {
+        onLine('Jellyfin already has a hardware transcoding choice of its own, so it is kept.');
+        mark();
+        return { changed: false };
+    }
+
+    const container = APPS.jellyfin.container;
+    let wasRunning = false;
+    try {
+        const { stdout } = await docker(['inspect', '-f', '{{.State.Running}}', container], { timeoutMs: 15_000 });
+        wasRunning = stdout.trim() === 'true';
+    } catch {
+        wasRunning = false;
+    }
+    if (wasRunning) {
+        onLine('Stopping Jellyfin for a moment to switch its transcoding to the GPU.');
+        await docker(['stop', container], { timeoutMs: 2 * 60_000 });
+    }
+
+    // The new file goes in through the environment, not the command line,
+    // and replaces the old one with the same owner, in one rename.
+    await docker(
+        [
+            'run', '--rm', '-e', 'QSH_XML', '-v', `${JELLYFIN_CONFIG_VOLUME}:/config`, 'alpine:3.21', 'sh', '-c',
+            'f=/config/config/encoding.xml; t="$f.qsh"; printf "%s" "$QSH_XML" > "$t" && ' +
+                'chown "$(stat -c %u:%g "$f")" "$t" && chmod "$(stat -c %a "$f")" "$t" && mv "$t" "$f"',
+        ],
+        { timeoutMs: 60_000, env: { QSH_XML: next } },
+    );
+    mark();
+    onLine(`Jellyfin will transcode on the GPU (VAAPI, ${RENDER_NODE}). This can be changed under Dashboard, Playback in Jellyfin.`);
+    return { changed: true, wasRunning };
 }

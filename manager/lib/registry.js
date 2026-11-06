@@ -67,6 +67,23 @@ async function get(path, auth, accept, method = 'GET') {
     return res;
 }
 
+/**
+ * Whether a tag exists on Docker Hub. A HEAD, so it costs nothing against the
+ * pull allowance; a 404 is "no", anything else that fails is thrown.
+ */
+export async function tagExists(ref) {
+    const { repo, tag } = parseImageRef(ref);
+    const auth = await token(repo);
+    const res = await fetch(`${REGISTRY}/v2/${repo}/manifests/${encodeURIComponent(tag)}`, {
+        method: 'HEAD',
+        headers: { Authorization: `Bearer ${auth}`, Accept: INDEX_TYPES },
+        signal: AbortSignal.timeout(20_000),
+    });
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`Docker Hub returned ${res.status} for ${ref}.`);
+    return true;
+}
+
 /** Keyed by the tag's digest: one per image version, so it cannot go stale. */
 const resolved = new Map();
 

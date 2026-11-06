@@ -1,10 +1,13 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CONF_DIR, ensureDirs, STACK_HOST } from './lib/paths.js';
+import { COMPOSE_FILE, CONF_DIR, ensureDirs, STACK_HOST } from './lib/paths.js';
 import { loadManagerConfig, readEnvFile, saveManagerConfig, updateEnvFile } from './lib/store.js';
 import * as dockerctl from './lib/dockerctl.js';
 import * as apps from './lib/apps.js';
@@ -27,7 +30,9 @@ import {
     passwordUnusable,
     isAuthenticated,
     issueSession,
+    revokeSession,
     sessionCookie,
+    sessionToken,
     verifyPassword,
 } from './lib/auth.js';
 
@@ -200,9 +205,55 @@ async function recordBuild(name, settings, onLine = () => {}) {
  */
 const publicOriginFor = (key) => tunnel.originFor(key);
 
-async function reconcileNextcloud(onLine = () => {}) {
-    const cfg = apps.loadAppsConfig();
+/*
+ * The names Nextcloud has to trust that are not typed by anybody: its public
+ * name on the tunnel, this machine's Tailscale name and address, and the
+ * machine's own address on a home network numbered 172.x (the default list
+ * covers 192.168 and 10 with wildcards, and not that).
+ *
+ * Re-added every time Nextcloud starts rather than only when each appears.
+ * Uninstalling puts the panel's Nextcloud settings back to their defaults, so
+ * a reinstall began with none of them -- the tunnel name answered "untrusted
+ * domain" until it was unpublished and published again, and the Tailscale
+ * names never came back at all, because the check that adds them remembered
+ * having done so already.
+ */
+async function wantedTrustedNames() {
+    const names = [];
+    const origin = publicOriginFor('nextcloud');
+    if (origin) names.push(new URL(origin).hostname);
+    const ts = await host.tailscale().catch(() => null);
+    if (ts) names.push(ts.name, ts.ip);
+    const lan = await host.lanAddress().catch(() => null);
+    if (lan?.startsWith('172.')) names.push(lan);
+    return names.filter(Boolean);
+}
 
+/**
+ * The address Nextcloud puts in links it makes with no request to copy one
+ * from -- e-mails, and anything a background job sends.
+ *
+ * The public name when there is one. Otherwise the Tailscale HTTPS address if
+ * that is on for Nextcloud, which is the next most reachable thing, and then
+ * this machine's address on the home network at Nextcloud's port. localhost is
+ * the last resort only: in an e-mail it is a link to whatever device opens it.
+ */
+async function nextcloudCliUrl() {
+    const origin = publicOriginFor('nextcloud');
+    if (origin) return origin;
+    const ts = await tailscale.status().catch(() => null);
+    const served = ts?.serve?.find((a) => a.key === 'nextcloud');
+    if (served?.on && !served.broken && served.url) return served.url;
+    const cfg = apps.loadAppsConfig();
+    const lan = await host.lanAddress().catch(() => null);
+    if (lan && cfg.nextcloud.publish.web) {
+        const port = Number(cfg.nextcloud.hostPort);
+        return `http://${lan}${port === 80 ? '' : `:${port}`}`;
+    }
+    return null;
+}
+
+async function reconcileNextcloud(onLine = () => {}) {
     // A container that has just started is not a Nextcloud that can answer:
     // the first boot installs the database, which takes a while, and `occ`
     // refuses until it is done. So this waits for it rather than firing once
@@ -214,6 +265,14 @@ async function reconcileNextcloud(onLine = () => {}) {
         onLine('Nextcloud did not become ready in time, so its settings were left for the next start.');
         return;
     }
+
+    // Read after the wait, not before it: waiting can take minutes, and other
+    // requests save settings in the meantime.
+    const { cfg, added } = apps.addTrustedDomains(await wantedTrustedNames());
+    if (added.length) onLine(`Adding ${added.join(', ')} to Nextcloud's trusted domains.`);
+    // The timer that keeps Tailscale trusted pushes again on its next tick
+    // rather than trusting a memory from before this (re)start.
+    tailscaleTrusted = null;
 
     try {
         await apps.syncTrustedDomains(dockerctl.docker, cfg, onLine);
@@ -246,27 +305,48 @@ async function reconcileNextcloud(onLine = () => {}) {
     // public port can change without the name changing, and a stale origin
     // sends every redirect somewhere wrong.
     try {
-        await apps.syncNextcloudUrls(dockerctl.docker, publicOriginFor('nextcloud'), onLine);
+        await apps.syncNextcloudUrls(dockerctl.docker, await nextcloudCliUrl(), onLine);
     } catch (err) {
         onLine(`Could not set the public address: ${err.message}`);
     }
+    // Background jobs from the panel's timer rather than on page loads; see
+    // runNextcloudCron below. Idempotent, so set on every start.
+    try {
+        await apps.setNextcloudCronMode(dockerctl.docker);
+        nextcloudCron.modeSet = true;
+    } catch (err) {
+        onLine(`Could not switch background jobs to cron: ${err.message}`);
+    }
 }
 
-async function applyAppConfig(name, cfg, onLine = () => {}) {
+/*
+ * Applies what is saved for one app, as it is when the job runs.
+ *
+ * The settings are read here, at the start of the job, and not handed in from
+ * the request that queued it. A job can wait behind a forty-minute build, and
+ * a copy taken at the click is a copy of the settings as they were then: it
+ * was saved back at the end, undoing every change made to the other apps --
+ * or to this one -- while it waited. What is saved now is what was asked for
+ * last, so that is what is applied.
+ */
+async function applyAppConfig(name, onLine = () => {}) {
     const app = apps.APPS[name];
-    const settings = cfg[name];
+    let cfg = apps.loadAppsConfig();
 
     // Which group owns each shared folder, so the container can be put in it.
     // Done here rather than in validation because it reads the filesystem, and
-    // it has to happen before the override is written.
+    // it has to happen before the override is written. Only that one field is
+    // written back, to a copy read just now.
     if (name === 'nextcloud') {
         const gids = await apps.ownerGids(dockerctl.docker, cfg.nextcloud.sharedPaths ?? []);
         if (gids.length) {
+            cfg = apps.loadAppsConfig();
             cfg.nextcloud.sharedGids = gids;
             apps.saveAppsConfig(cfg);
             onLine(`Shared folders are owned by group ${gids.join(', ')}; Nextcloud will run as a member.`);
         }
     }
+    const settings = cfg[name];
 
     apps.ensureSecrets();
     apps.writeAppsEnv(cfg);
@@ -302,6 +382,14 @@ async function applyAppConfig(name, cfg, onLine = () => {}) {
         });
         onLine('Minecraft is starting with the new settings.');
         return { enabled: true };
+    }
+
+    // Turning the GPU on in Jellyfin's own settings, the first time the box is
+    // ticked. Done before `up`, which starts it again if this had to stop it.
+    if (name === 'jellyfin') {
+        await apps.syncJellyfinHwaccel(dockerctl.docker, cfg, onLine).catch((err) => {
+            onLine(`Could not switch Jellyfin's transcoding to the GPU: ${err.message}`);
+        });
     }
 
     // Only the services that have something to build. An empty list is not a
@@ -385,18 +473,11 @@ async function notifyPublished(key, domain, onLine = () => {}) {
     }
     if (key !== 'nextcloud') return;
 
-    const cfg = apps.loadAppsConfig();
-    const names = new Set(String(cfg.nextcloud.trustedDomains || '').split(/[\s,]+/).filter(Boolean));
     // No domain means a name was taken away rather than given: there is
     // nothing to trust, only the public address below to refresh. Without the
     // check this added the word "null" to Nextcloud's trusted domains.
-    if (domain && !names.has(domain)) {
-        names.add(domain);
-        cfg.nextcloud.trustedDomains = [...names].join(' ');
-        apps.saveAppsConfig(cfg);
-        apps.writeAppsEnv(cfg);
-        onLine(`Adding ${domain} to Nextcloud's trusted domains.`);
-    }
+    const { cfg, added } = apps.addTrustedDomains(domain ? [domain] : []);
+    if (added.length) onLine(`Adding ${domain} to Nextcloud's trusted domains.`);
 
     // Only meaningful against a running container; a stopped one picks both of
     // these up the next time it starts, via reconcileNextcloud.
@@ -404,7 +485,7 @@ async function notifyPublished(key, domain, onLine = () => {}) {
         await apps.syncTrustedDomains(dockerctl.docker, cfg, onLine).catch((err) => {
             onLine(`Could not update the trusted domains: ${err.message}`);
         });
-        await apps.syncNextcloudUrls(dockerctl.docker, origin, onLine).catch((err) => {
+        await apps.syncNextcloudUrls(dockerctl.docker, origin ?? (await nextcloudCliUrl()), onLine).catch((err) => {
             onLine(`Could not set the public address: ${err.message}`);
         });
     }
@@ -436,17 +517,109 @@ route(
     { auth: false },
 );
 
+/*
+ * Wrong passwords, counted.
+ *
+ * Half a second per wrong guess was the only brake, and a script that asks
+ * twenty at a time does not notice half a second. On the house network that
+ * is somebody's laptop; with the panel published, it is the internet. So each
+ * client gets five wrong guesses in fifteen minutes and is then told to wait,
+ * and all clients together get a larger allowance, so that a guesser spread
+ * over many addresses is slowed down too. The second limit can lock the owner
+ * out for a quarter of an hour during an attack, which is the trade: an
+ * attacker who can cause that is one who would otherwise be guessing freely.
+ *
+ * "Client" is the address the request came from -- except through the tunnel,
+ * where every request arrives from the connector container, and the visitor's
+ * own address is in the CF-Connecting-IP header Cloudflare sets. That header
+ * is believed only from the connector: from anywhere else it is just
+ * something a client typed.
+ */
+const LOGIN_WINDOW_MS = 15 * 60_000;
+const LOGIN_PER_CLIENT = 5;
+const LOGIN_GLOBAL = 50;
+const loginFailures = new Map(); // client -> [timestamps]
+let globalFailures = [];
+
+const recent = (list, now = Date.now()) => list.filter((t) => now - t < LOGIN_WINDOW_MS);
+
+let tunnelAddress = { at: 0, value: null };
+
+/** The connector's address on the stack network, looked up by its name there. */
+async function connectorAddress() {
+    if (Date.now() - tunnelAddress.at < 60_000) return tunnelAddress.value;
+    let value = null;
+    try {
+        value = (await dns.promises.lookup('tunnel', { family: 4 })).address;
+    } catch {
+        value = null;
+    }
+    tunnelAddress = { at: Date.now(), value };
+    return value;
+}
+
+const plainAddress = (a) => String(a ?? '').replace(/^::ffff:/, '');
+
+async function clientId(req) {
+    const peer = plainAddress(req.socket.remoteAddress);
+    const forwarded = String(req.headers['cf-connecting-ip'] ?? '').trim();
+    if (forwarded && net.isIP(forwarded) && peer && peer === (await connectorAddress())) return forwarded;
+    return peer || 'unknown';
+}
+
+function loginLimited(client) {
+    const now = Date.now();
+    globalFailures = recent(globalFailures, now);
+    const mine = recent(loginFailures.get(client) ?? [], now);
+    if (mine.length) loginFailures.set(client, mine);
+    else loginFailures.delete(client);
+    if (mine.length >= LOGIN_PER_CLIENT) {
+        return { minutes: Math.ceil((LOGIN_WINDOW_MS - (now - mine[0])) / 60_000), everyone: false };
+    }
+    if (globalFailures.length >= LOGIN_GLOBAL) {
+        return { minutes: Math.ceil((LOGIN_WINDOW_MS - (now - globalFailures[0])) / 60_000), everyone: true };
+    }
+    return null;
+}
+
+function recordLoginFailure(client) {
+    const now = Date.now();
+    const mine = [...recent(loginFailures.get(client) ?? [], now), now];
+    loginFailures.set(client, mine);
+    globalFailures = [...recent(globalFailures, now), now];
+    // Bounded, so a flood from many addresses cannot grow this without end.
+    if (loginFailures.size > 5000) loginFailures.delete(loginFailures.keys().next().value);
+    // The address and the count, never what was typed.
+    log(`login          : wrong password from ${client} (${mine.length} in the last 15 minutes, ${globalFailures.length} from everyone)`);
+}
+
 route(
     'POST',
     /^\/api\/login$/,
     async (req, res) => {
         const body = await readBody(req);
         if (!authRequired()) return sendJson(res, 200, { ok: true, required: false });
-        if (!verifyPassword(String(body.password ?? ''))) {
+        const client = await clientId(req);
+        const limited = loginLimited(client);
+        if (limited) {
+            const wait = `${limited.minutes} minute${limited.minutes === 1 ? '' : 's'}`;
+            return fail(
+                res,
+                429,
+                limited.everyone
+                    ? `Too many wrong passwords have been tried on this panel recently, so signing in is paused for everyone. Try again in ${wait}.`
+                    : `Too many wrong passwords from this device. Try again in ${wait}.`,
+                { retryAfterMinutes: limited.minutes },
+            );
+        }
+        if (!(await verifyPassword(String(body.password ?? '')))) {
+            recordLoginFailure(client);
             // Constant-ish delay so the endpoint is not a fast password oracle.
             await new Promise((r) => setTimeout(r, 500));
             return fail(res, 401, 'Incorrect password.');
         }
+        // A right password forgives this client's earlier typos.
+        loginFailures.delete(client);
         const { token } = issueSession();
         const secure = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
         sendJson(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(token, { secure }) });
@@ -454,9 +627,17 @@ route(
     { auth: false },
 );
 
-route('POST', /^\/api\/logout$/, async (req, res) => sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearCookie() }), {
-    auth: false,
-});
+// Ended here as well as in the browser, so a copy of the cookie stops working
+// too. See revokeSession.
+route(
+    'POST',
+    /^\/api\/logout$/,
+    async (req, res) => {
+        revokeSession(sessionToken(req));
+        sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearCookie() });
+    },
+    { auth: false },
+);
 
 // ----------------------------------------------------------------- overview --
 
@@ -616,8 +797,10 @@ route('GET', /^\/api\/logs\/stream-all$/, async (req, res) => {
  * source that is missing, so a typo backs up onto the internal disk and reports
  * success.
  */
-route('GET', /^\/api\/backup$/, async (req, res) => {
-    const drives = await backup.listDestinations();
+route('GET', /^\/api\/backup$/, async (req, res, match, url) => {
+    // ?drives=0 skips the look for drives, which starts a container: a page
+    // that only needs the settings and the last result should not pay for it.
+    const drives = url.searchParams.get('drives') === '0' ? null : await backup.listDestinations();
     // The folders come from Nextcloud's shared folders, so the page shows what
     // will be copied rather than asking for it a second time.
     sendJson(res, 200, { config: backup.loadBackupConfig(), drives, sources: backup.backupSources() });
@@ -647,6 +830,9 @@ route('POST', /^\/api\/backup\/run$/, async (req, res) => {
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
+// Keyed: a backup asked for while one is already waiting is the same backup.
+// The schedule asks every few minutes, and a long copy would otherwise line
+// up one more behind it each time.
 function enqueueBackup() {
     return jobs.start('Back up', async (onLine) => {
         try {
@@ -659,7 +845,7 @@ function enqueueBackup() {
             });
             throw err;
         }
-    });
+    }, { key: 'backup' });
 }
 
 route('GET', /^\/api\/jobs\/stream$/, async (req, res) => {
@@ -734,17 +920,80 @@ route('POST', /^\/api\/jobs\/([a-z0-9-]+)\/cancel$/, async (req, res, match) => 
  * answer goes out. The browser has to be told where to look next, because the
  * address it is on stops working.
  */
+/*
+ * What else already has a port on this machine.
+ *
+ * Moving the panel onto a port something else holds does not fail when it is
+ * asked for: the panel restarts, Docker cannot publish the port, and the
+ * container that was the panel is gone with nothing in its place -- reachable
+ * only from a terminal. So the move is refused up front, for anything this
+ * stack publishes and for anything at all that is listening on the host.
+ *
+ * The apps are known from their settings, including the ones that are off
+ * (their port is waiting for them). Everything else is read from the host's
+ * own socket table, in a throwaway container on the host's network: that sees
+ * every listener on the machine, whether Docker made it or not.
+ */
+async function portsInUse() {
+    const taken = new Map();
+    const cfg = apps.loadAppsConfig();
+    const add = (port, what) => {
+        const n = Number(port);
+        if (Number.isInteger(n) && n > 0 && !taken.has(n)) taken.set(n, what);
+    };
+    for (const name of ['nextcloud', 'jellyfin', 'mealplan']) {
+        if (cfg[name].publish?.web) add(cfg[name].hostPort, apps.APPS[name].label);
+    }
+    add(cfg.minecraft.javaPort, 'Minecraft (Java Edition)');
+    add(cfg.minecraft.bedrockPort, 'Minecraft (Bedrock Edition)');
+
+    for (const c of dockerctl.STACK_CONTAINERS) {
+        if (c.name === dockerctl.MANAGER_CONTAINER) continue;
+        for (const p of await dockerctl.publishedPorts(c.name)) {
+            add(String(p.host ?? '').split(':').pop(), c.label);
+        }
+    }
+
+    try {
+        const { stdout } = await dockerctl.docker(
+            ['run', '--rm', '--network', 'host', 'quickstart-home/manager:1', 'cat', '/proc/net/tcp', '/proc/net/tcp6'],
+            { timeoutMs: 30_000 },
+        );
+        for (const line of stdout.split('\n')) {
+            // "  sl  local_address rem_address   st ..." -- 0A is LISTEN.
+            const cols = line.trim().split(/\s+/);
+            if (cols[3] !== '0A') continue;
+            add(parseInt(cols[1].split(':').pop(), 16), 'another program on this machine');
+        }
+    } catch (err) {
+        log(`panel port     : could not read the host's listening ports: ${err.message}`);
+    }
+    return taken;
+}
+
+/**
+ * Moves the panel itself to another port.
+ *
+ * Same shape as setting a password: .env holds it, the container reads it when
+ * it is created, so a sidecar recreates this container a moment after the
+ * answer goes out. The browser has to be told where to look next, because the
+ * address it is on stops working.
+ */
 route('POST', /^\/api\/panel\/port$/, async (req, res) => {
     const body = await readBody(req);
     const wanted = Number(body.port);
     if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) return fail(res, 400, 'That is not a port number.');
 
     const env = readEnvFile();
-    const appsCfg = apps.loadAppsConfig();
-    if (appsCfg.nextcloud.publish.web && wanted === Number(appsCfg.nextcloud.hostPort)) {
-        return fail(res, 409, `Port ${wanted} is where Nextcloud is published.`);
+    const current = Number(env.GUI_PORT) || 8420;
+    if (wanted === current) return sendJson(res, 200, { ok: true, unchanged: true });
+
+    const taken = (await portsInUse()).get(wanted);
+    if (taken) {
+        return fail(res, 409, `Port ${wanted} is already used by ${taken}, so the panel cannot move there.`, {
+            details: ['Pick another port. Moving onto a port that is taken would leave the panel unable to start.'],
+        });
     }
-    if (wanted === (Number(env.GUI_PORT) || 8420)) return sendJson(res, 200, { ok: true, unchanged: true });
 
     updateEnvFile({ GUI_PORT: String(wanted) });
     await selfservice.restartManager();
@@ -794,7 +1043,10 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)$/, async (re
     // stored settings, then apply only the app that was asked for.
     const current = apps.loadAppsConfig();
     const merged = { ...current, [name]: { ...current[name], ...(body.config ?? {}) } };
-    const { cfg, errors } = apps.validateAppsConfig(merged);
+    // The admin account is fixed once Nextcloud has made it; see the validator.
+    const installed = (await dockerctl.containerState(apps.APPS.nextcloud.container)).exists;
+    const lockedAdminUser = installed ? readEnvFile().NEXTCLOUD_ADMIN_USER || current.nextcloud.adminUser : null;
+    const { cfg, errors } = apps.validateAppsConfig(merged, { lockedAdminUser });
     if (errors.length) return fail(res, 400, 'The configuration has problems.', { details: errors });
 
     // Minecraft's apply only starts a server that is already running, so its
@@ -838,11 +1090,15 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)$/, async (re
 
     apps.saveAppsConfig(cfg);
     const verb = name === 'minecraft' ? 'Apply settings to' : cfg[name].enabled ? 'Start' : 'Stop';
+    // Keyed, so saving twice while the first is still waiting is one apply:
+    // the job reads the saved settings when it runs, so the second save is
+    // already in it and running it twice would only do the same work again.
     const job = jobs.start(`${verb} ${apps.APPS[name].label}`, async (onLine) => {
+        const enabled = apps.loadAppsConfig()[name].enabled;
         // Remember how this turned out. The job itself only lives in memory, so
         // without a record on disk a failed build is indistinguishable from one
         // that is still running as soon as the manager restarts.
-        apps.writeLastRun(name, { ok: null, error: null, enabled: cfg[name].enabled });
+        apps.writeLastRun(name, { ok: null, error: null, enabled });
 
         // Docker's own error says which build step died but not why; the reason
         // is a line printed further up, which only ever appears in the streamed
@@ -856,18 +1112,18 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)$/, async (re
         };
 
         try {
-            const result = await applyAppConfig(name, cfg, capture);
-            apps.writeLastRun(name, { ok: true, error: null, enabled: cfg[name].enabled });
+            const result = await applyAppConfig(name, capture);
+            apps.writeLastRun(name, { ok: true, error: null, enabled });
             return result;
         } catch (err) {
             apps.writeLastRun(name, {
                 ok: false,
                 error: `${output.join('\n')}\n${err.message}`,
-                enabled: cfg[name].enabled,
+                enabled,
             });
             throw err;
         }
-    });
+    }, { key: `apply:${name}`, app: name });
     sendJson(res, 202, { ok: true, jobId: job.id, config: cfg });
 });
 
@@ -889,10 +1145,11 @@ route('POST', /^\/api\/apps\/nextcloud\/admin\/password$/, async (req, res) => {
     const body = await readBody(req);
     const password = String(body.password ?? '');
 
-    // Nextcloud's own minimum is 10 characters. Checking here means a bad one is
-    // refused before the container is touched, rather than after a failed occ run.
-    if (password.length < 10) return fail(res, 400, 'The password needs to be at least 10 characters.');
-    if (password.length > 200) return fail(res, 400, 'That password is too long.');
+    // Nextcloud's own minimum is 10 characters, and the stack's .env has to be
+    // able to hold it. Checking here means a bad one is refused before the
+    // container is touched, rather than after a failed occ run.
+    const problem = apps.adminPasswordProblem(password);
+    if (problem) return fail(res, 400, problem);
 
     const state = await dockerctl.containerState(apps.APPS.nextcloud.container);
     if (!state.running) return fail(res, 409, 'Nextcloud is not running, so its password cannot be changed yet.');
@@ -901,7 +1158,7 @@ route('POST', /^\/api\/apps\/nextcloud\/admin\/password$/, async (req, res) => {
         await apps.setNextcloudAdminPassword(dockerctl.docker, password);
         sendJson(res, 200, { ok: true });
     } catch (err) {
-        fail(res, 500, `Nextcloud refused the change: ${err.message}`);
+        fail(res, err.status ?? 500, `Nextcloud refused the change: ${err.message}`);
     }
 });
 
@@ -932,7 +1189,7 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
 
     const job = jobs.start('Applying the Meal Plan password', async (onLine) => {
         await lifecycle.setRunning('mealplan', true, onLine);
-    });
+    }, { key: 'mealplan-password', app: 'mealplan' });
     sendJson(res, 202, { ok: true, jobId: job.id, restarting: true });
 });
 
@@ -946,13 +1203,33 @@ route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/check$/, as
 
 route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, async (req, res, match) => {
     const name = match[1];
-    const cfg = apps.loadAppsConfig();
-    if (!cfg[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
+    if (!apps.loadAppsConfig()[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
 
     const app = apps.APPS[name];
     const buildable = app.services.filter((sv) => BUILDABLE_SERVICES.has(sv));
+    // The stock images an app is made of besides the one built here --
+    // Nextcloud's database, cache and preview server. A rebuild with --pull
+    // refreshes only the built image's base, so these used to stay on
+    // whatever version they were first installed with, for good.
+    const stock = app.services.filter((sv) => !BUILDABLE_SERVICES.has(sv));
     const job = jobs.start(`Update ${app.label}`, async (onLine) => {
+        // Read when the job runs, not when it was asked for.
+        const cfg = apps.loadAppsConfig();
+        if (name === 'nextcloud') {
+            // One major version at a time; see nextcloudTagFor.
+            const { tag } = await apps.nextcloudTagFor(dockerctl.docker, onLine);
+            if (!tag) return;
+            if ((readEnvFile().NEXTCLOUD_TAG || 'stable') !== tag) updateEnvFile({ NEXTCLOUD_TAG: tag });
+        }
         if (buildable.length) {
+            if (stock.length) {
+                onLine(`Downloading the newest ${stock.join(', ')} images...`);
+                await dockerctl.compose(['pull', ...stock], {
+                    onLine,
+                    profile: app.profile,
+                    timeoutMs: 60 * 60_000,
+                });
+            }
             onLine(`Rebuilding ${app.label}...`);
             // --pull so a rebuild actually picks up a newer base image;
             // --no-cache because the layers above it would otherwise be reused
@@ -980,6 +1257,21 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, 
                 profile: app.profile,
                 timeoutMs: 20 * 60_000,
             });
+            // Nextcloud upgrades its database as it starts on the new
+            // version; the housekeeping that upgrade leaves for later is done
+            // now, once it answers again, and then its settings are reapplied
+            // as on any start.
+            if (name === 'nextcloud') {
+                if (await apps.waitForNextcloud(dockerctl.docker, {
+                    timeoutMs: 20 * 60_000,
+                    onWaiting: () => onLine('Waiting for Nextcloud to finish upgrading itself...'),
+                })) {
+                    await apps.nextcloudAfterUpdate(dockerctl.docker, onLine);
+                } else {
+                    onLine('Nextcloud did not come back in time for the database housekeeping; the next update does it.');
+                }
+                await reconcileNextcloud(onLine);
+            }
         } else {
             // Recreated without starting, because a container keeps the image it
             // was made from. Left alone, this one would still be on the old image
@@ -993,7 +1285,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, 
         }
         await recordBuild(name, cfg[name], onLine);
         await updates.rescan(name);
-    });
+    }, { app: name });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1004,6 +1296,11 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/(start|sto
         return fail(res, 409, `${app.label} cannot start yet.`, { details: apps.appBlockers(name) });
     }
     const job = jobs.start(`${action} ${app.label}`, async (onLine) => {
+        if (name === 'jellyfin' && action !== 'stop') {
+            await apps.syncJellyfinHwaccel(dockerctl.docker, apps.loadAppsConfig(), onLine).catch((err) => {
+                onLine(`Could not switch Jellyfin's transcoding to the GPU: ${err.message}`);
+            });
+        }
         // A Minecraft restart is a recreate, because `restart` brings back the
         // container as it was created -- with the settings it had then, not
         // the ones saved since. It is also how Paper and Geyser get updated:
@@ -1019,7 +1316,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/(start|sto
         }
         await dockerctl.compose([...verb, ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
         if (name === 'nextcloud' && action !== 'stop') await reconcileNextcloud(onLine);
-    });
+    }, { key: `power:${name}:${action}`, app: name });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1075,7 +1372,7 @@ route('POST', /^\/api\/apps\/minecraft\/consoles\/reset$/, async (req, res) => {
             profile: app.profile,
             timeoutMs: 10 * 60_000,
         });
-    });
+    }, { key: 'minecraft-console-reset', app: 'minecraft' });
     sendJson(res, 202, { ok: true, restarting: true, jobId: job.id });
 });
 
@@ -1132,10 +1429,15 @@ route('POST', /^\/api\/apps\/minecraft\/worlds\/switch$/, async (req, res) => {
     if (!target) return fail(res, 404, 'That world is not on this server.');
     if (target.current) return sendJson(res, 200, { ok: true, message: `${target.name} is already the world in use.` });
 
+    // Only the world changes, on settings read at the moment it is applied.
+    // The job can wait behind others, and saving the copy read above would put
+    // back whatever else was changed in the meantime.
     const apply = () => {
-        cfg.minecraft.level = target.name;
-        apps.saveAppsConfig(cfg);
-        apps.writeAppsEnv(cfg);
+        const fresh = apps.loadAppsConfig();
+        fresh.minecraft.level = target.name;
+        apps.saveAppsConfig(fresh);
+        apps.writeAppsEnv(fresh);
+        return fresh;
     };
     if (!running) {
         apply();
@@ -1143,15 +1445,15 @@ route('POST', /^\/api\/apps\/minecraft\/worlds\/switch$/, async (req, res) => {
     }
     const app = apps.APPS.minecraft;
     const job = jobs.start(`Switch Minecraft to ${target.name}`, async (onLine) => {
-        apply();
+        const fresh = apply();
         onLine(`Switching to ${target.name}. The current world is saved and kept.`);
-        await minecraft.syncConsoleBridge(cfg.minecraft.consoles, onLine);
+        await minecraft.syncConsoleBridge(fresh.minecraft.consoles, onLine);
         await dockerctl.compose(['up', '-d', '--no-deps', '--force-recreate', ...app.services], {
             onLine,
             profile: app.profile,
             timeoutMs: 10 * 60_000,
         });
-    });
+    }, { app: 'minecraft' });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1176,18 +1478,35 @@ route('GET', /^\/api\/apps\/minecraft\/public-address$/, async (req, res) => {
 route('POST', /^\/api\/auth\/password$/, async (req, res) => {
     const body = await readBody(req);
 
-    if (authConfigured() && !verifyPassword(String(body.current || ''))) {
-        return fail(res, 403, 'That is not the current password.');
+    // Counted with the sign-in attempts: this is a password check too, and one
+    // a stolen session could otherwise use to guess at the real one.
+    const client = await clientId(req);
+    if (authConfigured()) {
+        const limited = loginLimited(client);
+        if (limited) return fail(res, 429, `Too many wrong passwords. Try again in ${limited.minutes} minute${limited.minutes === 1 ? '' : 's'}.`);
+        if (!(await verifyPassword(String(body.current || '')))) {
+            recordLoginFailure(client);
+            return fail(res, 403, 'That is not the current password.');
+        }
     }
 
     if (body.clear) {
         if (!authConfigured()) return sendJson(res, 200, { ok: true, unchanged: true });
         // Removing the password is only sane while the panel is on loopback and
-        // not on a domain; either would leave the Docker socket open.
-        const published = Boolean(tunnel.originFor('panel'));
-        if (published) {
-            return fail(res, 409, 'This panel is published on a domain, so it cannot have its password removed.', {
+        // reachable no other way; anything else leaves the Docker socket open.
+        // A custom tunnel route pointing back at the panel counts as publishing
+        // it, and so does a Tailscale HTTPS address, which every device on the
+        // tailnet can open.
+        const names = tunnel.panelHostnames();
+        if (names.length) {
+            return fail(res, 409, `This panel is published at ${names.join(', ')}, so it cannot have its password removed.`, {
                 details: ['Unpublish it first, or keep the password.'],
+            });
+        }
+        const ts = await tailscale.status({ force: true }).catch(() => null);
+        if (ts?.serve?.find((a) => a.key === 'panel')?.on) {
+            return fail(res, 409, 'This panel has a Tailscale HTTPS address, so it cannot have its password removed.', {
+                details: ['Turn that address off on the Tailscale page first, or keep the password.'],
             });
         }
         if (!isLoopbackBind()) {
@@ -1228,6 +1547,15 @@ route('POST', /^\/api\/services\/([a-z-]+)\/install$/, async (req, res, match) =
     if (!unit) return fail(res, 404, 'No such service.');
 
     const job = jobs.start(`Install ${unit.label}`, async (onLine) => {
+        // Which Nextcloud to build: stable for a new one, and for one being
+        // reinstalled over data it kept, no more than one major version past
+        // what that data was last upgraded to. A leftover step from an earlier
+        // update is not carried into a fresh install either.
+        if (key === 'nextcloud') {
+            const { tag } = await apps.nextcloudTagFor(dockerctl.docker, onLine);
+            const want = tag ?? 'stable';
+            if ((readEnvFile().NEXTCLOUD_TAG || 'stable') !== want) updateEnvFile({ NEXTCLOUD_TAG: want });
+        }
         // Whatever the service needs written before it starts. Enabling it in
         // the apps config keeps the rest of the panel agreeing with reality.
         const appsCfg = apps.loadAppsConfig();
@@ -1247,7 +1575,7 @@ route('POST', /^\/api\/services\/([a-z-]+)\/install$/, async (req, res, match) =
             await recordBuild(key, appsCfg[key], onLine);
             await updates.rescan(key);
         }
-    });
+    }, { app: key });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1269,11 +1597,16 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
         if (running && match[1] === 'minecraft') {
             await minecraft.syncConsoleBridge(apps.loadAppsConfig().minecraft.consoles, onLine);
         }
+        if (running && match[1] === 'jellyfin') {
+            await apps.syncJellyfinHwaccel(dockerctl.docker, apps.loadAppsConfig(), onLine).catch((err) => {
+                onLine(`Could not switch Jellyfin's transcoding to the GPU: ${err.message}`);
+            });
+        }
         await lifecycle.setRunning(match[1], running, onLine);
         // Settings that live inside the app rather than in compose have to be
         // reapplied to the container that has just come up.
         if (running && match[1] === 'nextcloud') await reconcileNextcloud(onLine);
-    });
+    }, { key: `power:${match[1]}:${running ? 'start' : 'stop'}`, app: match[1] });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1303,8 +1636,17 @@ route('POST', /^\/api\/services\/([a-z-]+)\/uninstall$/, async (req, res, match)
             apps.renderAppsPortsOverride(appsCfg);
             onLine('Its settings are back to their defaults.');
         }
+        // What the panel remembers having done to the old one does not hold
+        // for the next: the names are pushed again, background jobs set to
+        // cron again, the GPU switched on again.
+        if (key === 'nextcloud') {
+            tailscaleTrusted = null;
+            nextcloudCron.modeSet = false;
+            nextcloudCron.succeeded = false;
+        }
+        if (key === 'jellyfin') apps.clearJellyfinHwaccelMark();
         return removed;
-    });
+    }, { app: key });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1358,6 +1700,42 @@ route('POST', /^\/api\/system\/panel-update$/, async (req, res) => {
     }
 });
 
+/*
+ * What this install set up outside the machine, taken down before the machine
+ * side goes.
+ *
+ * The teardown removes containers, images, volumes and files, and that is all
+ * it can reach. The DNS records it made in Cloudflare, the device it added to
+ * the Mullvad account, and the HTTPS addresses Tailscale is serving for it are
+ * not on this machine, and they used to outlive it: public names that
+ * resolved to a tunnel with nothing behind it, one of the account's five
+ * Mullvad devices taken by a machine that was gone, and Tailscale still
+ * answering on ports for apps that no longer existed.
+ *
+ * Best effort, each part on its own, with what happened said in the log. None
+ * of it is allowed to stop the teardown: somebody removing everything wants it
+ * removed, and a Cloudflare that is not answering is not a reason to leave it
+ * all behind.
+ */
+async function cleanUpOutside(onLine) {
+    if (tunnel.isConnected()) {
+        onLine('Removing the public names from Cloudflare...');
+        await tunnel.disconnect(onLine).catch((err) => onLine(`Could not disconnect from Cloudflare: ${err.message}. Remove the names under DNS in your Cloudflare account.`));
+    }
+    if (mullvad.isConnected()) {
+        onLine('Removing the Mullvad exit node from your Mullvad account...');
+        await mullvad.remove(onLine).catch((err) => onLine(`Could not remove the Mullvad exit node: ${err.message}`));
+    }
+    const ts = await tailscale.status({ force: true }).catch(() => null);
+    for (const app of ts?.serve ?? []) {
+        if (!app.on) continue;
+        await tailscale
+            .serveOff(app.key, onLine)
+            .then(() => onLine(`Turned off Tailscale HTTPS for ${app.label}.`))
+            .catch((err) => onLine(`Could not turn off Tailscale HTTPS for ${app.label}: ${err.message}`));
+    }
+}
+
 route('POST', /^\/api\/system\/teardown$/, async (req, res) => {
     const body = await readBody(req);
     // Typed rather than clicked. This removes every app, its data and this
@@ -1365,46 +1743,46 @@ route('POST', /^\/api\/system\/teardown$/, async (req, res) => {
     if (String(body.confirm || '') !== 'DELETE EVERYTHING') {
         return fail(res, 400, 'Type DELETE EVERYTHING to confirm.');
     }
-    try {
+
+    // A job from the start now, rather than a container launched by the
+    // request: the cleanup outside the machine comes first and takes a while,
+    // and the overlay is where it reports. The removal itself runs in a
+    // container of its own, because it has to delete the image this panel is
+    // running from and docker will not remove an image a running container is
+    // using. Its output is the only account of what happened, so it is
+    // followed and republished here -- right up until the step that removes
+    // this panel and takes the log with it.
+    const job = jobs.start('Remove everything', async (onLine) => {
+        onLine('Removing everything this stack put on the machine. Docker itself is left installed.');
+        await cleanUpOutside(onLine);
+
         const started = await selfservice.teardown();
         log(`teardown started in ${started.container}; this panel is about to go away`);
+        onLine('This panel goes last, and its disappearing is what finishing looks like.');
 
-        // The removal runs in a container of its own, because it has to delete
-        // the image this panel is running from and docker will not remove an
-        // image a running container is using. Its output is the only account of
-        // what happened, so it is followed and republished as a job -- which is
-        // what puts it on the overlay, right up until the step that removes
-        // this panel and takes the log with it.
-        const job = jobs.start('Remove everything', async (onLine) => {
-            onLine('Removing everything this stack put on the machine. Docker itself is left installed.');
-            onLine('This panel goes last, and its disappearing is what finishing looks like.');
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            if ((await dockerctl.containerState(started.container)).exists) break;
+            await new Promise((r) => setTimeout(r, 500));
+        }
 
-            for (let attempt = 0; attempt < 20; attempt += 1) {
-                if ((await dockerctl.containerState(started.container)).exists) break;
-                await new Promise((r) => setTimeout(r, 500));
-            }
-
-            await new Promise((resolve) => {
-                const stop = dockerctl.streamLogs(started.container, onLine, { tail: 0 });
-                // Nothing here resolves in the ordinary case: this container is
-                // removed part-way through and the process ends with it. The
-                // timeout is only so a teardown that somehow fails to reach us
-                // does not leave a job running for the rest of the day.
-                setTimeout(() => {
-                    try {
-                        stop();
-                    } catch {
-                        /* already gone */
-                    }
-                    resolve();
-                }, 30 * 60_000).unref?.();
-            });
+        await new Promise((resolve) => {
+            const stop = dockerctl.streamLogs(started.container, onLine, { tail: 0 });
+            // Nothing here resolves in the ordinary case: this container is
+            // removed part-way through and the process ends with it. The
+            // timeout is only so a teardown that somehow fails to reach us
+            // does not leave a job running for the rest of the day.
+            setTimeout(() => {
+                try {
+                    stop();
+                } catch {
+                    /* already gone */
+                }
+                resolve();
+            }, 30 * 60_000).unref?.();
         });
+    });
 
-        sendJson(res, 202, { ...started, jobId: job.id });
-    } catch (err) {
-        fail(res, 400, err.message);
-    }
+    sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
 // ------------------------------------------------------------------- tunnel --
@@ -1433,12 +1811,12 @@ route('POST', /^\/api\/tunnel\/connect$/, async (req, res) => {
 
 route('POST', /^\/api\/tunnel\/routes$/, async (req, res) => {
     const body = await readBody(req);
-    if (body.service === 'panel' && !authConfigured()) {
-        return fail(res, 409, 'This panel has no admin password. Set one under Global settings before putting it on the internet: it holds the Docker socket, so an address without a password is the whole machine.');
-    }
     // An answer on the spot rather than a queued job that fails. publish()
-    // checks again, and that check is the one that matters.
-    const blocked = tunnel.blockedReason(body.service);
+    // checks again, and that check is the one that matters. The origin goes
+    // along so a custom address that is really this panel -- the manager by
+    // name, or this machine on the panel's port -- needs a password the same
+    // as the panel's own entry does.
+    const blocked = tunnel.blockedReason(body.service, body.service === 'custom' ? body.origin : null);
     if (blocked) return fail(res, 409, blocked);
     // Checked before queueing, so a typo is an answer on the spot rather than a
     // job that fails a moment later.
@@ -1492,6 +1870,11 @@ route('GET', /^\/api\/tailscale$/, async (req, res, match, url) =>
 route('POST', /^\/api\/tailscale\/serve\/(nextcloud|jellyfin|mealplan|panel)$/, async (req, res, match) => {
     const key = match[1];
     const on = (await readBody(req)).on === true;
+    // Every device on the tailnet can open a Tailscale HTTPS address, so the
+    // panel gets one only with a password, the same as a public name.
+    if (on && key === 'panel' && !authConfigured()) {
+        return fail(res, 409, 'This panel has no admin password. Set one under Global settings before giving it a Tailscale address: it holds the Docker socket, so an address without a password is the whole machine.');
+    }
     // Refused on the spot when it cannot work, rather than as a job that fails.
     if (on) {
         const st = await tailscale.status();
@@ -1501,9 +1884,19 @@ route('POST', /^\/api\/tailscale\/serve\/(nextcloud|jellyfin|mealplan|panel)$/, 
         if (blocked) return fail(res, 409, blocked);
     }
     const label = tailscale.SERVE_APPS.find((a) => a.key === key).label;
-    const job = jobs.start(`${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${label}`, (onLine) =>
-        on ? tailscale.serveOn(key, onLine) : tailscale.serveOff(key, onLine),
-    );
+    const job = jobs.start(`${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${label}`, async (onLine) => {
+        const result = on ? await tailscale.serveOn(key, onLine) : await tailscale.serveOff(key, onLine);
+        // With no public name, Nextcloud's links in e-mails point at this
+        // address when it exists, so they follow it on and off.
+        if (key === 'nextcloud' && !publicOriginFor('nextcloud')) {
+            if ((await dockerctl.containerState(apps.APPS.nextcloud.container)).running) {
+                await apps.syncNextcloudUrls(dockerctl.docker, await nextcloudCliUrl(), onLine).catch((err) => {
+                    onLine(`Could not update the address Nextcloud puts in e-mails: ${err.message}`);
+                });
+            }
+        }
+        return result;
+    }, { key: `tailscale:${key}:${on ? 'on' : 'off'}`, app: key === 'nextcloud' ? 'nextcloud' : null });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -1569,16 +1962,8 @@ async function trustTailscale() {
     const key = `${ts.name}|${ts.ip}`;
     if (key === tailscaleTrusted) return;
 
-    const cfg = apps.loadAppsConfig();
-    const names = new Set(String(cfg.nextcloud.trustedDomains || '').split(/[\s,]+/).filter(Boolean));
-    const add = [ts.name, ts.ip].filter((n) => n && !names.has(n));
-    if (add.length) {
-        for (const n of add) names.add(n);
-        cfg.nextcloud.trustedDomains = [...names].join(' ');
-        apps.saveAppsConfig(cfg);
-        apps.writeAppsEnv(cfg);
-        log(`tailscale      : trusting ${add.join(' and ')} in Nextcloud`);
-    }
+    const { cfg, added } = apps.addTrustedDomains([ts.name, ts.ip]);
+    if (added.length) log(`tailscale      : trusting ${added.join(' and ')} in Nextcloud`);
     // Pushed into Nextcloud whether or not the list just changed: if the last
     // push failed, the names are already in the panel's list, and judging by
     // that alone would mean never trying again. A stopped Nextcloud picks the
@@ -1592,6 +1977,48 @@ async function trustTailscale() {
         }
     }
     tailscaleTrusted = key;
+}
+
+/*
+ * Nextcloud's background jobs, run from here.
+ *
+ * Nextcloud has jobs it runs in the background -- expiring the trash and old
+ * versions, sending notification e-mails, cleaning up file locks, generating
+ * previews ahead of time -- and three ways to trigger them. Out of the box it
+ * is "AJAX", which runs one job whenever somebody happens to have the web page
+ * open, and on a home server that is nearly never: the admin overview then
+ * reports that background jobs have not run for days, and the trash grows. The
+ * official image has no cron inside it to do better.
+ *
+ * So the panel is the cron: every five minutes, the same `php cron.php` a
+ * crontab would run, as the web user, in the running container. Skipped when
+ * Nextcloud is not running or a job is working on it, and never two at once --
+ * a slow run (a big preview backlog) simply makes the next tick a no-op.
+ * Failures are logged; success only the first time, so the log says it works
+ * without saying so 288 times a day.
+ */
+const nextcloudCron = { running: false, modeSet: false, succeeded: false };
+
+async function runNextcloudCron() {
+    if (nextcloudCron.running || jobs.touches('nextcloud')) return;
+    if (!(await dockerctl.containerState(apps.APPS.nextcloud.container)).running) return;
+    nextcloudCron.running = true;
+    try {
+        // Once per panel start (and after every start of Nextcloud, in
+        // reconcileNextcloud): tells Nextcloud that cron is how its jobs run,
+        // so it stops trying to run them on page loads as well.
+        if (!nextcloudCron.modeSet) {
+            await apps.setNextcloudCronMode(dockerctl.docker);
+            nextcloudCron.modeSet = true;
+        }
+        await apps.runNextcloudCron(dockerctl.docker, { timeoutMs: 15 * 60_000 });
+        if (!nextcloudCron.succeeded) log('nextcloud cron : background jobs ran; they run every five minutes from now on');
+        nextcloudCron.succeeded = true;
+    } catch (err) {
+        log(`nextcloud cron : background jobs did not run: ${err.message.split('\n').slice(-3).join(' ')}`);
+    } finally {
+        nextcloudCron.running = false;
+    }
 }
 
 /**
@@ -1623,6 +2050,71 @@ async function retireOldProxy() {
     }
 }
 
+/*
+ * Moves Nextcloud's Redis off the volume it no longer has.
+ *
+ * Redis here is a cache and a lock table, and nothing in it needs to outlive a
+ * restart, so the compose file now gives it a small tmpfs at /data and tells
+ * it not to save. An install made before that has a container created with an
+ * anonymous volume at /data -- which compose keeps reusing for as long as the
+ * container exists, and which, once the container is replaced some other way,
+ * becomes a volume with a random name that nobody knows to delete.
+ *
+ * So the old container is removed together with that volume (`rm -v` takes
+ * only anonymous volumes, never a named one), and brought back the new way if
+ * it was running. Only when the compose file on disk already says tmpfs:
+ * a panel newer than its stack files would otherwise recreate it with the
+ * volume again, on every start. Never while a job is running or waiting --
+ * that could be a Nextcloud build that is about to start Redis itself -- and
+ * retried until the queue is idle. Once done there is no volume to find, so
+ * it does nothing on every start after.
+ */
+const REDIS_CONTAINER = 'quickstart-home-nextcloud-redis';
+
+function composeWantsTmpfsRedis() {
+    try {
+        const text = fs.readFileSync(COMPOSE_FILE, 'utf8');
+        const block = /^ {2}nextcloud-redis:\s*$([\s\S]*?)(?=^ {2}[A-Za-z0-9_-]+:\s*$|^\S)/m.exec(text)?.[1] ?? '';
+        return /^\s{4}tmpfs:/m.test(block);
+    } catch {
+        return false;
+    }
+}
+
+async function migrateRedisVolume(attempt = 0) {
+    if (!composeWantsTmpfsRedis()) return;
+    if (jobs.busy || jobs.pending.length) {
+        // Deferred, not dropped: half a minute at a time, for up to a day.
+        if (attempt < 2880) setTimeout(() => migrateRedisVolume(attempt + 1).catch(() => {}), 30_000).unref?.();
+        return;
+    }
+    let mounts;
+    try {
+        ({ stdout: mounts } = await dockerctl.docker(
+            ['inspect', '-f', '{{range .Mounts}}{{.Type}}|{{.Destination}}|{{.Name}}{{println}}{{end}}', REDIS_CONTAINER],
+            { timeoutMs: 15_000 },
+        ));
+    } catch {
+        return; // not installed
+    }
+    const old = mounts.split('\n').map((l) => l.trim().split('|')).find(([type, dest]) => type === 'volume' && dest === '/data');
+    if (!old) return;
+
+    const { running } = await dockerctl.containerState(REDIS_CONTAINER);
+    log(`migration      : Nextcloud's Redis keeps its cache in memory now; removing its old volume ${old[2] || ''}`.trimEnd());
+    try {
+        await dockerctl.docker(['rm', '-fv', REDIS_CONTAINER], { timeoutMs: 60_000 });
+        if (running) {
+            await dockerctl.compose(['up', '-d', '--no-deps', 'nextcloud-redis'], { profile: 'nextcloud', timeoutMs: 5 * 60_000 });
+            log('migration      : Redis is running again, on tmpfs');
+        } else {
+            log('migration      : Redis was stopped, so it is recreated the next time Nextcloud starts');
+        }
+    } catch (err) {
+        log(`migration      : could not move Redis off its volume: ${err.message}`);
+    }
+}
+
 // ------------------------------------------------------------------- server --
 
 // Node gives a whole request five minutes by default, which an upload of a
@@ -1630,8 +2122,66 @@ async function retireOldProxy() {
 // client that never finishes sending its headers is still dropped.
 const WHOLE_REQUEST_TIMEOUT_MS = 12 * 60 * 60_000;
 
-const server = http.createServer({ requestTimeout: WHOLE_REQUEST_TIMEOUT_MS }, async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+/*
+ * Which names the panel answers to while it has no password.
+ *
+ * DNS rebinding: a web page anywhere on the internet can make the browser
+ * that opened it send requests to an address on the home network, by giving
+ * its own name a second, private address. To the panel those requests are
+ * ordinary same-origin ones -- they carry the attacker's name in Host, and
+ * nothing else gives them away. With a password that gains the page nothing,
+ * since it never has the session cookie. Without one it is the Docker socket,
+ * from a web page, on a machine bound to 127.0.0.1 for safety.
+ *
+ * So with no password set, a request has to name the panel by something the
+ * panel can recognise as its own: an IP address, localhost, a .local or
+ * .ts.net name, this machine's hostname (on any local domain the router adds
+ * to it), the manager's name on the stack network, or a name this install
+ * published. PANEL_ALLOWED_HOSTS in .env adds more, space or comma separated,
+ * for a name the router's DNS gives the machine that none of those cover.
+ *
+ * Not applied once there is a password. Then it would protect nothing the
+ * cookie does not already, and would lock out whoever reaches the panel by a
+ * name this list cannot know about.
+ */
+let machineName = os.hostname().toLowerCase();
+host.hostname().then((n) => {
+    if (n) machineName = String(n).toLowerCase();
+}).catch(() => {});
+
+function hostOnly(header) {
+    const raw = String(header ?? '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw.startsWith('[')) return raw.slice(1, raw.indexOf(']') > 0 ? raw.indexOf(']') : undefined);
+    return raw.replace(/:\d*$/, '').replace(/\.$/, '');
+}
+
+function hostAllowed(header) {
+    const name = hostOnly(header);
+    // HTTP/1.0 without a Host is not something a browser sends.
+    if (!name) return true;
+    if (net.isIP(name)) return true;
+    if (name === 'localhost' || name.endsWith('.localhost')) return true;
+    if (name.endsWith('.local') || name.endsWith('.ts.net')) return true;
+    if (['manager', 'quickstart-home-manager', machineName, os.hostname().toLowerCase()].includes(name)) return true;
+    if (machineName && name.split('.')[0] === machineName) return true;
+    const extra = String(readEnvFile().PANEL_ALLOWED_HOSTS || '').toLowerCase().split(/[\s,]+/).filter(Boolean);
+    return [...tunnel.publishedHostnames(), ...extra].includes(name);
+}
+
+// The base for reading the path out of the request line. Never the Host
+// header, which is the client's to fill in: an unparseable one used to throw
+// straight out of the handler.
+const URL_BASE = 'http://panel.invalid';
+
+async function handle(req, res) {
+    let url;
+    try {
+        url = new URL(req.url, URL_BASE);
+        if (url.origin !== URL_BASE) throw new Error('absolute URL for another host');
+    } catch {
+        return fail(res, 400, 'That request could not be understood.');
+    }
 
     const isApi = url.pathname.startsWith('/api/') || url.pathname === '/healthz';
 
@@ -1639,6 +2189,14 @@ const server = http.createServer({ requestTimeout: WHOLE_REQUEST_TIMEOUT_MS }, a
 
     const match = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
     if (!match) return fail(res, 404, 'Not found');
+
+    if (!authConfigured() && url.pathname !== '/healthz' && !hostAllowed(req.headers.host)) {
+        return fail(
+            res,
+            421,
+            `This panel has no password, so it only answers to its own addresses, and "${hostOnly(req.headers.host).slice(0, 100)}" is not one of them. Open it by this machine's IP address or name, or set a password.`,
+        );
+    }
 
     if (match.auth && authRequired() && !isAuthenticated(req)) {
         return fail(res, 401, 'Not signed in.');
@@ -1682,7 +2240,62 @@ const server = http.createServer({ requestTimeout: WHOLE_REQUEST_TIMEOUT_MS }, a
         await requestContext.run(asked, () => match.handler(req, res, match.pattern.exec(url.pathname), url));
     } catch (err) {
         log('request failed', url.pathname, err);
-        if (!res.headersSent) fail(res, 500, err.message || 'Internal error');
+        // A refusal with a status of its own -- a value .env cannot hold, say
+        // -- is the client's mistake and is answered as one.
+        const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
+        if (!res.headersSent) fail(res, status, err.message || 'Internal error');
+    }
+}
+
+/*
+ * Nothing a request does may take the process with it.
+ *
+ * The handler is async, so anything it threw outside the try above -- and
+ * cookie parsing and URL parsing both used to -- became an unhandled
+ * rejection, which Node answers by exiting. One malformed header from anything
+ * on the network was enough to stop the panel, every running job with it.
+ */
+const server = http.createServer({ requestTimeout: WHOLE_REQUEST_TIMEOUT_MS }, (req, res) => {
+    handle(req, res).catch((err) => {
+        log('request crashed', String(req.url).slice(0, 200), err);
+        try {
+            if (!res.headersSent) fail(res, 500, 'Internal error');
+            else res.destroy();
+        } catch {
+            /* the socket is already gone */
+        }
+    });
+});
+
+// A malformed request line or header is answered here, by Node, before any
+// handler sees it. Logged once and closed rather than left to the default.
+server.on('clientError', (err, socket) => {
+    if (socket.writable && !socket.destroyed) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+    else socket.destroy();
+});
+
+/*
+ * The last line of defence, for whatever escapes everything above.
+ *
+ * A rejection nobody handled is a bug in some job or timer, and it is logged
+ * and survived: the state it leaves is that one operation's, and the queue
+ * moves on. An exception is harder to call, because it can leave anything
+ * half-done -- so one is logged and survived as well, but a run of them is
+ * taken as the process being in a state it cannot get out of, and it exits.
+ * Docker's restart policy then starts a clean one.
+ */
+process.on('unhandledRejection', (reason) => {
+    log('unhandled rejection (kept running):', reason);
+});
+
+let recentCrashes = [];
+process.on('uncaughtException', (err) => {
+    const now = Date.now();
+    recentCrashes = [...recentCrashes.filter((t) => now - t < 60_000), now];
+    log('uncaught exception:', err);
+    if (recentCrashes.length >= 10) {
+        log('ten uncaught exceptions in a minute; exiting so Docker starts a fresh panel');
+        process.exit(1);
     }
 });
 
@@ -1714,6 +2327,14 @@ async function bootstrap() {
     }
 
     await retireOldProxy();
+    // In the background: it can wait for the job queue to empty.
+    migrateRedisVolume().catch((err) => log(`migration      : Redis check failed: ${err.message}`));
+    try {
+        const migrated = apps.migrateTrustedDomains(loadManagerConfig, saveManagerConfig);
+        if (migrated.changed) log(`migration      : removed ${migrated.removed.join(', ')} from Nextcloud's trusted domains`);
+    } catch (err) {
+        log(`migration      : could not tidy Nextcloud's trusted domains: ${err.message}`);
+    }
 
     // A little after start, so it does not compete with everything else the
     // panel does as it comes up, then every five minutes.
@@ -1724,6 +2345,10 @@ async function bootstrap() {
         if (!jobs.busy) tailscale.reconcile(log).catch(() => {});
     }, 5 * 60_000).unref?.();
     minecraft.clearUploads();
+
+    // Nextcloud's background jobs: a minute after start, then every five.
+    setTimeout(() => runNextcloudCron().catch(() => {}), 60_000).unref?.();
+    setInterval(() => runNextcloudCron().catch(() => {}), 5 * 60_000).unref?.();
 
     // Queued rather than run directly, so a scheduled copy shares the one-at-a-
     // time queue with everything else and cannot start while an image is
@@ -1745,6 +2370,12 @@ async function bootstrap() {
 
 bootstrap()
     .then(() => {
+        // A port that cannot be had is not survivable, and is not an uncaught
+        // exception to be shrugged off either: say so and stop.
+        server.on('error', (err) => {
+            console.error('cannot listen', err);
+            process.exit(1);
+        });
         server.listen(PORT, '0.0.0.0', () => log(`Quick Start Home listening on :${PORT}`));
     })
     .catch((err) => {

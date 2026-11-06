@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import * as cf from './cloudflare.js';
 import * as dockerctl from './dockerctl.js';
 import { APPS, loadAppsConfig } from './apps.js';
+import { authConfigured } from './auth.js';
 import { DEFAULT_MANAGER_CONFIG, loadManagerConfig, readEnvFile, saveManagerConfig, updateEnvFile } from './store.js';
 
 /*
@@ -78,6 +79,43 @@ export const SERVICES = [
 
 export const serviceFor = (key) => SERVICES.find((s) => s.key === key) ?? null;
 
+/*
+ * Whether a "something else" address is really this panel.
+ *
+ * The panel's own entry is refused without a password, because on the
+ * internet the password is all that stands between a visitor and the Docker
+ * socket. A custom address pointing back at it is the same thing under another
+ * label, and used to walk straight past that check: http://manager:8080 is
+ * the panel by its name on the stack network, and this machine's own address
+ * on the panel's port is the panel by way of the host.
+ *
+ * So any address that names the manager container, or uses the port the
+ * panel is published on, counts as the panel. The second rule can catch
+ * something else on the network that happens to use the same port -- which
+ * costs only that it, too, needs the panel to have a password first.
+ */
+const PANEL_NAMES = new Set(['manager', 'quickstart-home-manager', process.env.MANAGER_CONTAINER].filter(Boolean));
+
+export function isPanelOrigin(origin) {
+    let url;
+    try {
+        url = new URL(String(origin ?? ''));
+    } catch {
+        return false;
+    }
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    const guiPort = Number(readEnvFile().GUI_PORT || process.env.GUI_PORT || 8420);
+    if (PANEL_NAMES.has(host) || host.startsWith('manager.')) return true;
+    return port === guiPort;
+}
+
+/** Whether a route puts this panel on the internet, whatever it is labelled. */
+const isPanelRoute = (r) => r.service === 'panel' || (r.service === 'custom' && isPanelOrigin(r.origin));
+
+const PANEL_NEEDS_PASSWORD =
+    'This panel has no admin password. Set one under Global settings before putting it on the internet: it holds the Docker socket, so an address without a password is the whole machine.';
+
 /**
  * Why a service cannot go on the internet yet, or null when it can.
  *
@@ -91,7 +129,10 @@ export const serviceFor = (key) => SERVICES.find((s) => s.key === key) ?? null;
  * is set and what the container starts from -- so this agrees with what the
  * app will actually enforce, whether it is running yet or not.
  */
-export function blockedReason(key) {
+export function blockedReason(key, origin = null) {
+    if ((key === 'panel' || (key === 'custom' && origin && isPanelOrigin(origin))) && !authConfigured()) {
+        return PANEL_NEEDS_PASSWORD;
+    }
     if (key === 'mealplan' && !(readEnvFile().MEALPLAN_PASSWORD_HASH || '').trim()) {
         return 'Meal Plan has no family password yet, so on the internet anyone who found the address could read and change your plan. Set one under Meal Plan, Settings, then publish it.';
     }
@@ -111,6 +152,12 @@ function saveTunnel(next) {
 const apiToken = () => (readEnvFile().CLOUDFLARE_API_TOKEN || '').trim();
 
 export const isConnected = () => Boolean(config().tunnelId && apiToken());
+
+/** Every public name this install has, which are the names the panel may be asked for by. */
+export const publishedHostnames = () => config().routes.map((r) => r.hostname);
+
+/** The public names that lead to this panel, by its own entry or a custom one. */
+export const panelHostnames = () => config().routes.filter(isPanelRoute).map((r) => r.hostname);
 
 /** The address a service answers on, or null. The first route wins if it has several. */
 export function originFor(serviceKey) {
@@ -287,13 +334,15 @@ export async function publish({ service: key, subdomain, zoneId, origin: rawOrig
     // Here and not only in the route: this is the one place every publish
     // passes through, so nothing added later can walk round it. Before any
     // call to Cloudflare, so a refusal leaves no DNS record behind.
-    const blocked = blockedReason(key);
-    if (blocked) throw Object.assign(new Error(blocked), { status: 409 });
     const zone = t.zones.find((z) => z.id === zoneId);
     if (!zone) throw Object.assign(new Error('Pick one of your domains.'), { status: 400 });
 
     const hostname = hostnameFor(subdomain, zone);
     const origin = key === 'custom' ? customOrigin(rawOrigin) : service.origin;
+    // After the origin is known, so a custom address that is really this
+    // panel meets the panel's own rule.
+    const blocked = blockedReason(key, origin);
+    if (blocked) throw Object.assign(new Error(blocked), { status: 409 });
 
     const taken = t.routes.find((r) => r.hostname === hostname);
     if (taken) {

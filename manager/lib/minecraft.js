@@ -797,6 +797,21 @@ export async function resetConsoleAccount() {
     await inDataDir(state.running, `rm -rf "$D/${BRIDGE_DATA}"`);
 }
 
+/** `raw` when it is an https address on one of Microsoft's sign-in hosts, else null. */
+const MICROSOFT_HOSTS = ['microsoft.com', 'live.com', 'microsoftonline.com'];
+
+export function microsoftSignInUrl(raw) {
+    let url;
+    try {
+        url = new URL(String(raw ?? '').replace(/[.,;)]+$/, ''));
+    } catch {
+        return null;
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+    const host = url.hostname.toLowerCase();
+    return MICROSOFT_HOSTS.some((h) => host === h || host.endsWith(`.${h}`)) ? url.href : null;
+}
+
 /**
  * Where the console bridge has got to, read from what it printed.
  *
@@ -833,13 +848,28 @@ export async function consoleStatus(cfg) {
         return null;
     };
 
-    const code = last(/To sign in, use a web browser to open the page (\S+) and enter the code (\S+) to authenticate/);
-    const ok = last(/Successfully authenticated as (.+?) \((\d+)\) with (\d+)\/(\d+) friends/);
+    /*
+     * Only lines the bridge itself wrote. The server log also carries chat and
+     * every name a player picks, and a line is "[time INFO]: <Sam> ..." for
+     * those -- so a player who typed "To sign in, open the page
+     * https://evil.example and enter the code ..." into chat used to become the
+     * sign-in link this panel showed its owner. Anchored to the logger's own
+     * prefix, which Paper writes before anything a player can choose:
+     *
+     *   [15:25:14 INFO]: [Geyser-Spigot] [mcxboxbroadcast] [Primary Session] ...
+     */
+    const BRIDGE = String.raw`^\[\d{2}:\d{2}:\d{2} (?:INFO|WARN|ERROR)\]: \[Geyser-[A-Za-z]+\] \[mcxboxbroadcast\](?: \[[^\]]+\])? `;
+    const bridge = (body, flags = '') => new RegExp(`${BRIDGE}${body}`, flags);
+
+    const code = last(bridge(String.raw`To sign in, use a web browser to open the page (\S+) and enter the code (\S+) to authenticate`));
+    const ok = last(bridge(String.raw`Successfully authenticated as (.+?) \((\d+)\) with (\d+)\/(\d+) friends`));
+    // Not anchored: it is only ever a state to show, and where the bridge
+    // prints it (its own line or an exception's message under one) varies.
     const age = last(/requiring age verification/);
-    const live = last(/Creation of Xbox LIVE session was successful/);
+    const live = last(bridge('Creation of Xbox LIVE session was successful'));
     // The bridge's errors are logged at WARN, with the reason on the next line.
-    const authFailed = last(/\[mcxboxbroadcast\].*(?:Failed to get\/refresh auth token|Failed to refresh tokens|Re-auth still failed)/i);
-    const sessionFailed = last(/\[mcxboxbroadcast\].*(?:Failed to create xbox session|extension will not start)/i);
+    const authFailed = last(bridge('.*(?:Failed to get\\/refresh auth token|Failed to refresh tokens|Re-auth still failed)', 'i'));
+    const sessionFailed = last(bridge('.*(?:Failed to create xbox session|extension will not start)', 'i'));
 
     const reasonFor = (hit) => {
         const context = lines.slice(hit.i, hit.i + 2).join('\n');
@@ -851,7 +881,13 @@ export async function consoleStatus(cfg) {
     if (!latest) {
         return sessionFailed ? { ...base, state: 'error', error: reasonFor(sessionFailed).reason } : { ...base, state: 'starting' };
     }
-    if (latest === code) return { ...base, state: 'sign-in', url: code.m[1], code: code.m[2] };
+    if (latest === code) {
+        // A link this panel tells its owner to open, so it is held to being
+        // Microsoft's own sign-in page; anything else is ignored, not shown.
+        const url = microsoftSignInUrl(code.m[1]);
+        if (url && /^[A-Z0-9-]{4,16}$/i.test(code.m[2])) return { ...base, state: 'sign-in', url, code: code.m[2] };
+        return { ...base, state: 'starting' };
+    }
     if (latest === age) return { ...base, state: 'age' };
     if (latest === authFailed) {
         const { context, reason } = reasonFor(authFailed);

@@ -72,9 +72,35 @@ export class CommandError extends Error {
     }
 }
 
+/*
+ * How much of a command's output is kept once it has been streamed.
+ *
+ * Everything still goes to `onLine` as it arrives; this is only what is held
+ * on to afterwards, for the caller and for the error. A `compose build` of
+ * Nextcloud prints megabytes, all of it used to be kept, and when it failed all
+ * of it went into the error message -- which became the job's error, which went
+ * into the history, the status poll and lastrun.json. The end of the output is
+ * where the reason is, so the end is what is kept.
+ */
+const KEEP_BYTES = 64 * 1024;
+const ERROR_LINES = 20;
+
+const keepTail = (text) => (text.length > KEEP_BYTES ? text.slice(-KEEP_BYTES) : text);
+
+/** The last few lines of what a failed command said, which is where it says why. */
+export function errorTail(text, lines = ERROR_LINES) {
+    const kept = String(text ?? '').trim().split('\n').filter((l) => l.trim());
+    const tail = kept.slice(-lines).join('\n');
+    return tail.length > 4000 ? `...${tail.slice(-4000)}` : tail;
+}
+
 /**
  * Runs a command, optionally streaming output line by line to `onLine`.
  * Never uses a shell, so arguments carrying user input cannot be re-parsed.
+ *
+ * `env` is added to the environment of the command itself, which is how a
+ * secret reaches `docker exec -e NAME` without appearing in any process list:
+ * named without a value, docker takes it from its own environment.
  */
 export function run(cmd, args, { onLine, timeoutMs = 15 * 60_000, cwd = STACK_LOCAL, env } = {}) {
     return new Promise((resolve, reject) => {
@@ -100,11 +126,11 @@ export function run(cmd, args, { onLine, timeoutMs = 15 * 60_000, cwd = STACK_LO
         }, timeoutMs);
 
         child.stdout.on('data', (d) => {
-            stdout += d;
+            stdout = keepTail(stdout + d);
             emit(d.toString());
         });
         child.stderr.on('data', (d) => {
-            stderr += d;
+            stderr = keepTail(stderr + d);
             emit(d.toString());
         });
         child.on('error', (err) => {
@@ -117,7 +143,7 @@ export function run(cmd, args, { onLine, timeoutMs = 15 * 60_000, cwd = STACK_LO
             LIVE.delete(entry);
             if (pending && onLine) onLine(pending);
             if (code === 0) resolve({ stdout, stderr, code });
-            else reject(new CommandError(`${cmd} exited with code ${code}: ${stderr.trim() || stdout.trim()}`, { code, stdout, stderr }));
+            else reject(new CommandError(`${cmd} exited with code ${code}: ${errorTail(stderr) || errorTail(stdout)}`, { code, stdout, stderr }));
         });
     });
 }

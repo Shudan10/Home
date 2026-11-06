@@ -1,6 +1,6 @@
 import { loadManagerConfig, saveManagerConfig } from './store.js';
 import { docker } from './dockerctl.js';
-import { loadAppsConfig } from './apps.js';
+import { isSafeHostPath, loadAppsConfig } from './apps.js';
 
 /**
  * Copies folders from this machine onto a drive plugged into it.
@@ -176,10 +176,15 @@ export function validateBackupConfig(input) {
     out.mirrorDeletes = Boolean(input.mirrorDeletes);
     const sources = backupSources();
 
+    // Held to the same rule as a shared folder: it becomes a bind mount, where
+    // a colon splits it into source and target, and it is handed to scripts
+    // in throwaway containers, where quotes, $ and backslashes do not belong.
     const dest = String(input.destination ?? '').trim().replace(/\/+$/, '');
     if (dest && !dest.startsWith('/')) errors.push('The destination has to be a full path starting with /.');
     else if (dest.split('/').includes('..')) errors.push('The destination contains "..", so write the real path instead.');
-    else out.destination = dest;
+    else if (dest && !isSafeHostPath(dest)) {
+        errors.push('The destination contains a character that cannot be used in a folder path here (quotes, colons, $, ` or backslashes, or a line break).');
+    } else out.destination = dest;
 
     const mins = Number(input.intervalMinutes ?? DEFAULT_BACKUP_CONFIG.intervalMinutes);
     if (!Number.isFinite(mins) || mins < MIN_INTERVAL || mins > 43200) {
@@ -225,56 +230,8 @@ export async function run(onLine = () => {}) {
     if (!cfg.destination) throw new Error('No backup drive is set.');
     if (!sources.length) throw new Error('Nextcloud has no shared folders, so there is nothing to back up.');
 
-    // The destination itself may legitimately not exist yet -- a first run
-    // creates it. Its parent must, and that is the check that matters: the
-    // parent existing is what proves the drive is actually mounted. Without it
-    // Docker would create the bind mount source on the internal disk and the
-    // backup would cheerfully run onto the disk it is meant to protect.
-    const parent = cfg.destination.replace(/\/[^/]+\/?$/, '') || '/';
-    if (!(await pathExists(cfg.destination)) && !(await pathExists(parent))) {
-        throw new Error(
-            `${cfg.destination} is not there, and neither is ${parent}. ` +
-                'If that is a removable drive, plug it in and open it once so the system mounts it.',
-        );
-    }
-
-    /*
-     * Progress that actually arrives.
-     *
-     * rsync draws progress by rewriting one line with carriage returns and no
-     * newline, and the line splitter feeding the overlay only emits on \n -- so
-     * the whole thing arrives as a single line when the copy ends. Piping
-     * through `tr` turns each redraw into its own line, which streams.
-     *
-     * --no-inc-recursive costs an upfront scan of the tree, and buys a total
-     * that is the real total. Without it rsync counts as it goes, so the
-     * percentage walks backwards as more files are found, which is worse than
-     * no percentage at all.
-     */
-    const flags = [
-        '-aH',
-        '--info=progress2',
-        '--no-inc-recursive',
-        '--stats',
-        '--exclude=.nextcloudsync.log',
-        '--exclude=lost+found',
-        /*
-         * Nextcloud's thumbnail cache, which is not worth copying and is the
-         * single biggest thing slowing this down.
-         *
-         * Measured here: 25,954 preview files averaging 569KB -- 76% of every
-         * file in the backup for 3% of the bytes. The destination is a USB
-         * drive, usually NTFS through FUSE, where the cost is per file rather
-         * than per byte, so those thumbnails take far longer than the 526GB of
-         * actual films sitting next to them.
-         *
-         * And they are regenerable. Nextcloud rebuilds a preview the next time
-         * something asks for one, so restoring them buys nothing a few seconds
-         * of browsing would not.
-         */
-        '--exclude=appdata_*/preview/',
-    ];
-    if (cfg.mirrorDeletes) flags.push('--delete');
+    // Throws, saying why, when the destination is not on a drive of its own.
+    const target = await checkDestination(cfg.destination);
 
     /*
      * rsync's "some files could not be transferred" is not a failed backup.
@@ -292,7 +249,6 @@ export async function run(onLine = () => {}) {
     const PARTIAL = new Set([23, 24]);
     const skipped = [];
 
-    const leaf = cfg.destination.split('/').filter(Boolean).pop() || '';
     for (const src of sources) {
         const name = src.split('/').filter(Boolean).pop() || 'root';
         onLine(`\n> ${src}`);
@@ -301,24 +257,12 @@ export async function run(onLine = () => {}) {
         // A non-zero exit rejects, so there is no code to test here -- the
         // throw is the failure path, and the job it runs under reports it.
         try {
-        await docker(
-            [
-                'run', '--rm',
-                '-v', `${src}:/src/${name}:ro`,
-                // Mount the drive, not the target folder: the folder may not
-                // exist yet, and a bind mount source that is missing is created
-                // by Docker rather than refused -- on the internal disk.
-                '-v', `${parent}:/dest-root`,
-                IMAGE, 'sh', '-c',
-                // pipefail so the exit status is rsync's and not `tr`'s --
-                // otherwise a failed copy pipes into a successful tr and the
-                // whole thing reports success.
-                `set -o pipefail; mkdir -p "/dest-root/${leaf}/${name}" && ` +
-                    `rsync ${flags.join(' ')} "/src/${name}/" "/dest-root/${leaf}/${name}/" | tr '\\r' '\\n'`,
-            ],
-            { onLine, timeoutMs: 12 * 60 * 60_000 },
-        );
+            await docker(copyArgs(src, name, target, rsyncFlags(cfg, { dryRun: false })), {
+                onLine,
+                timeoutMs: 12 * 60 * 60_000,
+            });
         } catch (err) {
+            if (err.code === DRIVE_GONE) throw new Error(`The drive at ${target.anchor} went away before the copy started, so nothing was written.`);
             if (!PARTIAL.has(err.code)) throw err;
             // Pull the names out of rsync's own complaint, so the report names
             // the files rather than the exit code.
@@ -344,19 +288,181 @@ export async function run(onLine = () => {}) {
     return { ok: true, skipped: [] };
 }
 
-/** Whether a host path is there, asked from a container that can see the host. */
-async function pathExists(p) {
-    try {
-        const { stdout } = await docker(
-            ['run', '--rm', '-v', '/:/host:ro', IMAGE, 'sh', '-c', `[ -d "/host${p}" ] && echo yes || echo no`],
-            { timeoutMs: 20_000 },
-        );
-        return stdout.trim().endsWith('yes');
-    } catch {
-        return false;
+/*
+ * Is the drive actually there?
+ *
+ * A path existing proves nothing. /media/<user> is a folder on the internal
+ * disk that drives get mounted *under*, so it is there whether or not anything
+ * is plugged in -- and the old check, which only asked whether the
+ * destination's parent existed, was satisfied by exactly that folder. With the
+ * drive unplugged the backup then ran, onto the internal disk it exists to
+ * protect, and reported success.
+ *
+ * So the question is which filesystem the destination would land on. Walk up
+ * from it to the nearest folder that exists -- the destination itself once it
+ * has been made, the drive's mount point before that -- and that folder has to
+ * be on a different filesystem from the host's root. A drive that is not
+ * plugged in leaves only folders on the root filesystem to find, and is
+ * refused.
+ *
+ * Two ways of telling filesystems apart, and either one matching is a refusal:
+ * the device number `stat` reports, and the device `df` names. The first alone
+ * is fooled by btrfs, which gives every subvolume its own device number while
+ * they all live on one disk -- /home on Fedora is a different st_dev from / and
+ * the same disk entirely.
+ *
+ * The path is an argument to the script, never part of it.
+ */
+const ANCHOR_SCRIPT = [
+    'd="/host$1"',
+    'while [ ! -e "$d" ]; do d=$(dirname "$d"); done',
+    '[ -d "$d" ] || { echo "notdir"; exit 0; }',
+    'fs() { df -P "$1" 2>/dev/null | awk \'NR==2 {print $1}\'; }',
+    'echo "anchor=${d#/host}"',
+    'echo "rootdev=$(stat -c %d /host)"',
+    'echo "dev=$(stat -c %d "$d")"',
+    'echo "rootfs=$(fs /host)"',
+    'echo "fs=$(fs "$d")"',
+].join('\n');
+
+/**
+ * Where a run would write, once it is known to be a drive: the folder to
+ * mount, and the rest of the path below it. Throws, with what to do, when the
+ * destination is not on a drive of its own.
+ */
+export async function checkDestination(destination) {
+    if (!isSafeHostPath(destination) || !destination.startsWith('/') || destination === '/') {
+        throw new Error(`${destination || 'The destination'} is not a folder this can back up to.`);
     }
+    let stdout;
+    try {
+        ({ stdout } = await docker(['run', '--rm', '-v', '/:/host:ro', IMAGE, 'sh', '-c', ANCHOR_SCRIPT, 'sh', destination], {
+            timeoutMs: 30_000,
+        }));
+    } catch (err) {
+        throw new Error(`Could not look at ${destination} on this machine: ${err.message}`);
+    }
+    if (stdout.includes('notdir')) throw new Error(`${destination} is a file, not a folder.`);
+    const facts = Object.fromEntries(
+        stdout
+            .split('\n')
+            .map((l) => l.split('='))
+            .filter((kv) => kv.length >= 2)
+            .map(([k, ...v]) => [k.trim(), v.join('=').trim()]),
+    );
+    const anchor = facts.anchor || '/';
+    const sameDisk =
+        anchor === '/' ||
+        !facts.dev ||
+        facts.dev === facts.rootdev ||
+        (facts.fs && facts.fs === facts.rootfs);
+    if (sameDisk) {
+        throw new Error(
+            `${destination} is not on a drive of its own: the nearest folder of it that exists, ${anchor}, is on this machine's internal disk. ` +
+                'If it is a removable drive, plug it in and open it once so the system mounts it.',
+        );
+    }
+    // What is left below the mount, made by the copy if it is not there yet.
+    const rest = destination === anchor ? '' : destination.slice(anchor.length).replace(/^\/+/, '');
+    return { anchor, rest };
 }
 
+/*
+ * The rsync options, the same for the real copy and for the dry run that
+ * decides whether a copy is needed. They used to be written out twice and
+ * drifted: the dry run did not exclude the thumbnail cache, so the cache
+ * Nextcloud rewrites on every browse was "a change" every five minutes, and it
+ * did not pass --delete, so with mirroring on a deleted file was never one.
+ */
+function rsyncFlags(cfg, { dryRun }) {
+    const flags = [
+        '-aH',
+        '--exclude=.nextcloudsync.log',
+        '--exclude=lost+found',
+        /*
+         * Nextcloud's thumbnail cache, which is not worth copying and is the
+         * single biggest thing slowing this down.
+         *
+         * Measured here: 25,954 preview files averaging 569KB -- 76% of every
+         * file in the backup for 3% of the bytes. The destination is a USB
+         * drive, usually NTFS through FUSE, where the cost is per file rather
+         * than per byte, so those thumbnails take far longer than the 526GB of
+         * actual films sitting next to them.
+         *
+         * And they are regenerable. Nextcloud rebuilds a preview the next time
+         * something asks for one, so restoring them buys nothing a few seconds
+         * of browsing would not.
+         */
+        '--exclude=appdata_*/preview/',
+    ];
+    if (cfg.mirrorDeletes) flags.push('--delete');
+    if (dryRun) {
+        flags.push('-n', '--stats');
+    } else {
+        /*
+         * Progress that actually arrives.
+         *
+         * rsync draws progress by rewriting one line with carriage returns and
+         * no newline, and the line splitter feeding the overlay only emits on
+         * \n -- so the whole thing arrives as a single line when the copy ends.
+         * The script pipes it through `tr`, which turns each redraw into its
+         * own line, which streams.
+         *
+         * --no-inc-recursive costs an upfront scan of the tree, and buys a
+         * total that is the real total. Without it rsync counts as it goes, so
+         * the percentage walks backwards as more files are found, which is
+         * worse than no percentage at all.
+         */
+        flags.push('--info=progress2', '--no-inc-recursive', '--stats');
+    }
+    return flags;
+}
+
+/*
+ * The copy itself, in a container with the source read-only, the drive's
+ * mount point writable, and the host root read-only beside them.
+ *
+ * The host root is there for one last look, made in the same container that
+ * is about to write: between the check above and this starting, the drive can
+ * be pulled, and Docker answers a missing bind source by making an empty
+ * folder on the internal disk and mounting that. If what is mounted at
+ * /dest-root turns out to be the same filesystem as the host's root, nothing
+ * is written and the run fails with code 90.
+ *
+ * Everything that varies -- the folder below the mount, the name, the flags --
+ * goes in as arguments rather than into the script.
+ */
+const DRIVE_GONE = 90;
+
+const COPY_SCRIPT = [
+    'set -o pipefail',
+    'rest=$1; name=$2; dry=$3; shift 3',
+    'fs() { df -P "$1" 2>/dev/null | awk \'NR==2 {print $1}\'; }',
+    'if [ "$(stat -c %d /dest-root)" = "$(stat -c %d /host)" ] || [ "$(fs /dest-root)" = "$(fs /host)" ]; then',
+    `  echo "The backup drive is not mounted any more, so nothing was written." >&2; exit ${DRIVE_GONE}`,
+    'fi',
+    'out="/dest-root/${rest:+$rest/}$name"',
+    'if [ "$dry" = 1 ]; then',
+    '  rsync "$@" "/src/$name/" "$out/" 2>/dev/null',
+    'else',
+    '  mkdir -p "$out" && rsync "$@" "/src/$name/" "$out/" | tr \'\\r\' \'\\n\'',
+    'fi',
+].join('\n');
+
+function copyArgs(src, name, target, flags, { dryRun = false } = {}) {
+    if (!target.anchor || target.anchor === '/') throw new Error('Refusing to write to the root of this machine.');
+    return [
+        'run', '--rm',
+        '-v', `${src}:/src/${name}:ro`,
+        // Mount the drive, not the target folder: the folder may not exist
+        // yet, and a bind mount source that is missing is created by Docker
+        // rather than refused -- on the internal disk.
+        '-v', `${target.anchor}:/dest-root`,
+        '-v', '/:/host:ro',
+        IMAGE, 'sh', '-c', COPY_SCRIPT,
+        'sh', target.rest, name, dryRun ? '1' : '0', ...flags,
+    ];
+}
 
 /**
  * Would a copy actually move anything?
@@ -367,6 +473,9 @@ async function pathExists(p) {
  * check every five minutes is 288 jobs a day in the log and 288 notifications,
  * for a backup that had nothing to do 287 of those times.
  *
+ * With the same options as the real run, so the two agree, and counting
+ * deletions as well as transfers when mirroring is on.
+ *
  * Any failure answers "no". A drive that is unplugged, or busy, is not a reason
  * to start a real run that would only fail more loudly.
  */
@@ -376,29 +485,34 @@ export async function hasChanges() {
     const sources = backupSources();
     if (!cfg.destination || !sources.length) return false;
 
-    const parent = cfg.destination.replace(/\/[^/]+\/?$/, '') || '/';
-    const leaf = cfg.destination.split('/').filter(Boolean).pop() || '';
+    let target;
+    try {
+        target = await checkDestination(cfg.destination);
+    } catch {
+        return false;
+    }
 
     for (const src of sources) {
         const name = src.split('/').filter(Boolean).pop() || 'root';
         try {
-            const { stdout } = await docker(
-                [
-                    'run', '--rm',
-                    '-v', `${src}:/src/${name}:ro`,
-                    '-v', `${parent}:/dest-root`,
-                    IMAGE, 'sh', '-c',
-                    `rsync -aHn --stats --exclude=.nextcloudsync.log --exclude=lost+found ` +
-                        `"/src/${name}/" "/dest-root/${leaf}/${name}/" 2>/dev/null | grep "^Number of regular files transferred:"`,
-                ],
-                { timeoutMs: 10 * 60_000 },
-            );
-            if (Number(stdout.split(':').pop().trim().replace(/,/g, '')) > 0) return true;
+            const { stdout } = await docker(copyArgs(src, name, target, rsyncFlags(cfg, { dryRun: true }), { dryRun: true }), {
+                timeoutMs: 10 * 60_000,
+            });
+            if (dryRunMoves(stdout)) return true;
         } catch {
             return false;
         }
     }
     return false;
+}
+
+/** Whether rsync's --stats for a dry run say anything would be copied or deleted. */
+export function dryRunMoves(stats) {
+    const count = (label) => {
+        const m = new RegExp(`^${label}:\\s*([\\d,]+)`, 'm').exec(String(stats));
+        return m ? Number(m[1].replace(/,/g, '')) : 0;
+    };
+    return count('Number of regular files transferred') > 0 || count('Number of deleted files') > 0;
 }
 
 // ------------------------------------------------------------------ schedule

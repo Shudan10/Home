@@ -207,17 +207,38 @@ export async function connect(rawAccount, location, onLine = () => {}) {
 
     const relay = await pickRelay(location);
 
+    /*
+     * The new device first, then the settings, and only then the old device.
+     *
+     * Setting up again replaces the device rather than taking a second of the
+     * account's five -- but the old one used to be deleted first, so a
+     * registration that then failed (Mullvad busy, the network dropping, the
+     * account at its limit from elsewhere) left an exit node whose key Mullvad
+     * no longer knew, and nothing to fall back to. This way a failure leaves
+     * the working setup exactly as it was.
+     *
+     * The one case that needs the old slot is an account already at its five,
+     * where the new device cannot be added until the old one goes. Only then is
+     * the old one removed first, and the page says so.
+     */
+    const prev = config();
     // A key made here and never shown anywhere: Mullvad only ever sees the
     // public half.
-    const prev = config();
-    if (prev.deviceId) {
-        // Setting up again replaces the device rather than taking a second
-        // of the account's five.
-        await call('DELETE', `/accounts/v1/devices/${prev.deviceId}`, { token }).catch(() => {});
-    }
     const keys = wireguardKeys();
     onLine('Adding this machine to your Mullvad account as a device...');
-    const device = await call('POST', '/accounts/v1/devices', { token, body: { pubkey: keys.publicKey, hijack_dns: false } });
+    const register = () => call('POST', '/accounts/v1/devices', { token, body: { pubkey: keys.publicKey, hijack_dns: false } });
+    let device;
+    let oldRemoved = false;
+    try {
+        device = await register();
+    } catch (err) {
+        const full = err.message === ERRORS.MAX_DEVICES_REACHED;
+        if (!full || !prev.deviceId) throw err;
+        onLine('The account has no free device slot, so the device this machine used before is removed first to make room.');
+        await call('DELETE', `/accounts/v1/devices/${prev.deviceId}`, { token }).catch(() => {});
+        oldRemoved = true;
+        device = await register();
+    }
     if (!device?.ipv4_address) throw new MullvadError('Mullvad did not give the device an address.', 502);
     onLine(`Mullvad named it "${device.name}". That is the name it has under Devices on your Mullvad account page.`);
 
@@ -230,6 +251,17 @@ export async function connect(rawAccount, location, onLine = () => {}) {
         MULLVAD_ENDPOINT: relay.endpoint,
     });
     saveConfig({ deviceId: device.id, deviceName: device.name, location, locationLabel: relay.label, relay: relay.hostname });
+
+    // Best effort: the new device works whether or not this does, and a
+    // leftover is something the account page can remove.
+    if (prev.deviceId && !oldRemoved && prev.deviceId !== device.id) {
+        try {
+            await call('DELETE', `/accounts/v1/devices/${prev.deviceId}`, { token });
+            onLine(`Removed the device this machine used before${prev.deviceName ? ` ("${prev.deviceName}")` : ''}.`);
+        } catch (err) {
+            onLine(`Could not remove the old device "${prev.deviceName ?? prev.deviceId}" (${err.message}). Remove it at mullvad.net under Devices.`);
+        }
+    }
 
     onLine(`Connecting through ${relay.hostname} (${relay.label})...`);
     await start(onLine);

@@ -35,6 +35,11 @@ class JobRunner extends EventEmitter {
         return this.current !== null && this.current.status === 'running';
     }
 
+    /** Whether the running job, or one waiting, said it works on `app`. */
+    touches(app) {
+        return (this.busy && this.current.app === app) || this.queue.some(({ job }) => job.app === app);
+    }
+
     /** Everything asked for and not yet finished, in the order it will run. */
     get pending() {
         return this.queue.map(({ job }) => ({
@@ -46,7 +51,12 @@ class JobRunner extends EventEmitter {
         }));
     }
 
-    start(name, fn) {
+    /**
+     * Queues `fn`. `options.key` opts in to merging; `options.app` says which
+     * app the job works on, so timers that touch that app can stay out of its
+     * way.
+     */
+    start(name, fn, { key = null, app = null } = {}) {
         const asked = requestContext.getStore();
         const queued = asked?.queued === true;
         // Some jobs have to run to the end once they start -- uninstalling is
@@ -54,16 +64,29 @@ class JobRunner extends EventEmitter {
         const noCancel = asked?.noCancel === true;
         if (queued && asked.title) name = asked.title;
 
-        // The same thing asked for again while it is the last one waiting is
-        // one job, and the latest click wins: its function replaces the waiting
-        // one, because routes save new settings and then capture them in `fn`.
-        // Only when it is last, though -- anything queued behind it means the
-        // order matters, and "stop, start, stop" has to end stopped. Once it is
-        // running, asking again lines up a genuine second run, which is how to
-        // pick up a commit pushed while the first one was building.
+        /*
+         * The same thing asked for again while it is the last one waiting can
+         * be one job, with the latest click winning -- but only when the caller
+         * says so, with a key that names the whole of what was asked for.
+         *
+         * This used to merge on the job's name, and a name is a label, not an
+         * intent. Two worlds uploaded back to back were both "Add a Minecraft
+         * world", so the second replaced the first: one world was never
+         * imported and its upload sat in the temp folder. Two names published
+         * for Nextcloud were both "Publishing Nextcloud", and only the second
+         * was ever made. Only a caller knows when a repeat is truly the same
+         * request -- a settings apply that reads the saved settings when it
+         * runs, a start asked for twice -- so only a caller can say.
+         *
+         * Only when it is last, though -- anything queued behind it means the
+         * order matters, and "stop, start, stop" has to end stopped. Once it is
+         * running, asking again lines up a genuine second run, which is how to
+         * pick up a commit pushed while the first one was building.
+         */
         const last = this.queue[this.queue.length - 1];
-        if (last && last.job.name === name) {
+        if (key !== null && last && last.key === key) {
             last.fn = fn;
+            last.job.name = name;
             last.job.noCancel = noCancel;
             return last.job;
         }
@@ -80,11 +103,12 @@ class JobRunner extends EventEmitter {
             queuedAt: new Date().toISOString(),
             startedAt: null,
             finishedAt: null,
+            app,
             lines: [],
             error: null,
         };
 
-        this.queue.push({ job, fn });
+        this.queue.push({ job, fn, key });
         this.emit('queued', { ...job, ahead: this.queue.length - 1, running: this.current?.name ?? null });
         this.#drain();
         return job;
@@ -130,7 +154,10 @@ class JobRunner extends EventEmitter {
                     // The error from a killed process describes the killing,
                     // not a fault. Somebody pressed cancel; say that.
                     job.status = job.cancelled ? 'cancelled' : 'failed';
-                    job.error = job.cancelled ? 'Cancelled.' : err?.message || String(err);
+                    // Bounded, because this is kept in the history and sent
+                    // on every status poll; the full story is in the lines.
+                    const message = String(err?.message || err);
+                    job.error = job.cancelled ? 'Cancelled.' : message.length > 4000 ? `${message.slice(0, 4000)}...` : message;
                     log(job.cancelled ? '! Cancelled.' : `! ${job.error}`);
                 },
             )
@@ -224,6 +251,13 @@ class JobRunner extends EventEmitter {
      * which is all the caller needs.
      */
     find(id) {
+        // Still waiting is an answer too. Without this a job lined up behind
+        // another read as gone, and the page took "gone" to mean finished.
+        const waiting = this.queue.find(({ job }) => job.id === id);
+        if (waiting) {
+            const { name, status, queuedAt, startedAt, finishedAt, error } = waiting.job;
+            return { id, name, status, queuedAt, startedAt, finishedAt, error, lines: [], ahead: this.queue.indexOf(waiting) };
+        }
         if (this.current?.id === id) {
             const { name, status, startedAt, finishedAt, error, lines } = this.current;
             return { id, name, status, startedAt, finishedAt, error, lines: lines.slice(-400) };
