@@ -229,6 +229,7 @@
           <dl class="kv">
             <div><dt>Hostname</dt><dd id="ov-hostname">–</dd></div>
             <div><dt>System</dt><dd id="ov-platform">–</dd></div>
+            <div class="wide"><dt>Tailscale</dt><dd id="ov-tailscale">–</dd></div>
             <div><dt>Processor</dt><dd id="ov-cpus">–</dd></div>
             <div><dt>Uptime</dt><dd id="ov-uptime">–</dd></div>
             <div class="wide"><dt>Load average</dt><dd id="ov-load" class="mono">–</dd></div>
@@ -784,6 +785,18 @@
                   <span class="mc-edition">Bedrock Edition</span>
                   <span class="muted">Phones, tablets, Windows and consoles. Play → Servers → Add Server:</span>
                   <code id="mc-join-bedrock">–</code>
+                </div>
+              </div>
+              <div id="mc-join-ts" class="mc-join" hidden>
+                <div class="mc-join-row">
+                  <span class="mc-edition">Over Tailscale</span>
+                  <span class="muted">For friends signed in to your tailnet. No port forwarding needed. Java:</span>
+                  <code id="mc-join-ts-java">–</code>
+                </div>
+                <div class="mc-join-row">
+                  <span class="mc-edition"></span>
+                  <span class="muted">Bedrock on a phone or PC with Tailscale (consoles cannot run it):</span>
+                  <code id="mc-join-ts-bedrock">–</code>
                 </div>
               </div>
               <p class="hint">

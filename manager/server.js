@@ -1466,6 +1466,55 @@ route('POST', /^\/api\/tunnel\/disconnect$/, async (req, res) => {
 });
 
 /**
+ * Lets Nextcloud answer on this machine's Tailscale name and address.
+ *
+ * Nextcloud turns away any Host it has not been told about, with an "untrusted
+ * domain" page, and it has never heard of a *.ts.net name or a 100.x address.
+ * Everything else here already answers over Tailscale -- the apps listen on
+ * every interface -- so this is the one thing needed for "over Tailscale" to
+ * be true of Nextcloud as well.
+ *
+ * Checked at start and every five minutes, since Tailscale can be signed in to
+ * at any time. Only ever adds: a name stays trusted after Tailscale goes, which
+ * is harmless, rather than being removed while somebody's device is using it.
+ */
+let tailscaleTrusted = null;
+
+async function trustTailscale() {
+    // Another job may be rebuilding or reconfiguring Nextcloud; occ calls
+    // underneath that would race it. The next tick picks this up.
+    if (jobs.busy) return;
+    const ts = await host.tailscale();
+    if (!ts) return;
+    const key = `${ts.name}|${ts.ip}`;
+    if (key === tailscaleTrusted) return;
+
+    const cfg = apps.loadAppsConfig();
+    const names = new Set(String(cfg.nextcloud.trustedDomains || '').split(/[\s,]+/).filter(Boolean));
+    const add = [ts.name, ts.ip].filter((n) => n && !names.has(n));
+    if (add.length) {
+        for (const n of add) names.add(n);
+        cfg.nextcloud.trustedDomains = [...names].join(' ');
+        apps.saveAppsConfig(cfg);
+        apps.writeAppsEnv(cfg);
+        log(`tailscale      : trusting ${add.join(' and ')} in Nextcloud`);
+    }
+    // Pushed into Nextcloud whether or not the list just changed: if the last
+    // push failed, the names are already in the panel's list, and judging by
+    // that alone would mean never trying again. A stopped Nextcloud picks the
+    // list up when it next starts.
+    if ((await dockerctl.containerState(apps.APPS.nextcloud.container)).running) {
+        try {
+            await apps.syncTrustedDomains(dockerctl.docker, cfg);
+        } catch (err) {
+            log(`tailscale      : could not update Nextcloud yet, will retry: ${err.message}`);
+            return;
+        }
+    }
+    tailscaleTrusted = key;
+}
+
+/**
  * Retires the nginx container an older version of this panel ran.
  *
  * The compose file no longer has a proxy service, so nothing would ever stop
@@ -1585,6 +1634,11 @@ async function bootstrap() {
     }
 
     await retireOldProxy();
+
+    // A little after start, so it does not compete with everything else the
+    // panel does as it comes up, then every five minutes.
+    setTimeout(() => trustTailscale().catch(() => {}), 20_000).unref?.();
+    setInterval(() => trustTailscale().catch(() => {}), 5 * 60_000).unref?.();
     minecraft.clearUploads();
 
     // Queued rather than run directly, so a scheduled copy shares the one-at-a-

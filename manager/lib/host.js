@@ -123,6 +123,59 @@ export async function lanAddress() {
     return lanCache;
 }
 
+/*
+ * This machine on Tailscale, if it is on a tailnet.
+ *
+ * Asked of Tailscale itself, through the local status socket its daemon keeps
+ * on the host, rather than inferred from network interfaces: only Tailscale
+ * knows the machine's MagicDNS name, and the name is the address worth
+ * showing -- it stays the same if the 100.x address ever changes. Read from a
+ * throwaway container with the host's root mounted read-only, the same way
+ * the drive list is read; the socket is under /run, because on the host
+ * /var/run is a symlink to /run and inside the container that link points at
+ * the container's own /run instead.
+ *
+ * Kept for five minutes rather than forever like the LAN address: Tailscale is
+ * something people sign in to and out of while the panel runs.
+ */
+let tsCache = { at: 0, value: undefined };
+const TS_TTL_MS = 5 * 60_000;
+
+export async function tailscale({ force = false } = {}) {
+    if (!force && tsCache.value !== undefined && Date.now() - tsCache.at < TS_TTL_MS) return tsCache.value;
+    const script =
+        'S=/host/run/tailscale/tailscaled.sock; [ -S "$S" ] || exit 0; ' +
+        'curl -s --max-time 5 --unix-socket "$S" http://local-tailscaled.sock/localapi/v0/status';
+    let value = null;
+    try {
+        const { stdout } = await run('docker', ['run', '--rm', '-v', '/:/host:ro', 'quickstart-home/manager:1', 'sh', '-c', script], {
+            timeoutMs: 20_000,
+        });
+        const status = stdout.trim() ? JSON.parse(stdout) : null;
+        // Installed but signed out, or stopped, is the same as not there: no
+        // address that anyone could reach this machine on.
+        if (status?.BackendState === 'Running' && status.Self) {
+            const ip = (status.Self.TailscaleIPs ?? []).find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a)) ?? null;
+            const name = String(status.Self.DNSName ?? '').replace(/\.$/, '') || null;
+            const magicDNS = Boolean(status.CurrentTailnet?.MagicDNSEnabled);
+            if (ip || name) {
+                value = {
+                    ip,
+                    name,
+                    magicDNS,
+                    // What to type: the name when MagicDNS resolves it for every
+                    // device on the tailnet, otherwise the address.
+                    host: magicDNS && name ? name : ip,
+                };
+            }
+        }
+    } catch {
+        value = null;
+    }
+    tsCache = { at: Date.now(), value };
+    return value;
+}
+
 /**
  * The whole Overview payload.
  *
@@ -139,6 +192,7 @@ export async function snapshot() {
         hostname: name,
         // Cached after the first look, so polling this page costs nothing.
         lanAddress: await lanAddress(),
+        tailscale: await tailscale(),
         platform: `${os.type()} ${os.release()}`,
         arch: os.arch(),
         cpus: os.cpus().length,

@@ -67,6 +67,12 @@ the DNS record for each name, and will not overwrite a DNS record it did not
 make. Anything else on your network with a web page can be published the same
 way, by its address and port.
 
+**Tailscale** — if this machine is on a tailnet, the panel notices and lists
+an "over Tailscale" address for every app next to the home-network and public
+ones, using the machine's MagicDNS name. It also adds that name to Nextcloud's
+trusted domains, which would otherwise turn it away. Minecraft gets Tailscale
+join addresses too, so friends on your tailnet can play with no port forwarding.
+
 ## Installing
 
 ```bash

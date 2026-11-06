@@ -1194,6 +1194,11 @@ async function refreshStatus() {
 
     const h = s.host ?? {};
     hostSnapshot = h;
+    const ts = h.tailscale;
+    $('ov-tailscale').textContent = ts
+        ? [ts.name, ts.ip].filter(Boolean).join(' · ')
+        : 'Not on a tailnet. Install Tailscale on this machine and sign in, and every app gets an address that works from your other Tailscale devices.';
+    $('ov-tailscale').classList.toggle('muted', !ts);
     $('ov-hostname').textContent = h.hostname ?? '–';
     $('ov-platform').textContent = `${h.platform ?? '–'} (${h.arch ?? '?'})`;
     $('ov-cpus').textContent = h.cpus ? `${h.cpus} cores` : '–';
@@ -1304,6 +1309,13 @@ const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft'];
  * dav:// for http, davs:// for https -- because file managers pick their
  * transport from it and a davs:// against a plain http port simply fails.
  */
+/**
+ * This machine's address on Tailscale, or null when it is not on a tailnet.
+ * The MagicDNS name when that is on, since it is the same for every device on
+ * the tailnet and survives the 100.x address changing; the address otherwise.
+ */
+const tailscaleHost = () => hostSnapshot?.tailscale?.host ?? null;
+
 function webdavLinks(hostPort, publicUrl) {
     const rows = [];
     const row = (url, label) =>
@@ -1316,6 +1328,10 @@ function webdavLinks(hostPort, publicUrl) {
     }
     const local = localHost();
     if (hostPort && local) rows.push(row(`dav://${local}:${hostPort}/remote.php/webdav/`, 'on this network'));
+    // Plain dav, not davs: there is no certificate on that port, and the
+    // tailnet already encrypts everything between its devices.
+    const ts = tailscaleHost();
+    if (hostPort && ts) rows.push(row(`dav://${ts}:${hostPort}/remote.php/webdav/`, 'over Tailscale'));
     return rows.join('');
 }
 
@@ -1328,6 +1344,10 @@ function appLinks(hostPort, publicUrl) {
     if (publicUrl) rows.push(a(publicUrl, 'from anywhere'));
     const local = localHost();
     if (hostPort && local) rows.push(a(`http://${local}:${hostPort}`, 'on this network'));
+    // Any device signed in to the same tailnet, from anywhere, with no tunnel
+    // or domain involved. http is right here: Tailscale encrypts the traffic.
+    const ts = tailscaleHost();
+    if (hostPort && ts) rows.push(a(`http://${ts}:${hostPort}`, 'over Tailscale'));
     return rows.map((r) => `<div class="app-link">${r}</div>`).join('');
 }
 
@@ -2082,6 +2102,14 @@ function renderMinecraftJoin() {
     // is then one fewer thing to get wrong.
     $('mc-join-java').textContent = Number(cfg.javaPort) === 25565 ? host : `${host}:${cfg.javaPort}`;
     $('mc-join-bedrock').textContent = `${host}   port ${cfg.bedrockPort}`;
+    // Friends on your tailnet join with no port forwarding at all. Consoles
+    // cannot run Tailscale, so for them this line is no use, and it says so.
+    const ts = tailscaleHost();
+    $('mc-join-ts').hidden = !ts;
+    if (ts) {
+        $('mc-join-ts-java').textContent = Number(cfg.javaPort) === 25565 ? ts : `${ts}:${cfg.javaPort}`;
+        $('mc-join-ts-bedrock').textContent = `${ts}   port ${cfg.bedrockPort}`;
+    }
     $('mc-fwd-java').textContent = cfg.javaPort;
     $('mc-fwd-bedrock').textContent = cfg.bedrockPort;
     $('mc-fwd-host').textContent = hostSnapshot?.lanAddress ?? 'this machine';
