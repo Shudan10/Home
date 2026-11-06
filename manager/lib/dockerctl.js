@@ -203,7 +203,7 @@ export async function logs(name, tail = 300) {
     }
 }
 
-export function streamLogs(name, onLine, { tail = 200, timestamps = false } = {}) {
+export function streamLogs(name, onLine, { tail = 200, timestamps = false, onExit } = {}) {
     const args = ['logs', '--tail', String(tail), '--follow'];
     if (timestamps) args.push('--timestamps');
     const child = spawn('docker', [...args, name]);
@@ -217,6 +217,7 @@ export function streamLogs(name, onLine, { tail = 200, timestamps = false } = {}
     child.stdout.on('data', (d) => emit(d.toString()));
     child.stderr.on('data', (d) => emit(d.toString()));
     child.on('error', (err) => onLine(`[manager] log stream error: ${err.message}`));
+    child.on('close', () => onExit?.());
     return () => child.kill('SIGKILL');
 }
 

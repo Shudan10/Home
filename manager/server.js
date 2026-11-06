@@ -133,7 +133,9 @@ function sse(req, res) {
         if (res.writableEnded) return;
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
-    const keepAlive = setInterval(() => !res.writableEnded && res.write(': ping\n\n'), 20_000);
+    // A named event rather than a comment: the page cannot see comments, and
+    // it needs something regular to tell a quiet stream from a dead one.
+    const keepAlive = setInterval(() => !res.writableEnded && res.write('event: ping\ndata: 0\n\n'), 20_000);
     const close = () => clearInterval(keepAlive);
     req.on('close', close);
     res.on('close', close);
@@ -526,7 +528,7 @@ route('GET', /^\/api\/logs\/containers$/, async (req, res) => {
 route('GET', /^\/api\/logs\/stream-all$/, async (req, res) => {
     const { send, onClose } = sse(req, res);
 
-    const followers = new Map(); // name -> { stop, startedAt }
+    const followers = new Map(); // name -> { stop, startedAt, exited }
     let listed = null;
     let closed = false;
 
@@ -555,6 +557,10 @@ route('GET', /^\/api\/logs\/stream-all$/, async (req, res) => {
         const signature = present.map((c) => `${c.key}:${c.state.running ? 1 : 0}`).join(',');
         if (signature !== listed) {
             listed = signature;
+            // Every tile starts empty again, so every log starts again too.
+            // Only restarting the one that changed left the rest blank until
+            // their containers next happened to print something.
+            for (const name of [...followers.keys()]) detach(name);
             send('containers', {
                 containers: present.map(({ key, label, name, state }) => ({
                     key,
@@ -572,12 +578,20 @@ route('GET', /^\/api\/logs\/stream-all$/, async (req, res) => {
             const follower = followers.get(c.name);
             // startedAt is what tells one run of a container from the next, and
             // a new run means the old `docker logs` has already exited.
-            if (follower && follower.startedAt === c.state.startedAt) continue;
+            // A `docker logs` that ended while its container kept running is
+            // picked up again, from new lines only: the tile already has the
+            // rest. One for a stopped container ends by itself, and stays ended.
+            const revive = follower?.exited && c.state.running;
+            if (follower && follower.startedAt === c.state.startedAt && !revive) continue;
             detach(c.name);
-            followers.set(c.name, {
-                startedAt: c.state.startedAt,
-                stop: dockerctl.streamLogs(c.name, (line) => send('line', { key: c.key, line }), { tail: 60 }),
+            const entry = { startedAt: c.state.startedAt, exited: false };
+            entry.stop = dockerctl.streamLogs(c.name, (line) => send('line', { key: c.key, line }), {
+                tail: revive ? 0 : 60,
+                onExit: () => {
+                    entry.exited = true;
+                },
             });
+            followers.set(c.name, entry);
         }
     };
 

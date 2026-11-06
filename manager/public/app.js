@@ -3730,13 +3730,74 @@ function updateLogSummary() {
     }
 }
 
+/**
+ * Keeps a server stream connected.
+ *
+ * EventSource retries by itself only after some failures. A 502 while the
+ * panel restarts after an Update, a session that expired, or a phone putting
+ * the page to sleep each leave it closed or silently dead, and the page then
+ * shows the last lines it got, forever, looking like nothing is happening.
+ *
+ * The server sends a ping every 20 seconds, so a stream with nothing for 50
+ * is dead whatever its readyState says. A closed or dead one is opened again,
+ * waiting a little longer each time it fails, and checked the moment the
+ * page is looked at again.
+ */
+function guardStream(connect) {
+    let stream = null;
+    let lastSeen = 0;
+    let delay = 2000;
+    let retry = null;
+
+    const signedIn = () => !$('app').classList.contains('hidden');
+    const again = () => {
+        clearTimeout(retry);
+        retry = setTimeout(() => signedIn() && open(), delay);
+        delay = Math.min(delay * 2, 30_000);
+    };
+    const open = () => {
+        stream?.close();
+        lastSeen = Date.now();
+        stream = connect();
+        const seen = () => {
+            lastSeen = Date.now();
+            delay = 2000;
+        };
+        stream.addEventListener('open', seen);
+        stream.addEventListener('ping', seen);
+        stream.addEventListener('error', () => stream.readyState === EventSource.CLOSED && again());
+        return stream;
+    };
+    const check = () => {
+        if (!stream || !signedIn() || document.hidden) return;
+        if (stream.readyState === EventSource.CLOSED || Date.now() - lastSeen > 50_000) open();
+    };
+    setInterval(check, 15_000);
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('online', check);
+    return { open, touch: () => (lastSeen = Date.now()) };
+}
+
+const logGuard = guardStream(() => openLogStream());
+const jobGuard = guardStream(() => openJobStream());
+
 function connectLogs() {
+    logGuard.open();
+}
+
+function connectJobs() {
+    jobGuard.open();
+}
+
+function openLogStream() {
     logStream?.close();
     logBuffers.clear();
     const grid = $('log-grid');
     grid.innerHTML = '<p class="empty-tile">Connecting…</p>';
 
     logStream = new EventSource('/api/logs/stream-all');
+    // Lines count as signs of life as much as pings do.
+    logStream.addEventListener('line', () => logGuard.touch());
 
     logStream.addEventListener('containers', (event) => {
         const { containers } = JSON.parse(event.data);
@@ -3785,6 +3846,7 @@ function connectLogs() {
     logStream.addEventListener('error', () => {
         for (const dot of document.querySelectorAll('[data-tiledot]')) dot.className = 'dot bad';
     });
+    return logStream;
 }
 
 /**
@@ -4221,7 +4283,7 @@ function adoptRunningJob(job, note) {
     tickElapsed();
 }
 
-function connectJobs() {
+function openJobStream() {
     jobStream?.close();
     jobStream = new EventSource('/api/jobs/stream');
     // A job already running when this page loaded: what it has printed so far
@@ -4344,6 +4406,7 @@ function connectJobs() {
         loadApps();
         loadTunnel().catch(() => {});
     });
+    return jobStream;
 }
 
 // -------------------------------------------------------- admin password ---
