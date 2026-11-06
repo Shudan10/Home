@@ -2174,7 +2174,10 @@ pre.cmd {
 .ts-row .tag { font-weight: 500; }
 .ts-addr { display: flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--mono); font-size: 12.5px; }
 .ts-addr span { overflow-wrap: anywhere; min-width: 0; }
-.ts-row button.mini { padding: 2px 8px; font-size: 12px; flex: none; }
+/* Copy buttons beside links and file-manager addresses. Small, and never
+   squeezed: the address beside them wraps instead. */
+button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6px; }
+.media-row button.copy-btn { margin-left: 0; }
 .ts-row-note { flex-basis: 100%; font-size: 12.5px; margin: 0; }
 .ts-row-note.warn { color: var(--warn); }
 

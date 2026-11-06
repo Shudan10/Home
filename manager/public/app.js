@@ -1320,6 +1320,59 @@ const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft'];
  */
 const tailscaleHost = () => hostSnapshot?.tailscale?.host ?? null;
 
+/**
+ * Puts exactly `text` on the clipboard.
+ *
+ * The panel is mostly opened over plain http -- on the home network, or over
+ * Tailscale -- and there the browser does not offer navigator.clipboard at
+ * all, because it is not a secure context. The old copy command still works
+ * there, through a text box that exists only for the moment of copying.
+ *
+ * Copying by selecting the text was how links went wrong: a selection can end
+ * on the line break after it, and `.../webdav/%0A` is a folder no file
+ * manager can open. So what gets copied is the string, never the page text.
+ */
+async function copyText(text) {
+    const value = String(text ?? '').trim();
+    if (!value) return false;
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(value);
+            return true;
+        } catch {
+            /* fall through to the old way */
+        }
+    }
+    const box = document.createElement('textarea');
+    box.value = value;
+    box.setAttribute('readonly', '');
+    box.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+    document.body.append(box);
+    box.select();
+    box.setSelectionRange(0, value.length);
+    let ok = false;
+    try {
+        ok = document.execCommand('copy');
+    } catch {
+        ok = false;
+    }
+    box.remove();
+    return ok;
+}
+
+/** A Copy button for one value. The value rides in the attribute, not the text. */
+const copyButton = (value) =>
+    `<button type="button" class="ghost copy-btn" data-copy="${escapeHtml(String(value).trim())}" title="Copy">Copy</button>`;
+
+document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-copy]');
+    if (!button) return;
+    event.preventDefault();
+    const value = button.dataset.copy;
+    if (await copyText(value)) toast('Copied.');
+    else toast(`Could not copy. Here it is to copy by hand: ${value}`, 'bad');
+});
+
 /** An app's HTTPS address on Tailscale, once it has been turned on for it. */
 const tailscaleHttps = (key) => tsState?.serve?.find((a) => a.key === key && a.on && !a.broken)?.url ?? null;
 
@@ -1327,7 +1380,7 @@ function webdavLinks(hostPort, publicUrl, key = 'nextcloud') {
     const rows = [];
     const row = (url, label) =>
         `<div class="media-row"><code>${escapeHtml(url)}</code>` +
-        `<span class="muted">${escapeHtml(label)}</span></div>`;
+        `<span class="muted">${escapeHtml(label)}</span>${copyButton(url)}</div>`;
 
     if (publicUrl) {
         const u = new URL(publicUrl);
@@ -1349,7 +1402,7 @@ function webdavLinks(hostPort, publicUrl, key = 'nextcloud') {
 function appLinks(hostPort, publicUrl, key = null) {
     const a = (url, label) =>
         `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>` +
-        `<span class="muted"> ${escapeHtml(label)}</span>`;
+        `<span class="muted"> ${escapeHtml(label)}</span>${copyButton(url)}`;
 
     const rows = [];
     if (publicUrl) rows.push(a(publicUrl, 'from anywhere'));
@@ -1801,12 +1854,11 @@ $('nextcloud-pass-show').addEventListener('click', () => {
 $('nextcloud-pass-copy').addEventListener('click', async () => {
     const value = $('nextcloud-pass').value;
     if (!value) return toast('There is no password to copy yet.', 'bad');
-    try {
-        await navigator.clipboard.writeText(value);
+    if (await copyText(value)) {
         toast('Password copied.');
-    } catch {
-        // Clipboard access needs a secure context, which plain http on another
-        // machine is not. Selecting it is then the only way to get at it.
+    } else {
+        // Neither way of copying worked. Selecting it is then the only way
+        // to get at it.
         $('nextcloud-pass').type = 'text';
         $('nextcloud-pass').select();
         toast('Could not reach the clipboard, so it is selected instead.', 'bad');
@@ -3166,8 +3218,7 @@ function relativeTime(iso) {
     return d < 60 ? `${d} days ago` : new Date(iso).toLocaleDateString();
 }
 
-const tsCopy = (value) =>
-    `<button type="button" class="ghost mini" data-ts-copy="${escapeHtml(value)}" title="Copy">Copy</button>`;
+const tsCopy = copyButton;
 
 function renderTailscale() {
     const t = tsState;
@@ -3254,7 +3305,7 @@ function renderTailscale() {
                     : '';
             const dav =
                 a.key === 'nextcloud' && a.on && a.url
-                    ? `<span class="muted">In a file manager: <code>davs://${escapeHtml(new URL(a.url).host)}/remote.php/webdav/</code></span>`
+                    ? `<span class="ts-addr"><span class="muted">In a file manager: <code>davs://${escapeHtml(new URL(a.url).host)}/remote.php/webdav/</code></span>${tsCopy(`davs://${new URL(a.url).host}/remote.php/webdav/`)}</span>`
                     : '';
             const address = a.url
                 ? a.on
@@ -3331,17 +3382,6 @@ for (const button of document.querySelectorAll('[data-ts-refresh]')) {
 }
 
 $('tab-tailscale').addEventListener('click', async (event) => {
-    const copy = event.target.closest('[data-ts-copy]');
-    if (copy) {
-        try {
-            await navigator.clipboard.writeText(copy.dataset.tsCopy);
-            toast('Copied.');
-        } catch {
-            // No clipboard outside a secure context: plain http on another machine.
-            toast(`Could not reach the clipboard. It is: ${copy.dataset.tsCopy}`, 'bad');
-        }
-        return;
-    }
     const os = event.target.closest('[data-ts-os]');
     if (os) {
         for (const chip of document.querySelectorAll('[data-ts-os]')) chip.classList.toggle('active', chip === os);
