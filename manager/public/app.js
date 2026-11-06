@@ -186,6 +186,8 @@ function showApp() {
     startPolling();
     loadApps();
     loadTunnel();
+    // For the sidebar dot, and the HTTPS addresses on each app's page.
+    loadTailscale();
     // Drive discovery runs a container, so this is the one load that costs
     // something. Once on sign-in is enough -- Rescan is there for the moment a
     // drive is plugged in afterwards.
@@ -245,6 +247,8 @@ function selectTab(name) {
     if (name === 'queue') loadQueue();
     // Asked on arrival: the tunnel's health is Cloudflare's to report, live.
     if (name === 'tunnel') loadTunnel();
+    // Devices come and go, so this is read fresh on arrival too.
+    if (name === 'tailscale') loadTailscale();
     // The player lists change by themselves -- people join and leave -- so
     // they are fetched on arrival and then kept fresh while the tab is open.
     if (name === 'minecraft') {
@@ -1316,7 +1320,10 @@ const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft'];
  */
 const tailscaleHost = () => hostSnapshot?.tailscale?.host ?? null;
 
-function webdavLinks(hostPort, publicUrl) {
+/** An app's HTTPS address on Tailscale, once it has been turned on for it. */
+const tailscaleHttps = (key) => tsState?.serve?.find((a) => a.key === key && a.on && !a.broken)?.url ?? null;
+
+function webdavLinks(hostPort, publicUrl, key = 'nextcloud') {
     const rows = [];
     const row = (url, label) =>
         `<div class="media-row"><code>${escapeHtml(url)}</code>` +
@@ -1330,12 +1337,16 @@ function webdavLinks(hostPort, publicUrl) {
     if (hostPort && local) rows.push(row(`dav://${local}:${hostPort}/remote.php/webdav/`, 'on this network'));
     // Plain dav, not davs: there is no certificate on that port, and the
     // tailnet already encrypts everything between its devices.
+    // HTTPS once it is on for Nextcloud, and then davs: the certificate is a
+    // real one, and some file managers will not save a password over dav.
+    const tsHttps = tailscaleHttps(key);
     const ts = tailscaleHost();
-    if (hostPort && ts) rows.push(row(`dav://${ts}:${hostPort}/remote.php/webdav/`, 'over Tailscale'));
+    if (tsHttps) rows.push(row(`davs://${new URL(tsHttps).host}/remote.php/webdav/`, 'over Tailscale'));
+    else if (hostPort && ts) rows.push(row(`dav://${ts}:${hostPort}/remote.php/webdav/`, 'over Tailscale'));
     return rows.join('');
 }
 
-function appLinks(hostPort, publicUrl) {
+function appLinks(hostPort, publicUrl, key = null) {
     const a = (url, label) =>
         `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(url)} ↗</a>` +
         `<span class="muted"> ${escapeHtml(label)}</span>`;
@@ -1346,8 +1357,10 @@ function appLinks(hostPort, publicUrl) {
     if (hostPort && local) rows.push(a(`http://${local}:${hostPort}`, 'on this network'));
     // Any device signed in to the same tailnet, from anywhere, with no tunnel
     // or domain involved. http is right here: Tailscale encrypts the traffic.
+    const tsHttps = key ? tailscaleHttps(key) : null;
     const ts = tailscaleHost();
-    if (hostPort && ts) rows.push(a(`http://${ts}:${hostPort}`, 'over Tailscale'));
+    if (tsHttps) rows.push(a(tsHttps, 'over Tailscale'));
+    else if (hostPort && ts) rows.push(a(`http://${ts}:${hostPort}`, 'over Tailscale'));
     return rows.map((r) => `<div class="app-link">${r}</div>`).join('');
 }
 
@@ -1465,7 +1478,7 @@ function renderAppState(name, state) {
         $('nextcloud-webdav-card').hidden = true;
         if (running && (cfg.publish.web || state.publicUrl)) {
             link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl);
+            link.innerHTML = appLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl, 'nextcloud');
 
             // Only offered when it is actually reachable, which is the same
             // condition as the links above -- an address nobody can connect to
@@ -1504,7 +1517,7 @@ function renderAppState(name, state) {
         link.hidden = false;
         if (running && (cfg.publish?.web || state.publicUrl)) {
             link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl);
+            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl, 'jellyfin');
         } else if (running) {
             link.className = 'verdict';
             link.textContent =
@@ -1562,7 +1575,7 @@ function renderAppState(name, state) {
         link.hidden = false;
         if (running && (cfg.publish?.web || state.publicUrl)) {
             link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl);
+            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl, 'mealplan');
         } else if (running) {
             link.className = 'verdict';
             link.textContent =
@@ -3121,6 +3134,255 @@ $('tunnel-disconnect').addEventListener('click', async () => {
     loadTunnel();
     loadApps();
 });
+
+// -------------------------------------------------------------- tailscale ---
+
+/*
+ * Tailscale: this machine's status, HTTPS addresses for the apps, the devices
+ * on the tailnet, and how to put Tailscale on the next one. Read only from
+ * the daemon on this machine; the admin console is linked for the rest.
+ */
+let tsState = null;
+
+const TS_OS_NAMES = { linux: 'Linux', windows: 'Windows', macOS: 'macOS', iOS: 'iOS', android: 'Android', tvOS: 'tvOS' };
+
+async function loadTailscale({ fresh = false } = {}) {
+    try {
+        tsState = await api(`/api/tailscale${fresh ? '?fresh=1' : ''}`);
+    } catch {
+        return;
+    }
+    renderTailscale();
+}
+
+function relativeTime(iso) {
+    const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 90) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 90) return `${m} minutes ago`;
+    const h = Math.round(m / 60);
+    if (h < 36) return `${h} hours ago`;
+    const d = Math.round(h / 24);
+    return d < 60 ? `${d} days ago` : new Date(iso).toLocaleDateString();
+}
+
+const tsCopy = (value) =>
+    `<button type="button" class="ghost mini" data-ts-copy="${escapeHtml(value)}" title="Copy">Copy</button>`;
+
+function renderTailscale() {
+    const t = tsState;
+    if (!t) return;
+
+    setNavHealth('tailscale', !t.installed ? 'absent' : !t.running ? 'warn' : t.health?.length ? 'warn' : 'ok');
+
+    // This machine: one of three starting points.
+    $('ts-setup').hidden = t.running;
+    $('ts-live').hidden = !t.running;
+    if (!t.running) {
+        const tag = $('ts-setup-state');
+        const body = $('ts-setup-body');
+        if (t.error) {
+            tag.textContent = 'unknown';
+            tag.className = 'tag warn';
+            body.innerHTML = `<p class="muted">${escapeHtml(t.error)}</p>`;
+        } else if (!t.installed) {
+            tag.textContent = 'not installed';
+            tag.className = 'tag off';
+            body.innerHTML = `<p class="muted">Tailscale is not on this machine. To put it on, run these in a terminal on it:</p>
+                <pre class="cmd">curl -fsSL https://tailscale.com/install.sh | sh</pre>
+                <pre class="cmd">sudo tailscale up</pre>
+                <p class="muted">The second one prints a link: open it and sign in. Then select <strong>Check again</strong>.</p>`;
+        } else {
+            tag.textContent = t.state === 'NeedsLogin' ? 'signed out' : (t.state ?? 'stopped').toLowerCase();
+            tag.className = 'tag warn';
+            body.innerHTML = t.authURL
+                ? `<p class="muted">Tailscale is waiting for somebody to sign in. Open this link and sign in:</p>
+                   <p><a href="${escapeHtml(t.authURL)}" target="_blank" rel="noreferrer noopener">${escapeHtml(t.authURL)} ↗</a></p>`
+                : `<p class="muted">Tailscale is installed but not connected. In a terminal on this machine, run:</p>
+                   <pre class="cmd">sudo tailscale up</pre>
+                   <p class="muted">If it prints a link, open it and sign in. Then select <strong>Check again</strong>.</p>`;
+        }
+    } else {
+        const tag = $('ts-state');
+        tag.textContent = t.health?.length ? 'connected, with warnings' : 'connected';
+        tag.className = `tag ${t.health?.length ? 'warn' : 'ok'}`;
+        $('ts-name').textContent = t.self.dnsName ?? t.self.name;
+        $('ts-ip').textContent = t.self.ip ?? '–';
+        $('ts-version').textContent = t.version ?? '–';
+        $('ts-magicdns').textContent = t.magicDNS ? 'on' : 'off';
+        $('ts-account').textContent = t.account ?? '–';
+        $('ts-https').textContent = t.https?.enabled ? 'on' : 'off';
+        $('ts-expiry').textContent = t.self.keyExpiry ? new Date(t.self.keyExpiry).toLocaleDateString() : 'never';
+
+        // Things worth acting on, in the order they matter.
+        const notes = [];
+        for (const h of t.health ?? []) notes.push(['bad', h]);
+        if (!t.magicDNS) {
+            notes.push(['bad', 'MagicDNS is off, so other devices have to use the 100.x address rather than the name. Turn it on in the DNS page of the admin console.']);
+        }
+        if (t.self.keyExpiry) {
+            notes.push([
+                'warn',
+                `This machine has to be signed in again on ${new Date(t.self.keyExpiry).toLocaleDateString()}, and until then nothing can reach it over Tailscale. For a server, turn that off: in the admin console, open Machines, select the … beside ${t.self.name}, then Disable key expiry.`,
+            ]);
+        }
+        $('ts-notes').innerHTML = notes
+            .map(([kind, text]) => `<div class="verdict ${kind}">${escapeHtml(text)}</div>`)
+            .join('');
+    }
+
+    // HTTPS for apps.
+    const check = (done, text) => `<li><span class="svc-dot ${done ? 'ok' : 'bad'}"></span><span>${text}</span></li>`;
+    const httpsOn = Boolean(t.https?.enabled);
+    $('ts-checks').innerHTML = [
+        check(t.running, t.running ? 'Tailscale is running on this machine.' : 'Tailscale is not running on this machine. See <strong>This machine</strong>.'),
+        check(t.magicDNS, t.magicDNS ? 'MagicDNS is on.' : 'MagicDNS is off.'),
+        check(httpsOn, httpsOn ? 'HTTPS certificates are on for your tailnet.' : 'HTTPS certificates are off for your tailnet.'),
+    ].join('');
+    $('ts-enable-https').hidden = !t.running || httpsOn;
+    $('ts-cert-name').textContent = t.self?.dnsName ?? 'this machine’s name';
+
+    const ready = t.running && httpsOn;
+    $('ts-serve').innerHTML = (t.serve ?? [])
+        .map((a) => {
+            const note = a.funnel
+                ? `<p class="ts-row-note warn">Tailscale Funnel is on for this port, so this address is open to the whole internet, not just your tailnet. Turn Funnel off with <code>tailscale funnel --https=${a.port} off</code> if that is not what you want.</p>`
+                : a.broken
+                  ? `<p class="ts-row-note warn">${escapeHtml(a.label)}'s network port is off, so this address has nothing to reach. Turn the port back on in its settings, or turn this off.</p>`
+                  : a.blocked
+                    ? `<p class="ts-row-note muted">${escapeHtml(a.blocked)}</p>`
+                    : '';
+            const dav =
+                a.key === 'nextcloud' && a.on && a.url
+                    ? `<span class="muted">In a file manager: <code>davs://${escapeHtml(new URL(a.url).host)}/remote.php/webdav/</code></span>`
+                    : '';
+            const address = a.url
+                ? a.on
+                    ? `<span class="ts-addr"><a href="${escapeHtml(a.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(a.url)} ↗</a>${tsCopy(a.url)}</span>`
+                    : `<span class="muted">Would be at ${escapeHtml(a.url)}</span>`
+                : '';
+            const disabled = a.on ? '' : !ready || a.blocked ? 'disabled' : '';
+            return `<div class="ts-row">
+                <div class="ts-row-main">
+                    <span class="ts-row-title">${escapeHtml(a.label)}${a.localPort ? ` <span class="muted">→ port ${a.localPort}</span>` : ''}</span>
+                    ${address}
+                    ${dav}
+                </div>
+                <label class="switch" title="${a.on ? 'Turn HTTPS off' : 'Turn HTTPS on'}">
+                    <input type="checkbox" data-ts-serve="${a.key}" ${a.on ? 'checked' : ''} ${disabled} aria-label="HTTPS for ${escapeHtml(a.label)}">
+                    <span class="track"></span>
+                </label>
+                ${note}
+            </div>`;
+        })
+        .join('') || '<p class="muted">Tailscale is not running on this machine.</p>';
+
+    // Your devices.
+    const devices = t.devices ?? [];
+    $('ts-device-count').textContent = devices.length
+        ? `${devices.filter((d) => d.online).length} of ${devices.length} online`
+        : '–';
+    const owners = new Set(devices.map((d) => d.owner).filter(Boolean));
+    $('ts-devices').innerHTML = devices.length
+        ? devices
+              .map((d) => {
+                  const status = d.self
+                      ? 'this machine'
+                      : d.online
+                        ? `online${d.connection ? ` · ${d.connection}` : ''}`
+                        : d.lastSeen
+                          ? `last seen ${relativeTime(d.lastSeen)}`
+                          : 'offline';
+                  const meta = [TS_OS_NAMES[d.os] ?? d.os, owners.size > 1 ? d.owner : null, d.exitNode ? 'your exit node' : null]
+                      .filter(Boolean)
+                      .map(escapeHtml)
+                      .join(' · ');
+                  return `<div class="ts-row">
+                    <div class="ts-row-main">
+                        <span class="ts-row-title"><span class="svc-dot ${d.online ? 'ok' : ''}"></span>${escapeHtml(d.name)}
+                            <span class="muted">${escapeHtml(status)}</span></span>
+                        ${meta ? `<span class="muted">${meta}</span>` : ''}
+                        ${d.dnsName ? `<span class="ts-addr"><span>${escapeHtml(d.dnsName)}</span>${tsCopy(d.dnsName)}</span>` : ''}
+                        ${d.ip ? `<span class="ts-addr"><span>${escapeHtml(d.ip)}</span>${tsCopy(d.ip)}</span>` : ''}
+                    </div>
+                </div>`;
+              })
+              .join('')
+        : '<p class="muted">Tailscale is not running on this machine, so there is no tailnet to list.</p>';
+
+    // Install: which account to sign in with.
+    const acct = $('ts-install-account');
+    acct.hidden = !t.account;
+    if (t.account) {
+        const apple = /@privaterelay\.appleid\.com$/i.test(t.account);
+        acct.innerHTML = `This machine is signed in as <strong>${escapeHtml(t.account)}</strong>.` +
+            (apple
+                ? ' That is a private address from Sign in with Apple, so on your other devices choose <strong>Sign in with Apple</strong> and use the same Apple Account.'
+                : ' Use the same account on your other devices.');
+    }
+}
+
+for (const button of document.querySelectorAll('[data-ts-refresh]')) {
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        await loadTailscale({ fresh: true });
+        button.disabled = false;
+    });
+}
+
+$('tab-tailscale').addEventListener('click', async (event) => {
+    const copy = event.target.closest('[data-ts-copy]');
+    if (copy) {
+        try {
+            await navigator.clipboard.writeText(copy.dataset.tsCopy);
+            toast('Copied.');
+        } catch {
+            // No clipboard outside a secure context: plain http on another machine.
+            toast(`Could not reach the clipboard. It is: ${copy.dataset.tsCopy}`, 'bad');
+        }
+        return;
+    }
+    const os = event.target.closest('[data-ts-os]');
+    if (os) {
+        for (const chip of document.querySelectorAll('[data-ts-os]')) chip.classList.toggle('active', chip === os);
+        for (const page of document.querySelectorAll('[data-ts-os-page]')) page.hidden = page.dataset.tsOsPage !== os.dataset.tsOs;
+    }
+});
+
+$('ts-serve').addEventListener('change', async (event) => {
+    const box = event.target.closest('[data-ts-serve]');
+    if (!box) return;
+    const key = box.dataset.tsServe;
+    const on = box.checked;
+    const app = tsState?.serve?.find((a) => a.key === key);
+    // Back to what it really is until the job says otherwise.
+    box.checked = !on;
+    box.disabled = true;
+    // A refusal is toasted by queueAction, and a failed job shows in the peek.
+    await queueAction({
+        title: `${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${app?.label ?? key}`,
+        request: (headers) => api(`/api/tailscale/serve/${key}`, { method: 'POST', body: { on }, headers }),
+    });
+    await loadTailscale({ fresh: true });
+    loadApps();
+});
+
+// Opening on the system this page is being read on saves a click.
+(() => {
+    const ua = navigator.userAgent;
+    const os = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+        ? 'ios'
+        : /Android/.test(ua)
+          ? 'android'
+          : /Windows/.test(ua)
+            ? 'windows'
+            : /Macintosh/.test(ua)
+              ? 'mac'
+              : /Linux/.test(ua)
+                ? 'linux'
+                : null;
+    document.querySelector(`[data-ts-os="${os}"]`)?.click();
+})();
 
 // ------------------------------------------------------------------- logs ---
 

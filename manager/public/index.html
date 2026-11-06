@@ -135,6 +135,13 @@
           <span class="label">Tunnel &amp; domains</span>
         </button>
       </div>
+      <div class="nav-row">
+        <button class="nav-item" data-tab="tailscale" title="Tailscale">
+          <span class="nav-dot" data-health="tailscale"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.3 11l9.4-4.9M7.3 13l9.4 4.9M19 7.5v9"/></svg>
+          <span class="label">Tailscale</span>
+        </button>
+      </div>
 
     </nav>
 
@@ -1348,6 +1355,205 @@
               A token is about 40 characters or more, with upper and lower case letters and
               numbers. If yours contains only <code>0–9</code> and <code>a–f</code>, it is the
               Global API Key or a token ID, not a token.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- tailscale -->
+    <!-- This machine on Tailscale. Only this machine: what belongs to the whole
+         tailnet stays in Tailscale's admin console, linked from here. -->
+    <section id="tab-tailscale" class="tab">
+      <nav class="subnav" aria-label="Tailscale">
+        <button class="subtab-btn active" data-subtab="ts-machine">This machine</button>
+        <button class="subtab-btn" data-subtab="ts-https">HTTPS for apps</button>
+        <button class="subtab-btn" data-subtab="ts-devices">Your devices</button>
+        <button class="subtab-btn" data-subtab="ts-install">Install Tailscale</button>
+      </nav>
+
+      <div id="sub-ts-machine" class="subtab active">
+        <div class="grid">
+          <!-- Not installed, or installed and not signed in. -->
+          <article class="card span2" id="ts-setup" hidden>
+            <div class="node-head">
+              <h3>Tailscale</h3>
+              <span id="ts-setup-state" class="tag">–</span>
+            </div>
+            <div id="ts-setup-body"></div>
+            <div class="row">
+              <button type="button" class="ghost" data-ts-refresh>Check again</button>
+            </div>
+          </article>
+
+          <article class="card span2" id="ts-live" hidden>
+            <div class="node-head">
+              <h3>This machine</h3>
+              <span id="ts-state" class="tag">–</span>
+            </div>
+            <p class="muted">
+              Tailscale puts your devices on a private network of their own, a
+              <em>tailnet</em>. Any device signed in to it can reach this machine from
+              anywhere, with nothing opened on your router and nothing on the internet.
+            </p>
+            <dl class="kv">
+              <div class="wide"><dt>Name</dt><dd id="ts-name">–</dd></div>
+              <div><dt>Address</dt><dd id="ts-ip">–</dd></div>
+              <div><dt>Version</dt><dd id="ts-version">–</dd></div>
+              <div><dt>MagicDNS</dt><dd id="ts-magicdns">–</dd></div>
+              <div class="wide"><dt>Signed in as</dt><dd id="ts-account">–</dd></div>
+              <div><dt>HTTPS certificates</dt><dd id="ts-https">–</dd></div>
+              <div><dt>Key expires</dt><dd id="ts-expiry">–</dd></div>
+            </dl>
+            <div id="ts-notes"></div>
+            <div class="row">
+              <button type="button" class="ghost" data-ts-refresh>Refresh</button>
+              <a class="row-link" href="https://login.tailscale.com/admin/machines" target="_blank" rel="noreferrer noopener">Admin console ↗</a>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-ts-https" class="subtab">
+        <div class="grid">
+          <article class="card span2 guide">
+            <h3>HTTPS for apps</h3>
+            <p class="muted">
+              The <code>http://</code> addresses over Tailscale already work, and Tailscale
+              encrypts them between your devices. HTTPS adds the padlock browsers trust,
+              which some things need: installing this panel as an app on a phone, phone
+              apps that refuse plain http, and copying from a web page. Tailscale gets and
+              renews the certificates. Only devices on your tailnet can open these addresses.
+            </p>
+
+            <h3 class="sub">Before you start</h3>
+            <ul class="ts-checks" id="ts-checks"></ul>
+
+            <div id="ts-enable-https" hidden>
+              <h3 class="sub">Turn on HTTPS certificates</h3>
+              <p>Once, for your whole tailnet, in Tailscale's admin console:</p>
+              <ol class="steps">
+                <li>Go to <a href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer noopener">the DNS page of the admin console ↗</a>.</li>
+                <li>If <strong>MagicDNS</strong> is off, select <strong>Enable MagicDNS</strong>.</li>
+                <li>Under <strong>HTTPS Certificates</strong>, select <strong>Enable HTTPS</strong>, and confirm.</li>
+                <li>Come back here and select <strong>Check again</strong>.</li>
+              </ol>
+              <p class="hint">
+                Certificates are recorded in a public log, so this machine's Tailscale name
+                (<code id="ts-cert-name">–</code>) becomes visible to anyone who looks there. The
+                name only: nothing on it can be reached from outside your tailnet.
+              </p>
+              <div class="row">
+                <button type="button" class="ghost" data-ts-refresh>Check again</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card span2">
+            <h3>Apps</h3>
+            <div id="ts-serve" class="ts-serve"></div>
+            <p class="hint">
+              The first visit to a new address can take a few seconds while Tailscale gets its
+              certificate. These stay on after a restart.
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-ts-devices" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <div class="node-head">
+              <h3>Your devices</h3>
+              <span id="ts-device-count" class="tag">–</span>
+            </div>
+            <p class="muted">
+              Every device on your tailnet. Any of them can reach this machine at the name
+              or address shown for it.
+            </p>
+            <div id="ts-devices" class="ts-devices"></div>
+            <div class="row">
+              <button type="button" class="ghost" data-ts-refresh>Refresh</button>
+              <a class="row-link" href="https://login.tailscale.com/admin/machines" target="_blank" rel="noreferrer noopener">Rename or remove devices ↗</a>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <!-- One page per system, picked with the chips. -->
+      <div id="sub-ts-install" class="subtab">
+        <div class="grid">
+          <article class="card span2 guide">
+            <h3>Install Tailscale</h3>
+            <p class="muted">
+              Put Tailscale on each device you want to reach your apps from, and sign in with
+              the same account as this machine.
+            </p>
+            <div class="verdict" id="ts-install-account" hidden></div>
+
+            <div class="svc-filters ts-os-pick" role="tablist" aria-label="Your system">
+              <button type="button" class="svc-filter active" data-ts-os="windows">Windows</button>
+              <button type="button" class="svc-filter" data-ts-os="mac">macOS</button>
+              <button type="button" class="svc-filter" data-ts-os="ios">iPhone &amp; iPad</button>
+              <button type="button" class="svc-filter" data-ts-os="android">Android</button>
+              <button type="button" class="svc-filter" data-ts-os="linux">Linux</button>
+            </div>
+
+            <div class="ts-os" data-ts-os-page="windows">
+              <ol class="steps">
+                <li>Download Tailscale from <a href="https://tailscale.com/download/windows" target="_blank" rel="noreferrer noopener">tailscale.com/download/windows ↗</a> and run the installer.</li>
+                <li>Tailscale appears in the system tray, by the clock. Select its icon, then <strong>Log in</strong>.</li>
+                <li>Sign in in the browser window that opens, with the same account as this machine.</li>
+              </ol>
+            </div>
+
+            <div class="ts-os" data-ts-os-page="mac" hidden>
+              <ol class="steps">
+                <li>Install Tailscale from the Mac App Store, or download it from <a href="https://tailscale.com/download/mac" target="_blank" rel="noreferrer noopener">tailscale.com/download/mac ↗</a>.</li>
+                <li>Open Tailscale. When macOS asks to add a VPN configuration, select <strong>Allow</strong>.</li>
+                <li>Select the Tailscale icon in the menu bar, then <strong>Log in</strong>, and sign in with the same account as this machine.</li>
+              </ol>
+            </div>
+
+            <div class="ts-os" data-ts-os-page="ios" hidden>
+              <ol class="steps">
+                <li>Install Tailscale from the <a href="https://apps.apple.com/app/tailscale/id1470499037" target="_blank" rel="noreferrer noopener">App Store ↗</a>.</li>
+                <li>Open it and select <strong>Get Started</strong>, then sign in with the same account as this machine.</li>
+                <li>When asked to add a VPN configuration, select <strong>Allow</strong>.</li>
+                <li>Check the switch at the top shows <strong>Connected</strong>.</li>
+              </ol>
+            </div>
+
+            <div class="ts-os" data-ts-os-page="android" hidden>
+              <ol class="steps">
+                <li>Install Tailscale from <a href="https://play.google.com/store/apps/details?id=com.tailscale.ipn" target="_blank" rel="noreferrer noopener">Google Play ↗</a>.</li>
+                <li>Open it and sign in with the same account as this machine.</li>
+                <li>When Android asks to set up a VPN connection, select <strong>OK</strong>.</li>
+              </ol>
+            </div>
+
+            <div class="ts-os" data-ts-os-page="linux" hidden>
+              <ol class="steps">
+                <li>
+                  In a terminal, install it with Tailscale's script:
+                  <pre class="cmd">curl -fsSL https://tailscale.com/install.sh | sh</pre>
+                </li>
+                <li>
+                  Start it:
+                  <pre class="cmd">sudo tailscale up</pre>
+                  It prints a link. Open it and sign in with the same account as this machine.
+                </li>
+              </ol>
+              <p class="hint">
+                For other ways to install, see <a href="https://tailscale.com/download/linux" target="_blank" rel="noreferrer noopener">tailscale.com/download/linux ↗</a>.
+                The same steps put Tailscale on this machine, if it is not on it yet.
+              </p>
+            </div>
+
+            <h3 class="sub">Then</h3>
+            <p>
+              The device appears under <strong>Your devices</strong>, and every
+              "over Tailscale" address in this panel works from it.
             </p>
           </article>
         </div>

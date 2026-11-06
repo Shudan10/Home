@@ -2129,3 +2129,54 @@ main {
 #mc-world-progress[hidden] { display: none; }
 #mc-world-progress { margin-top: 12px; }
 #mc-world-file { padding: 6px; }
+
+/* -------------------------------------------------------------- tailscale */
+
+.row-link { align-self: center; font-size: 13.5px; }
+
+/* Commands to type. Selectable in one go, and wrapped rather than scrolled:
+   the install line is the longest thing on the page on a phone. */
+pre.cmd {
+    margin: 6px 0;
+    padding: 8px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+/* The checklist above the HTTPS switches: each line says whether it is done. */
+.ts-checks { list-style: none; margin: 6px 0 4px; padding: 0; display: grid; gap: 6px; }
+.ts-checks li { display: flex; align-items: baseline; gap: 9px; }
+.ts-checks .svc-dot { transform: translateY(-1px); }
+
+/* One row per app, or per device: what it is and its addresses on the left,
+   the switch on the right. Long addresses wrap rather than push it off. */
+.ts-serve, .ts-devices { display: grid; gap: 8px; margin: 10px 0; }
+.ts-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+.ts-row-main { flex: 1 1 0; min-width: 0; display: grid; gap: 3px; }
+.ts-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.ts-row-main .muted { font-size: 12.5px; }
+.ts-row-main a, .ts-row-main code { overflow-wrap: anywhere; }
+.ts-row .tag { font-weight: 500; }
+.ts-addr { display: flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--mono); font-size: 12.5px; }
+.ts-addr span { overflow-wrap: anywhere; min-width: 0; }
+.ts-row button.mini { padding: 2px 8px; font-size: 12px; flex: none; }
+.ts-row-note { flex-basis: 100%; font-size: 12.5px; margin: 0; }
+.ts-row-note.warn { color: var(--warn); }
+
+.ts-os-pick { margin: 14px 0 4px; }
+.ts-os[hidden] { display: none; }

@@ -13,6 +13,7 @@ import * as mountwatch from './lib/mountwatch.js';
 import * as host from './lib/host.js';
 import * as selfservice from './lib/selfservice.js';
 import * as tunnel from './lib/tunnel.js';
+import * as tailscale from './lib/tailscale.js';
 import * as lifecycle from './lib/lifecycle.js';
 import * as minecraft from './lib/minecraft.js';
 import * as updates from './lib/updates.js';
@@ -724,9 +725,6 @@ route('POST', /^\/api\/panel\/port$/, async (req, res) => {
     if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) return fail(res, 400, 'That is not a port number.');
 
     const env = readEnvFile();
-    if (wanted === (Number(env.HTTP_PORT) || 80) || wanted === (Number(env.HTTPS_PORT) || 443)) {
-        return fail(res, 409, `Port ${wanted} belongs to the reverse proxy.`);
-    }
     const appsCfg = apps.loadAppsConfig();
     if (appsCfg.nextcloud.publish.web && wanted === Number(appsCfg.nextcloud.hostPort)) {
         return fail(res, 409, `Port ${wanted} is where Nextcloud is published.`);
@@ -1465,6 +1463,35 @@ route('POST', /^\/api\/tunnel\/disconnect$/, async (req, res) => {
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
+// ---------------------------------------------------------------- tailscale --
+
+/*
+ * This machine on Tailscale: its status, the tailnet's devices, and HTTPS
+ * addresses for the apps. lib/tailscale.js has the why. Reading is cheap and
+ * cached briefly; ?fresh skips the cache, for the Check again button.
+ */
+route('GET', /^\/api\/tailscale$/, async (req, res, match, url) =>
+    sendJson(res, 200, await tailscale.status({ force: url.searchParams.has('fresh') })),
+);
+
+route('POST', /^\/api\/tailscale\/serve\/(nextcloud|jellyfin|mealplan|panel)$/, async (req, res, match) => {
+    const key = match[1];
+    const on = (await readBody(req)).on === true;
+    // Refused on the spot when it cannot work, rather than as a job that fails.
+    if (on) {
+        const st = await tailscale.status();
+        if (!st.running) return fail(res, 409, 'Tailscale is not running on this machine.');
+        if (!st.https?.enabled) return fail(res, 409, 'Turn on HTTPS certificates for your tailnet first.');
+        const blocked = st.serve?.find((a) => a.key === key)?.blocked;
+        if (blocked) return fail(res, 409, blocked);
+    }
+    const label = tailscale.SERVE_APPS.find((a) => a.key === key).label;
+    const job = jobs.start(`${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${label}`, (onLine) =>
+        on ? tailscale.serveOn(key, onLine) : tailscale.serveOff(key, onLine),
+    );
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
 /**
  * Lets Nextcloud answer on this machine's Tailscale name and address.
  *
@@ -1638,7 +1665,11 @@ async function bootstrap() {
     // A little after start, so it does not compete with everything else the
     // panel does as it comes up, then every five minutes.
     setTimeout(() => trustTailscale().catch(() => {}), 20_000).unref?.();
-    setInterval(() => trustTailscale().catch(() => {}), 5 * 60_000).unref?.();
+    setInterval(() => {
+        trustTailscale().catch(() => {});
+        // An app moved to another port takes its Tailscale HTTPS address along.
+        if (!jobs.busy) tailscale.reconcile(log).catch(() => {});
+    }, 5 * 60_000).unref?.();
     minecraft.clearUploads();
 
     // Queued rather than run directly, so a scheduled copy shares the one-at-a-

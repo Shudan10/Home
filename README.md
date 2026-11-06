@@ -72,6 +72,13 @@ an "over Tailscale" address for every app next to the home-network and public
 ones, using the machine's MagicDNS name. It also adds that name to Nextcloud's
 trusted domains, which would otherwise turn it away. Minecraft gets Tailscale
 join addresses too, so friends on your tailnet can play with no port forwarding.
+The Tailscale page under Network shows this machine's status and every device
+on the tailnet, walks through installing Tailscale on Windows, macOS, iPhone,
+Android and Linux, and turns on HTTPS addresses for the apps with
+`tailscale serve` (Nextcloud on 443, Jellyfin 8443, Meal Plan 8444, the panel
+8445). It works through the Tailscale daemon already on this machine, so there
+is no Tailscale token to make; HTTPS certificates have to be switched on once
+in Tailscale's admin console first, and the page says where.
 
 ## Installing
 
