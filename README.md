@@ -98,6 +98,18 @@ devices get IPv4 only and their IPv6 is refused at once rather than sent out
 the home connection. The `net.ipv6` settings it runs with need IPv6 enabled in
 the host's kernel (see the comment on the service in `docker-compose.yml`).
 
+**KaChat Nextcloud** — a second Nextcloud, separate from the personal one, for
+the KaChat and KaPay apps: the photo, video and voice messages KaChat sends as
+links, the contacts backup both apps share (encrypted on the phone), and
+Nextcloud Talk for KaChat calls. It is run entirely from its page under Apps:
+install, accounts, app passwords to paste into the apps, the links that have
+been shared with a Stop sharing button, and the call settings. Published
+through the tunnel, its name lets through only what the two apps use
+(`ALLOWED_PATHS` in `manager/lib/kachat.js`); Nextcloud's web login and pages
+are not on the internet. Calls use a public STUN server, so no port is opened
+anywhere; calls between two phones on strict networks need a relay (TURN),
+which is not set up.
+
 ## Installing
 
 ```bash

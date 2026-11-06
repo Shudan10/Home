@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import * as cf from './cloudflare.js';
 import * as dockerctl from './dockerctl.js';
+import * as kachat from './kachat.js';
 import { APPS, loadAppsConfig } from './apps.js';
 import { authConfigured } from './auth.js';
 import { DEFAULT_MANAGER_CONFIG, loadManagerConfig, readEnvFile, saveManagerConfig, updateEnvFile } from './store.js';
@@ -60,6 +61,15 @@ export const SERVICES = [
         origin: appOrigin('mealplan'),
         app: 'mealplan',
         note: 'Meal Plan has its own family password. On a phone, open the address and use Add to Home Screen.',
+    },
+    {
+        key: 'kachat',
+        label: 'KaChat Nextcloud',
+        detail: 'For the KaChat and KaPay apps: photo, video and voice links, contacts backup and calls.',
+        origin: kachat.ORIGIN,
+        // Only what the two apps use gets through; see kachat.ALLOWED_PATHS.
+        path: kachat.ALLOWED_PATHS,
+        note: 'Only what KaChat and KaPay use is reachable on this name: their files, share links and calls. Nextcloud\'s web login and pages are not on the internet. A name like "share" or "kachat" reads well in a chat.',
     },
     {
         key: 'panel',
@@ -132,6 +142,9 @@ const PANEL_NEEDS_PASSWORD =
 export function blockedReason(key, origin = null) {
     if ((key === 'panel' || (key === 'custom' && origin && isPanelOrigin(origin))) && !authConfigured()) {
         return PANEL_NEEDS_PASSWORD;
+    }
+    if (key === 'kachat' && !kachat.isInstalled()) {
+        return 'KaChat Nextcloud is not installed yet. Install it from its page under Apps, then publish it.';
     }
     if (key === 'mealplan' && !(readEnvFile().MEALPLAN_PASSWORD_HASH || '').trim()) {
         return 'Meal Plan has no family password yet, so on the internet anyone who found the address could read and change your plan. Set one under Meal Plan, Settings, then publish it.';
@@ -229,14 +242,22 @@ async function removeConnector(onLine) {
 }
 
 function ingressFor(routes) {
-    return routes.map((r) => ({
-        hostname: r.hostname,
-        service: r.origin,
-        // Devices at home with their own HTTPS almost always have a
-        // certificate they made themselves, which the connector would refuse.
-        // The hop being trusted here is the one inside this house.
-        originRequest: r.origin.startsWith('https://') ? { noTLSVerify: true } : {},
-    }));
+    return routes.flatMap((r) => {
+        const rule = {
+            hostname: r.hostname,
+            service: r.origin,
+            // Devices at home with their own HTTPS almost always have a
+            // certificate they made themselves, which the connector would refuse.
+            // The hop being trusted here is the one inside this house.
+            originRequest: r.origin.startsWith('https://') ? { noTLSVerify: true } : {},
+        };
+        // A service that only lets some paths through: taken from its entry
+        // now rather than stored with the route, so tightening the list
+        // reaches every name already published the next time ingress is sent.
+        const only = serviceFor(r.service)?.path;
+        if (!only) return [rule];
+        return [{ ...rule, path: only }, { hostname: r.hostname, service: 'http_status:404' }];
+    });
 }
 
 async function waitForHealthy(token, t, onLine) {

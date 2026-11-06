@@ -120,6 +120,95 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ---- KaChat Nextcloud -----------------------------------------------------
+  #
+  # A second Nextcloud, only for the KaChat and KaPay apps: their photo, video
+  # and voice links, their encrypted contacts backup, and Nextcloud Talk for
+  # KaChat calls. Separate from the personal Nextcloud above in every way --
+  # its own database, cache, volumes and image tag -- so publishing it on a
+  # domain exposes nothing of that one, and rebuilding one never touches the
+  # other. lib/kachat.js runs it.
+  #
+  # No port on the machine: it is reached through the Cloudflare tunnel, which
+  # only lets through what the two apps use (see lib/kachat.js), and by the
+  # panel over the stack network.
+  kachat-db:
+    image: mariadb:10.11
+    container_name: quickstart-home-kachat-db
+    hostname: kachat-db
+    profiles: ["kachat"]
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    environment:
+      MARIADB_ROOT_PASSWORD: ${KACHAT_DB_ROOT_PASSWORD:-}
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD: ${KACHAT_DB_PASSWORD:-}
+    volumes:
+      - kachat-db-data:/var/lib/mysql
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Cache and file locking only; see nextcloud-redis for why it is a tmpfs.
+  kachat-redis:
+    image: redis:7-alpine
+    container_name: quickstart-home-kachat-redis
+    hostname: kachat-redis
+    profiles: ["kachat"]
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data:size=16m
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  kachat-nextcloud:
+    # Its own tag, built from the same Dockerfile (ffmpeg, so videos get
+    # thumbnails), so the two Nextclouds update independently.
+    image: quickstart-home/kachat-nextcloud:1
+    build:
+      context: ./nextcloud
+      args:
+        NEXTCLOUD_TAG: ${KACHAT_NEXTCLOUD_TAG:-stable}
+    container_name: quickstart-home-kachat-nextcloud
+    hostname: kachat-nextcloud
+    profiles: ["kachat"]
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: kachat-db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${KACHAT_DB_PASSWORD:-}
+      REDIS_HOST: kachat-redis
+      # An admin nobody uses: long, random, never shown. The apps sign in to
+      # accounts of their own, with app passwords the panel makes.
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: ${KACHAT_ADMIN_PASSWORD:-}
+      NEXTCLOUD_TRUSTED_DOMAINS: kachat-nextcloud localhost
+      # The tunnel connector and the panel, both on the docker bridge. The
+      # connector says the visitor came over https; the panel says nothing and
+      # is answered over http, which is right for it.
+      TRUSTED_PROXIES: 172.16.0.0/12
+      # A single upload from KaChat is one request, and Cloudflare stops a
+      # request at 100 MB on its free plan anyway.
+      PHP_UPLOAD_LIMIT: 1G
+    volumes:
+      - kachat-data:/var/www/html
+    networks:
+      - home
+    depends_on:
+      - kachat-db
+      - kachat-redis
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ---- Jellyfin -------------------------------------------------------------
   #
   # Behind the "jellyfin" profile. Pulled rather than built: upstream publishes
@@ -370,3 +459,8 @@ volumes:
   # does not mean signing in again.
   mullvad-tailscale:
     name: quickstart-home-mullvad-tailscale
+  # KaChat Nextcloud: its files (media, contacts backups) and its database.
+  kachat-data:
+    name: quickstart-home-kachat-data
+  kachat-db-data:
+    name: quickstart-home-kachat-db-data

@@ -124,6 +124,15 @@
           <span class="track"></span>
         </label>
       </div>
+      <!-- No switch: started and stopped from its own page, which is also
+           where it is installed. -->
+      <div class="nav-row">
+        <button class="nav-item" data-tab="kachat" title="KaChat Nextcloud">
+          <span class="nav-dot" data-health="kachat"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8M8 13h5"/></svg>
+          <span class="label">KaChat Nextcloud</span>
+        </button>
+      </div>
 
       <p class="nav-group-title">Network</p>
       <!-- No switch: the connector runs while an account is connected and stops
@@ -1174,6 +1183,148 @@
         </div>
       </div>
 
+    </section>
+
+    <!-- ---------------------------------------------------------- kachat -->
+    <!-- A separate Nextcloud for the KaChat and KaPay apps. Everything they
+         need is set up from here; its own web pages are never needed. -->
+    <section id="tab-kachat" class="tab">
+      <nav class="subnav" aria-label="KaChat Nextcloud">
+        <button class="subtab-btn active" data-subtab="kc-connect">Connect apps</button>
+        <button class="subtab-btn" data-subtab="kc-media">Shared media</button>
+        <button class="subtab-btn" data-subtab="kc-accounts">Accounts</button>
+        <button class="subtab-btn" data-subtab="kc-remove">Uninstall</button>
+      </nav>
+
+      <div id="sub-kc-connect" class="subtab active">
+        <div class="grid">
+          <!-- Not installed yet. -->
+          <article class="card span2" id="kc-install" hidden>
+            <h3>KaChat Nextcloud</h3>
+            <p class="muted">
+              A Nextcloud of its own for the KaChat and KaPay apps. KaChat stores the photos,
+              videos and voice messages you send in it and sends a link the other person can
+              open; you decide when a link stops working. Both apps back up your contacts to it,
+              encrypted on the phone with your seed, and KaChat calls go through its Talk.
+            </p>
+            <p class="muted">
+              It is completely separate from your personal Nextcloud: its own containers,
+              database and storage. Nothing in your personal one is touched, and putting this one
+              on your domain does not expose that one.
+            </p>
+            <label>Username for the apps
+              <input id="kc-install-user" value="kachat" autocomplete="off" spellcheck="false" autocapitalize="off">
+            </label>
+            <div class="row">
+              <button type="button" class="primary" id="kc-install-go">Install</button>
+            </div>
+            <p class="hint">Takes a few minutes the first time: it builds its image and sets itself up.</p>
+          </article>
+
+          <!-- Installed. -->
+          <article class="card span2" id="kc-live" hidden>
+            <div class="node-head">
+              <h3>KaChat Nextcloud</h3>
+              <span id="kc-state" class="tag">–</span>
+            </div>
+            <ul class="ts-checks" id="kc-checks"></ul>
+            <div id="kc-next"></div>
+            <div class="row">
+              <button type="button" class="ghost" id="kc-toggle">Stop</button>
+              <button type="button" class="ghost" id="kc-refresh">Check again</button>
+            </div>
+          </article>
+
+          <article class="card span2 guide" id="kc-connect-card" hidden>
+            <h3>Sign in to KaChat and KaPay</h3>
+            <p class="muted">
+              In KaChat (and in KaPay, for its contacts and portfolio backup), open the Nextcloud
+              setting and copy these in. Use the same account in both, so they share your contacts.
+            </p>
+            <label id="kc-account-pick-row">Account
+              <select id="kc-account-pick"></select>
+            </label>
+            <div class="kc-fields">
+              <div class="media-row"><span class="kc-field">Server</span><code id="kc-server">–</code><span id="kc-server-copy"></span></div>
+              <div class="media-row"><span class="kc-field">Username</span><code id="kc-username">–</code><span id="kc-username-copy"></span></div>
+            </div>
+
+            <h3 class="sub">App password</h3>
+            <p class="muted">Make one for each app, so you can turn one off without the other.</p>
+            <div class="row kc-newpw">
+              <input id="kc-pw-name" placeholder="KaChat on iPhone" autocomplete="off" spellcheck="false">
+              <button type="button" class="primary" id="kc-pw-go">Make an app password</button>
+            </div>
+            <div id="kc-pw-new" class="verdict ok" hidden></div>
+            <div id="kc-pw-list" class="ts-serve"></div>
+            <p class="hint">
+              An app password works only for apps, never for a web login, and you can revoke it
+              here at any time, for example if a phone is lost. Two-step login is not needed for
+              this account: its web login is not on the internet, and app passwords skip it anyway.
+            </p>
+          </article>
+
+          <article class="card span2" id="kc-calls-card" hidden>
+            <h3>Calls</h3>
+            <div id="kc-calls"></div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-kc-media" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <div class="node-head">
+              <h3>Shared media</h3>
+              <span id="kc-media-count" class="tag">–</span>
+            </div>
+            <p class="muted">
+              Every photo, video and voice message sent as a link, newest first. Stop sharing
+              and the link stops working for everyone at once; the file stays in the account.
+            </p>
+            <label id="kc-media-pick-row">Account
+              <select id="kc-media-pick"></select>
+            </label>
+            <div id="kc-media" class="kc-media"></div>
+            <div class="row">
+              <button type="button" class="ghost" id="kc-media-refresh">Refresh</button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-kc-accounts" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Accounts</h3>
+            <p class="muted">One per person. Each has its own space, contacts backup and links.</p>
+            <div id="kc-accounts" class="ts-serve"></div>
+            <h3 class="sub">Add an account</h3>
+            <div class="row kc-newpw">
+              <input id="kc-new-user" placeholder="username" autocomplete="off" spellcheck="false" autocapitalize="off">
+              <button type="button" class="ghost" id="kc-new-user-go">Add</button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-kc-remove" class="subtab">
+        <div class="grid">
+          <article class="card span2 danger-zone">
+            <h3>Uninstall KaChat Nextcloud</h3>
+            <p class="muted">
+              Removes its containers. With <strong>Delete its data too</strong> ticked, every
+              photo, video, voice message and contacts backup in it goes as well, and every link
+              sent from it stops working. Your personal Nextcloud is not affected either way.
+              Take its name off the internet under Tunnel &amp; domains first.
+            </p>
+            <label class="check"><input type="checkbox" id="kc-remove-data"> Delete its data too</label>
+            <div class="row">
+              <button type="button" class="danger" id="kc-remove-go">Uninstall</button>
+            </div>
+          </article>
+        </div>
+      </div>
     </section>
 
     <!-- ---------------------------------------------------------- tunnel -->

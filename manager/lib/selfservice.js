@@ -380,6 +380,9 @@ ${compose} up -d --force-recreate manager || {
 const CONTAINERS = [
     'quickstart-home-tunnel',
     'quickstart-home-mullvad',
+    'quickstart-home-kachat-nextcloud',
+    'quickstart-home-kachat-db',
+    'quickstart-home-kachat-redis',
     'quickstart-home-nextcloud',
     'quickstart-home-nextcloud-db',
     'quickstart-home-nextcloud-redis',
@@ -418,6 +421,8 @@ const VOLUMES = [
     'quickstart-home-mealplan-data',
     'quickstart-home-minecraft-data',
     'quickstart-home-mullvad-tailscale',
+    'quickstart-home-kachat-data',
+    'quickstart-home-kachat-db-data',
 ];
 
 const NETWORKS = ['quickstart-home-net', 'quickstart-home-vpn'];

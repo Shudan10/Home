@@ -224,7 +224,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         # compose and their containers and volumes are left behind as orphans.
         # Jellyfin and Meal Plan were missing here, so an uninstall left both
         # running, with their data. Minecraft is in the list for the same reason.
-        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile tunnel --profile mullvad down --remove-orphans --rmi local)
+        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile tunnel --profile mullvad --profile kachat down --remove-orphans --rmi local)
         [ "$KEEP_DATA" = "1" ] || down+=(--volumes)
         d compose "${compose_files[@]}" --project-directory "$STACK_DIR" "${down[@]}" 2>/dev/null \
             || warn "compose down reported an error; removing objects individually."
@@ -242,6 +242,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
     # one, so this is safe with --keep-data. Redis used to get a fresh one on
     # every recreate, and nothing else would ever remove them.
     for name in quickstart-home-manager quickstart-home-tunnel quickstart-home-mullvad \
+               quickstart-home-kachat-nextcloud quickstart-home-kachat-db quickstart-home-kachat-redis \
                quickstart-home-nextcloud quickstart-home-nextcloud-db \
                quickstart-home-nextcloud-redis quickstart-home-nextcloud-imaginary \
                quickstart-home-jellyfin quickstart-home-mealplan quickstart-home-minecraft \
@@ -291,7 +292,8 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         # Keep in step with VOLUMES in manager/lib/selfservice.js.
         volumes=" quickstart-home-nextcloud-db-data quickstart-home-nextcloud-data \
 quickstart-home-jellyfin-config quickstart-home-jellyfin-cache quickstart-home-mealplan-data \
-quickstart-home-minecraft-data quickstart-home-mullvad-tailscale "
+quickstart-home-minecraft-data quickstart-home-mullvad-tailscale \
+quickstart-home-kachat-data quickstart-home-kachat-db-data "
         while read -r v; do
             [ -n "$v" ] || continue
             case "$volumes" in *" $v "*) ;; *) volumes="$volumes$v " ;; esac

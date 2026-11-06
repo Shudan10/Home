@@ -230,6 +230,7 @@ function showApp() {
     loadTunnel();
     // For the sidebar dot, and the HTTPS addresses on each app's page.
     loadTailscale();
+    loadKachat();
     // Drive discovery runs a container, so this is the one load that costs
     // something. Once on sign-in is enough -- Rescan is there for the moment a
     // drive is plugged in afterwards.
@@ -290,6 +291,7 @@ function selectTab(name) {
     // Asked on arrival: the tunnel's health is Cloudflare's to report, live.
     if (name === 'tunnel') loadTunnel();
     // Devices come and go, so this is read fresh on arrival too.
+    if (name === 'kachat') loadKachat();
     if (name === 'tailscale') {
         loadTailscale();
         if (activeSubtab('tailscale') === 'ts-mullvad') loadMullvad();
@@ -3287,7 +3289,7 @@ let tunnelState = null;
 
 // What the name box suggests for each service, so the obvious choice is one
 // keystroke away rather than a decision.
-const SUGGESTED_NAME = { nextcloud: 'cloud', jellyfin: 'media', mealplan: 'meals', panel: 'panel', custom: 'home' };
+const SUGGESTED_NAME = { nextcloud: 'cloud', jellyfin: 'media', mealplan: 'meals', kachat: 'share', panel: 'panel', custom: 'home' };
 
 async function loadTunnel() {
     try {
@@ -3901,6 +3903,336 @@ $('mv-remove').addEventListener('click', async () => {
         request: (headers) => api('/api/mullvad/remove', { method: 'POST', headers }),
     });
     loadMullvad();
+});
+
+// ------------------------------------------------------- kachat nextcloud ---
+
+/*
+ * KaChat Nextcloud: a separate Nextcloud for the KaChat and KaPay apps, run
+ * entirely from here -- install, accounts, app passwords, the links that
+ * have been shared, and calls.
+ */
+let kcState = null;
+let kcAccount = null;
+
+async function loadKachat() {
+    try {
+        kcState = await api('/api/kachat');
+    } catch {
+        return;
+    }
+    renderKachat();
+}
+
+const kcAccounts = () => kcState?.accounts ?? [];
+const kcCurrent = () => kcAccounts().find((a) => a.username === kcAccount) ?? kcAccounts()[0] ?? null;
+
+function renderKachat() {
+    const k = kcState;
+    if (!k) return;
+    setNavHealth('kachat', !k.installed ? 'absent' : k.running ? (k.error ? 'warn' : 'ok') : 'off');
+
+    $('kc-install').hidden = k.installed;
+    for (const id of ['kc-live', 'kc-connect-card', 'kc-calls-card']) $(id).hidden = !k.installed;
+    if (!k.installed) return;
+
+    const accounts = kcAccounts();
+    if (!kcCurrent() && accounts.length) kcAccount = accounts[0].username;
+    else if (kcCurrent()) kcAccount = kcCurrent().username;
+    const acct = kcCurrent();
+    const hasPw = Boolean(acct?.appPasswords?.length);
+
+    const tag = $('kc-state');
+    const ready = k.running && k.server && hasPw;
+    tag.textContent = !k.running ? 'stopped' : ready ? 'ready' : 'needs finishing';
+    tag.className = `tag ${ready ? 'ok' : k.running ? 'warn' : 'off'}`;
+    $('kc-toggle').textContent = k.running ? 'Stop' : 'Start';
+
+    const check = (done, text) => `<li><span class="svc-dot ${done ? 'ok' : 'bad'}"></span><span>${text}</span></li>`;
+    $('kc-checks').innerHTML = [
+        check(k.running, k.running ? 'Running.' : 'Stopped. Links sent from it do not open while it is stopped.'),
+        check(Boolean(k.server), k.server ? `On your domain at <strong>${escapeHtml(k.server)}</strong>.` : 'Not on your domain yet.'),
+        check(Boolean(acct), acct ? `Account <strong>${escapeHtml(acct.username)}</strong> is ready.` : 'No account yet. Add one under Accounts.'),
+        check(hasPw, hasPw ? 'It has an app password.' : 'No app password yet. Make one below.'),
+    ].join('');
+
+    $('kc-next').innerHTML =
+        k.running && !k.server
+            ? `<div class="verdict"><p><strong>Put it on your domain.</strong> Open <a href="#" data-goto-tab="tunnel">Tunnel &amp; domains</a>, choose <strong>KaChat Nextcloud</strong> under <strong>Publish something</strong>, and give it a name such as <code>share</code>. Only what KaChat and KaPay use is reachable on that name.</p></div>`
+            : '';
+
+    // Connect apps.
+    const pick = (sel) => {
+        $(sel).innerHTML = accounts.map((a) => `<option value="${escapeHtml(a.username)}" ${a.username === kcAccount ? 'selected' : ''}>${escapeHtml(a.username)}</option>`).join('');
+    };
+    pick('kc-account-pick');
+    pick('kc-media-pick');
+    $('kc-account-pick-row').hidden = accounts.length < 2;
+    $('kc-media-pick-row').hidden = accounts.length < 2;
+
+    $('kc-server').textContent = k.server ?? 'publish it on your domain first';
+    $('kc-server-copy').innerHTML = k.server ? copyButton(k.server) : '';
+    $('kc-username').textContent = acct?.username ?? '–';
+    $('kc-username-copy').innerHTML = acct ? copyButton(acct.username) : '';
+    $('kc-pw-go').disabled = !acct || !k.running;
+    $('kc-pw-list').innerHTML = (acct?.appPasswords ?? [])
+        .map(
+            (t) => `<div class="ts-row">
+                <div class="ts-row-main">
+                    <span class="ts-row-title">${escapeHtml(t.name)}</span>
+                    <span class="muted">${t.lastActivity ? `last activity ${relativeTime(t.lastActivity)}` : 'not used yet'}</span>
+                </div>
+                <button type="button" class="ghost danger" data-kc-revoke="${escapeHtml(String(t.id))}">Revoke</button>
+            </div>`,
+        )
+        .join('');
+
+    // Calls.
+    const t = k.talk;
+    $('kc-calls').innerHTML = !k.running
+        ? '<p class="muted">Start it to see the call settings.</p>'
+        : !t?.enabled
+          ? '<p class="verdict bad">Nextcloud Talk is not installed here, so KaChat calls are off. Restarting it tries again.</p>'
+          : `<ul class="ts-checks">
+                <li><span class="svc-dot ok"></span><span>Nextcloud Talk ${escapeHtml(t.version ?? '')} is on, so KaChat can make voice and video calls.</span></li>
+                <li><span class="svc-dot ${t.stun?.length ? 'ok' : 'bad'}"></span><span>${
+                    t.stun?.length ? `Phones find each other with ${escapeHtml(t.stun.join(', '))}.` : 'No STUN server, so most calls between different networks fail.'
+                }</span></li>
+            </ul>
+            <p class="hint">
+                The sound and picture go straight between the two phones, not through this machine,
+                and nothing needs a port opened. A call can still fail to connect when both phones
+                are on strict networks, such as two phones on mobile data with some carriers: that
+                needs a relay (TURN), which is not set up.
+            </p>`;
+
+    // Accounts.
+    $('kc-accounts').innerHTML = accounts.length
+        ? accounts
+              .map((a) => {
+                  const quota = a.quota && a.quota !== 'none' ? a.quota : 'no limit';
+                  return `<div class="ts-row">
+                    <div class="ts-row-main">
+                        <span class="ts-row-title">${escapeHtml(a.username)}</span>
+                        <span class="muted">${a.used !== null ? humanBytes(a.used) : '–'} used of ${escapeHtml(quota)} · ${a.appPasswords.length} app password${a.appPasswords.length === 1 ? '' : 's'}</span>
+                    </div>
+                    <div class="row kc-quota">
+                        <input value="${escapeHtml(a.quota && a.quota !== 'none' ? a.quota : '')}" placeholder="20 GB" data-kc-quota-input="${escapeHtml(a.username)}" size="8">
+                        <button type="button" class="ghost" data-kc-quota="${escapeHtml(a.username)}">Set space</button>
+                        <button type="button" class="ghost danger" data-kc-remove-user="${escapeHtml(a.username)}">Remove</button>
+                    </div>
+                </div>`;
+              })
+              .join('')
+        : '<p class="muted">No accounts yet.</p>';
+}
+
+async function loadKachatMedia() {
+    const user = $('kc-media-pick').value || kcAccount;
+    const box = $('kc-media');
+    if (!user || !kcState?.running) {
+        box.innerHTML = '<p class="muted">Nothing to show while it is stopped or has no account.</p>';
+        $('kc-media-count').textContent = '–';
+        return;
+    }
+    box.innerHTML = '<p class="muted">Reading the links…</p>';
+    let list;
+    try {
+        ({ shares: list } = await api(`/api/kachat/accounts/${encodeURIComponent(user)}/shares`));
+    } catch (e) {
+        box.innerHTML = `<p class="verdict bad">${escapeHtml(e.message)}</p>`;
+        return;
+    }
+    $('kc-media-count').textContent = `${list.length} shared`;
+    const kind = (m) => (String(m).startsWith('video/') ? 'video' : String(m).startsWith('audio/') ? 'voice' : String(m).startsWith('image/') ? 'photo' : 'file');
+    box.innerHTML = list.length
+        ? list
+              .map(
+                  (s) => `<div class="kc-media-item">
+                    ${
+                        kind(s.mime) === 'voice'
+                            ? '<div class="kc-thumb kc-thumb-voice" aria-hidden="true">♪</div>'
+                            : `<img class="kc-thumb" loading="lazy" alt="" src="/api/kachat/accounts/${encodeURIComponent(user)}/preview/${encodeURIComponent(s.fileId)}">`
+                    }
+                    <div class="ts-row-main">
+                        <span class="ts-row-title">${escapeHtml(s.name)}</span>
+                        <span class="muted">${kind(s.mime)}${s.created ? ` · shared ${relativeTime(s.created)}` : ''}${s.expires ? ` · until ${escapeHtml(new Date(s.expires).toLocaleDateString())}` : ''}</span>
+                        <span class="ts-addr"><a href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(s.url)} ↗</a>${copyButton(s.url)}</span>
+                    </div>
+                    <button type="button" class="ghost danger" data-kc-unshare="${escapeHtml(String(s.id))}" data-kc-unshare-name="${escapeHtml(s.name)}">Stop sharing</button>
+                </div>`,
+              )
+              .join('')
+        : '<p class="muted">Nothing has been shared from this account yet.</p>';
+}
+
+// A file with no preview (a video Nextcloud has not made one for yet) gets a
+// plain play mark instead of a broken image.
+$('kc-media').addEventListener(
+    'error',
+    (event) => {
+        if (!event.target.matches?.('img.kc-thumb')) return;
+        event.target.replaceWith(Object.assign(document.createElement('div'), { className: 'kc-thumb kc-thumb-voice', textContent: '▶' }));
+    },
+    true,
+);
+
+document.querySelector('[data-subtab="kc-media"]').addEventListener('click', loadKachatMedia);
+$('kc-media-refresh').addEventListener('click', loadKachatMedia);
+$('kc-media-pick').addEventListener('change', loadKachatMedia);
+$('kc-account-pick').addEventListener('change', () => {
+    kcAccount = $('kc-account-pick').value;
+    $('kc-pw-new').hidden = true;
+    renderKachat();
+});
+$('kc-refresh').addEventListener('click', loadKachat);
+
+$('tab-kachat').addEventListener('click', async (event) => {
+    const goto = event.target.closest('[data-goto-tab]');
+    if (goto) {
+        event.preventDefault();
+        selectTab(goto.dataset.gotoTab);
+        return;
+    }
+    const revoke = event.target.closest('[data-kc-revoke]');
+    if (revoke) {
+        const sure = await askConfirm({
+            title: 'Revoke this app password?',
+            body: 'The app using it is signed out at once and has to be given a new one.',
+            confirmLabel: 'Revoke',
+            danger: true,
+        });
+        if (!sure) return;
+        try {
+            await api(`/api/kachat/accounts/${encodeURIComponent(kcAccount)}/app-passwords/${revoke.dataset.kcRevoke}`, { method: 'DELETE' });
+            toast('Revoked.');
+        } catch (e) {
+            toast(e.message, 'bad');
+        }
+        return loadKachat();
+    }
+    const unshare = event.target.closest('[data-kc-unshare]');
+    if (unshare) {
+        const user = $('kc-media-pick').value || kcAccount;
+        const sure = await askConfirm({
+            title: `Stop sharing ${unshare.dataset.kcUnshareName}?`,
+            body: 'The link stops working for everyone who has it, including in chats already sent. The file itself stays in the account.',
+            confirmLabel: 'Stop sharing',
+            danger: true,
+        });
+        if (!sure) return;
+        try {
+            await api(`/api/kachat/accounts/${encodeURIComponent(user)}/shares/${unshare.dataset.kcUnshare}`, { method: 'DELETE' });
+            toast('No longer shared.');
+        } catch (e) {
+            toast(e.message, 'bad');
+        }
+        return loadKachatMedia();
+    }
+    const quota = event.target.closest('[data-kc-quota]');
+    if (quota) {
+        const user = quota.dataset.kcQuota;
+        const value = document.querySelector(`[data-kc-quota-input="${CSS.escape(user)}"]`).value.trim() || 'none';
+        try {
+            await api(`/api/kachat/accounts/${encodeURIComponent(user)}/quota`, { method: 'PUT', body: { quota: value } });
+            toast('Saved.');
+        } catch (e) {
+            toast(e.message, 'bad');
+        }
+        return loadKachat();
+    }
+    const removeUser = event.target.closest('[data-kc-remove-user]');
+    if (removeUser) {
+        const user = removeUser.dataset.kcRemoveUser;
+        const sure = await askConfirm({
+            title: `Remove the account ${user}?`,
+            body: 'Everything in it goes: its photos, videos, voice messages and contacts backup. Every link it shared stops working, and KaChat and KaPay signed in with it are signed out.',
+            confirmLabel: 'Remove',
+            danger: true,
+            requireText: user,
+        });
+        if (!sure) return;
+        try {
+            await api(`/api/kachat/accounts/${encodeURIComponent(user)}`, { method: 'DELETE' });
+            toast(`Removed ${user}.`);
+        } catch (e) {
+            toast(e.message, 'bad');
+        }
+        return loadKachat();
+    }
+});
+
+$('kc-install-go').addEventListener('click', async () => {
+    $('kc-install-go').disabled = true;
+    await queueAction({
+        title: 'Installing KaChat Nextcloud',
+        request: (headers) => api('/api/kachat/install', { method: 'POST', body: { username: $('kc-install-user').value.trim() }, headers }),
+    });
+    $('kc-install-go').disabled = false;
+    loadKachat();
+});
+
+$('kc-toggle').addEventListener('click', async () => {
+    const on = !kcState?.running;
+    $('kc-toggle').disabled = true;
+    await queueAction({
+        title: on ? 'Starting KaChat Nextcloud' : 'Stopping KaChat Nextcloud',
+        request: (headers) => api('/api/kachat/running', { method: 'POST', body: { on }, headers }),
+    });
+    $('kc-toggle').disabled = false;
+    loadKachat();
+});
+
+$('kc-pw-go').addEventListener('click', async () => {
+    const name = $('kc-pw-name').value.trim() || 'KaChat';
+    const box = $('kc-pw-new');
+    $('kc-pw-go').disabled = true;
+    try {
+        const r = await api(`/api/kachat/accounts/${encodeURIComponent(kcAccount)}/app-passwords`, { method: 'POST', body: { name } });
+        box.hidden = false;
+        box.innerHTML = `<p><strong>App password for ${escapeHtml(r.name)}</strong>. Copy it into the app now: it is shown only this once.</p>
+            <div class="media-row"><span class="kc-field">Password</span><code>${escapeHtml(r.password)}</code>${copyButton(r.password)}</div>`;
+        $('kc-pw-name').value = '';
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    $('kc-pw-go').disabled = false;
+    loadKachat();
+});
+
+$('kc-new-user-go').addEventListener('click', async () => {
+    const username = $('kc-new-user').value.trim();
+    if (!username) return toast('Type a username first.', 'bad');
+    $('kc-new-user-go').disabled = true;
+    try {
+        await api('/api/kachat/accounts', { method: 'POST', body: { username } });
+        toast(`Made ${username}.`);
+        $('kc-new-user').value = '';
+        kcAccount = username.toLowerCase();
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    $('kc-new-user-go').disabled = false;
+    loadKachat();
+});
+
+$('kc-remove-go').addEventListener('click', async () => {
+    const keepData = !$('kc-remove-data').checked;
+    const sure = await askConfirm({
+        title: keepData ? 'Uninstall KaChat Nextcloud, keeping its data?' : 'Uninstall KaChat Nextcloud and delete everything in it?',
+        body: keepData
+            ? 'Its containers are removed. Its files and database stay, and installing again picks them up.'
+            : 'Every photo, video, voice message and contacts backup in it is deleted, and every link sent from it stops working. Your personal Nextcloud is not affected.',
+        confirmLabel: 'Uninstall',
+        danger: true,
+        requireText: 'kachat',
+    });
+    if (!sure) return;
+    await queueAction({
+        title: 'Uninstalling KaChat Nextcloud',
+        request: (headers) => api('/api/kachat/uninstall', { method: 'POST', body: { confirm: 'kachat', keepData }, headers }),
+    });
+    loadKachat();
 });
 
 // Opening on the system this page is being read on saves a click.

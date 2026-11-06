@@ -123,7 +123,14 @@ export async function tunnelStatus(token, accountId, tunnelId) {
  * through to whatever happened to be listed first.
  */
 export async function putIngress(token, accountId, tunnelId, routes) {
-    const ingress = routes.map((r) => ({ hostname: r.hostname, service: r.service, originRequest: r.originRequest ?? {} }));
+    const ingress = routes.map((r) => ({
+        hostname: r.hostname,
+        // A regular expression on the request path. A route with one is
+        // followed by one for the same name without, which catches the rest.
+        ...(r.path ? { path: r.path } : {}),
+        service: r.service,
+        originRequest: r.originRequest ?? {},
+    }));
     ingress.push({ service: 'http_status:404' });
     await call(token, 'PUT', `/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, { config: { ingress } });
 }

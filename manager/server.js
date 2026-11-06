@@ -18,6 +18,7 @@ import * as selfservice from './lib/selfservice.js';
 import * as tunnel from './lib/tunnel.js';
 import * as tailscale from './lib/tailscale.js';
 import * as mullvad from './lib/mullvad.js';
+import * as kachat from './lib/kachat.js';
 import * as lifecycle from './lib/lifecycle.js';
 import * as minecraft from './lib/minecraft.js';
 import * as updates from './lib/updates.js';
@@ -436,6 +437,13 @@ async function notifyPublished(key, domain, onLine = () => {}) {
     // put in front of every link it builds. A name on its own is only right
     // when the proxy happens to be on the default port.
     const origin = publicOriginFor(key);
+
+    // Its trusted name and the address its links carry follow the published
+    // one. lib/kachat.js does it, in the KaChat Nextcloud only.
+    if (key === 'kachat') {
+        await kachat.applyPublicHost(onLine).catch((err) => onLine(`KaChat Nextcloud was not updated: ${err.message}`));
+        return;
+    }
 
     if (key === 'jellyfin') {
         const next = origin ?? '';
@@ -1802,7 +1810,7 @@ route('POST', /^\/api\/tunnel\/connect$/, async (req, res) => {
         await tunnel.connect(token, onLine);
         // Anything already published gets told its address again: a reconnect
         // can be the first time a fresh install learns it.
-        for (const key of ['nextcloud', 'jellyfin']) {
+        for (const key of ['nextcloud', 'jellyfin', 'kachat']) {
             if (tunnel.originFor(key)) await notifyPublished(key, new URL(tunnel.originFor(key)).hostname, onLine);
         }
     });
@@ -1843,7 +1851,7 @@ route('DELETE', /^\/api\/tunnel\/routes\/([a-z0-9.-]+)$/, async (req, res, match
         const route = await tunnel.unpublish(hostname, onLine);
         // The app's address moves to its next name, or goes; either way it is
         // told, so Nextcloud stops putting a dead name in its e-mails.
-        if (['nextcloud', 'jellyfin'].includes(route.service)) await notifyPublished(route.service, null, onLine);
+        if (['nextcloud', 'jellyfin', 'kachat'].includes(route.service)) await notifyPublished(route.service, null, onLine);
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -1851,7 +1859,7 @@ route('DELETE', /^\/api\/tunnel\/routes\/([a-z0-9.-]+)$/, async (req, res, match
 route('POST', /^\/api\/tunnel\/disconnect$/, async (req, res) => {
     const job = jobs.start('Disconnecting from Cloudflare', async (onLine) => {
         await tunnel.disconnect(onLine);
-        for (const key of ['nextcloud', 'jellyfin']) await notifyPublished(key, null, onLine).catch(() => {});
+        for (const key of ['nextcloud', 'jellyfin', 'kachat']) await notifyPublished(key, null, onLine).catch(() => {});
     });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -1936,6 +1944,77 @@ route('POST', /^\/api\/mullvad\/location$/, async (req, res) => {
 route('POST', /^\/api\/mullvad\/remove$/, async (req, res) => {
     const job = jobs.start('Removing the Mullvad exit node', (onLine) => mullvad.remove(onLine));
     sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+// ------------------------------------------------------------- kachat ---
+
+/*
+ * KaChat Nextcloud: lib/kachat.js has the why. Installing, starting and
+ * removing are jobs; accounts, app passwords and shares are answered on the
+ * spot -- an app password has to come back in the answer, since it is shown
+ * once and never kept.
+ */
+const kachatTry = (fn) => async (req, res, match, url) => {
+    try {
+        const out = await fn(req, res, match, url);
+        if (!res.headersSent) sendJson(res, 200, out ?? { ok: true });
+    } catch (err) {
+        fail(res, err.status ?? 500, err.message);
+    }
+};
+
+route('GET', /^\/api\/kachat$/, kachatTry(() => kachat.status()));
+
+route('POST', /^\/api\/kachat\/install$/, async (req, res) => {
+    const body = await readBody(req);
+    let username;
+    try {
+        username = kachat.checkUsername(body.username || 'kachat');
+    } catch (err) {
+        return fail(res, 400, err.message);
+    }
+    const job = jobs.start('Installing KaChat Nextcloud', (onLine) => kachat.install(username, onLine));
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/kachat\/running$/, async (req, res) => {
+    const on = (await readBody(req)).on === true;
+    const job = jobs.start(on ? 'Starting KaChat Nextcloud' : 'Stopping KaChat Nextcloud', (onLine) => kachat.setRunning(on, onLine));
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/kachat\/uninstall$/, async (req, res) => {
+    const body = await readBody(req);
+    if (body.confirm !== 'kachat') return fail(res, 400, 'Type kachat to confirm.');
+    if (tunnel.originFor('kachat')) return fail(res, 409, 'Take its name off the internet first, under Tunnel & domains.');
+    const keepData = body.keepData === true;
+    const job = jobs.start('Uninstalling KaChat Nextcloud', (onLine) => kachat.uninstall({ keepData }, onLine));
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/kachat\/accounts$/, kachatTry(async (req) => kachat.addAccount((await readBody(req)).username)));
+
+route('DELETE', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)$/, kachatTry((req, res, m) => kachat.removeAccount(m[1])));
+
+route('PUT', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/quota$/, kachatTry(async (req, res, m) => kachat.setQuota(m[1], (await readBody(req)).quota)));
+
+route('POST', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/app-passwords$/, kachatTry(async (req, res, m) => kachat.addAppPassword(m[1], (await readBody(req)).name)));
+
+route('DELETE', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/app-passwords\/(\d+)$/, kachatTry((req, res, m) => kachat.revokeAppPassword(m[1], m[2])));
+
+route('GET', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/shares$/, kachatTry(async (req, res, m) => ({ shares: await kachat.shares(m[1]) })));
+
+route('DELETE', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/shares\/(\d+)$/, kachatTry((req, res, m) => kachat.stopSharing(m[1], m[2])));
+
+route('GET', /^\/api\/kachat\/accounts\/([a-z0-9._-]+)\/preview\/(\d+)$/, async (req, res, m) => {
+    try {
+        const img = await kachat.preview(m[1], m[2]);
+        res.writeHead(200, { 'Content-Type': img.type, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
+        res.end(img.body);
+    } catch (err) {
+        res.writeHead(err.status === 404 ? 404 : 502);
+        res.end();
+    }
 });
 
 /**
@@ -2349,6 +2428,8 @@ async function bootstrap() {
     // Nextcloud's background jobs: a minute after start, then every five.
     setTimeout(() => runNextcloudCron().catch(() => {}), 60_000).unref?.();
     setInterval(() => runNextcloudCron().catch(() => {}), 5 * 60_000).unref?.();
+    // The KaChat Nextcloud's background jobs: expired shares, Talk clean-up.
+    setInterval(() => !jobs.busy && kachat.runCron().catch(() => {}), 5 * 60_000).unref?.();
 
     // Queued rather than run directly, so a scheduled copy shares the one-at-a-
     // time queue with everything else and cannot start while an image is
