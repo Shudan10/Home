@@ -240,12 +240,32 @@ export async function status({ force = false } = {}) {
     // which is a switch in the admin console and the one thing this cannot do.
     value.https = { enabled: Array.isArray(s.CertDomains) && s.CertDomains.length > 0, domain: s.CertDomains?.[0] ?? null };
 
+    // Mullvad's exit nodes are peers too, once a device has the add-on: a few
+    // hundred of them, one per city and server. They are locations to pick on
+    // a phone, not devices of yours, so they are counted and not listed.
+    const isMullvad = (p) => /\.mullvad\.ts\.net\.?$/.test(String(p.DNSName ?? ''));
+    const peers = Object.values(s.Peer ?? {});
+    value.mullvadLocations = peers.filter(isMullvad).length;
     value.devices = [
         self,
-        ...Object.values(s.Peer ?? {})
+        ...peers
+            .filter((p) => !isMullvad(p))
             .map((p) => device(p, users))
             .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name)),
     ];
+
+    // This machine sending its own internet traffic through an exit node. On
+    // a server that is almost never wanted: the Cloudflare connector, image
+    // pulls and every app's outgoing traffic go out through it too.
+    const exit = s.ExitNodeStatus;
+    if (exit?.ID) {
+        const node = peers.find((p) => p.ID === exit.ID);
+        value.exitNode = {
+            name: node ? (isMullvad(node) ? String(node.DNSName).split('.')[0] : device(node, users).name) : exit.ID,
+            mullvad: Boolean(node && isMullvad(node)),
+            online: Boolean(exit.Online),
+        };
+    }
 
     const served = servedPorts(probe.serve, self.dnsName);
     const ports = appPorts();

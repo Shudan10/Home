@@ -3271,6 +3271,12 @@ function renderTailscale() {
         if (!t.magicDNS) {
             notes.push(['bad', 'MagicDNS is off, so other devices have to use the 100.x address rather than the name. Turn it on in the DNS page of the admin console.']);
         }
+        if (t.exitNode) {
+            notes.push([
+                'bad',
+                `This machine sends its internet traffic through ${t.exitNode.mullvad ? 'the Mullvad exit node' : 'the exit node'} ${t.exitNode.name}${t.exitNode.online ? '' : ', which is offline right now'}. So do the Cloudflare tunnel and every app on it. To stop, run: sudo tailscale set --exit-node=`,
+            ]);
+        }
         if (t.self.keyExpiry) {
             notes.push([
                 'warn',
@@ -3360,6 +3366,20 @@ function renderTailscale() {
               })
               .join('')
         : '<p class="muted">Tailscale is not running on this machine, so there is no tailnet to list.</p>';
+
+    // Mullvad: what this machine can tell from here, which is only about itself.
+    const mv = $('ts-mullvad-status');
+    const mvText = t.exitNode?.mullvad
+        ? ['bad', `This machine itself is using the Mullvad exit node ${t.exitNode.name}. See This machine.`]
+        : t.mullvadLocations
+          ? ['ok', `The add-on is on, and this machine can see ${t.mullvadLocations} Mullvad locations. It does not need them: you can remove it from the add-on's devices to free a place.`]
+          : null;
+    mv.hidden = !mvText;
+    if (mvText) {
+        mv.className = `verdict ${mvText[0]}`;
+        mv.textContent = mvText[1];
+    }
+    $('ts-mullvad-home').textContent = tailscaleHttps('nextcloud') ?? (t.self?.dnsName ? `http://${t.self.dnsName}:${(t.serve ?? []).find((a) => a.key === 'nextcloud')?.localPort ?? ''}` : 'your server’s Tailscale address');
 
     // Install: which account to sign in with.
     const acct = $('ts-install-account');
