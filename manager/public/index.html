@@ -326,6 +326,10 @@
             <p class="muted">Changes here restart Nextcloud.</p>
             <div class="row">
               <button type="button" id="nextcloud-save" class="primary">Apply settings</button>
+              <!-- Shown while the settings below have been changed and not applied.
+                   Until then a reload leaves the fields alone rather than writing the
+                   saved values back over the edits; this is the way to ask for them. -->
+              <button type="button" id="nextcloud-revert" class="ghost" hidden>Discard changes</button>
               <button type="button" class="ghost" data-app-action="nextcloud/restart">Restart</button>
             </div>
           </article>
@@ -454,6 +458,7 @@
             <h3>Apply</h3>
             <div class="row">
               <button type="button" id="backup-save" class="primary">Save settings</button>
+              <button type="button" id="backup-revert" class="ghost" hidden>Discard changes</button>
               <button type="button" id="backup-run" class="ghost">Back up now</button>
             </div>
             <p class="error" id="backup-error" hidden></p>
@@ -552,6 +557,7 @@
             <p class="muted">Changes here recreate the Jellyfin container. Your libraries and watch history are kept.</p>
             <div class="row">
               <button type="button" id="jellyfin-save" class="primary">Apply settings</button>
+              <button type="button" id="jellyfin-revert" class="ghost" hidden>Discard changes</button>
               <button type="button" class="ghost" data-app-action="jellyfin/restart">Restart</button>
             </div>
           </article>
@@ -718,6 +724,7 @@
 
             <div class="row end">
               <button type="button" id="mealplan-save" class="primary">Apply settings</button>
+              <button type="button" id="mealplan-revert" class="ghost" hidden>Discard changes</button>
               <button type="button" class="ghost" data-app-action="mealplan/restart">Restart</button>
             </div>
           </article>
@@ -986,6 +993,7 @@
             </p>
             <div class="row">
               <button type="button" id="minecraft-save" class="primary">Apply settings</button>
+              <button type="button" id="minecraft-revert" class="ghost" hidden>Discard changes</button>
               <button type="button" class="ghost" data-app-action="minecraft/restart">Restart</button>
             </div>
           </article>
@@ -1843,7 +1851,12 @@
   <form method="dialog" id="confirm-form">
     <div class="dialog-head">
       <h3 id="confirm-title">Are you sure?</h3>
-      <button value="cancel" class="dialog-close" formnovalidate aria-label="Close">&times;</button>
+      <!-- type="button", like Cancel below: pressing Enter in a form clicks its
+           first submit button, and with these two as submit buttons that was
+           the cross -- so Enter in the type-the-name box answered no. Both are
+           handled by their click listeners in askConfirm, and OK is the only
+           submit button left, which makes it the one Enter means. -->
+      <button type="button" value="cancel" class="dialog-close" aria-label="Close">&times;</button>
     </div>
 
     <p class="confirm-body" id="confirm-body"></p>
@@ -1856,7 +1869,7 @@
     </label>
 
     <menu class="confirm-actions">
-      <button value="cancel" class="ghost" formnovalidate id="confirm-cancel">Cancel</button>
+      <button type="button" value="cancel" class="ghost" id="confirm-cancel">Cancel</button>
       <button value="ok" class="primary" id="confirm-ok">OK</button>
     </menu>
   </form>
@@ -1868,7 +1881,10 @@
      uninstall queued on top of each other take longer and read as a panel that
      ignored the click. There is no way out of this until the job is done. -->
 <div id="action-overlay" class="action-overlay" hidden>
-  <div class="action-card" role="dialog" aria-modal="true" aria-labelledby="action-title" aria-live="polite">
+  <!-- tabindex=-1 so the card itself can hold focus while it has no button
+       showing yet -- focus has to be somewhere inside it, or Tab walks off
+       into the page behind. -->
+  <div class="action-card" role="dialog" aria-modal="true" aria-labelledby="action-title" aria-live="polite" tabindex="-1">
     <header class="action-head">
       <span class="spinner" id="action-spinner"></span>
       <h3 id="action-title">Working</h3>

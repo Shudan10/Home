@@ -15,9 +15,24 @@ async function api(path, { method = 'GET', body, headers = {} } = {}) {
     } catch {
         /* empty body */
     }
+    /*
+     * The sign-in form's own request is the one 401 that is an answer rather
+     * than a session running out. Treating it like the others put "Not signed
+     * in." under a password box somebody had just typed into, which says the
+     * opposite of what happened -- the server's "Incorrect password." is the
+     * sentence they need. Everything else that 401s really has lost its
+     * session, and goes back to the sign-in screen as before.
+     */
+    const signingIn = path === '/api/login';
+    if (res.status === 401 && signingIn) throw new Error(data.error || 'Incorrect password.');
     if (res.status === 401) {
         showLogin();
         throw new Error('Not signed in.');
+    }
+    // Too many wrong passwords in a row. The server's own words say how long
+    // to wait, and a bare "Too Many Requests" would not.
+    if (res.status === 429) {
+        throw new Error(data.error || 'Too many attempts. Wait a minute, then try again.');
     }
     if (!res.ok) {
         const detail = Array.isArray(data.details) ? `\n• ${data.details.join('\n• ')}` : '';
@@ -31,6 +46,12 @@ function toast(message, kind = '') {
     const node = $('toast');
     node.textContent = message;
     node.className = `toast ${kind}`;
+    // A pill is right for one line and wrong for three: the round ends eat into
+    // the first and last lines of a long one. Measured after the text is in,
+    // because only the browser knows where it wrapped.
+    const line = parseFloat(getComputedStyle(node).lineHeight) || 20;
+    const padding = parseFloat(getComputedStyle(node).paddingTop) * 2 || 20;
+    node.classList.toggle('multiline', node.offsetHeight - padding > line * 1.5);
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => node.classList.add('hidden'), kind === 'bad' ? 8000 : 3500);
 }
@@ -50,9 +71,30 @@ const fmtNum = (n) => (n === null || n === undefined || n === '' ? '–' : Numbe
 const escapeHtml = (value) =>
     String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-function fmtBytes(text) {
-    if (!text) return '–';
-    return text; // docker already reports a human-readable size
+/*
+ * Controls waiting on a request of their own.
+ *
+ * A button is disabled while its request is out, and then the next poll
+ * re-renders the card it sits on and switches it straight back on -- the
+ * Tailscale HTTPS switches, the allow-list switch -- so a second click goes in
+ * behind the first while the first is still running. Every render that sets
+ * `disabled` asks here first, and a control is let go of on every way its
+ * request can end, failures included, so nothing is left greyed out either.
+ *
+ * Keyed by name rather than by element, because the renders replace the
+ * element and the name is what survives.
+ */
+const pendingControls = new Set();
+const isHeld = (name) => pendingControls.has(name);
+
+function holdControl(name, node = $(name)) {
+    pendingControls.add(name);
+    if (node) node.disabled = true;
+}
+
+function releaseControl(name, { node = $(name), enabled = true } = {}) {
+    pendingControls.delete(name);
+    if (node) node.disabled = !enabled;
 }
 
 /**
@@ -296,11 +338,6 @@ const activeSubtab = (tab) =>
 const navSwitch = (service) => document.querySelector(`[data-service="${service}"]`);
 
 /**
- * Reflects a service's real state onto its sidebar switch. Never called from a
- * click: the switches show what the containers are doing, so a failed start
- * cannot leave one sitting in the wrong position.
- */
-/**
  * The health dot beside a destination.
  *
  * Three states carry meaning and a fourth deliberately does not: a service you
@@ -342,28 +379,6 @@ function setNavHealth(tab, state) {
         absent: 'Not installed',
         none: '',
     }[state] ?? '';
-}
-
-/**
- * Only for switches nothing else owns.
- *
- * The switch means one thing: this container is running. Several screens used
- * to write it from their own saved 'enabled' flag instead -- a tab
- * every five seconds, the apps tab on its own poll -- while loadServices wrote
- * what docker actually reported. A service that is installed and stopped has
- * enabled=true and running=false, so the two pollers took turns and the switch
- * flipped itself back and forth without anybody touching it. It looked exactly
- * like a service starting and stopping on its own.
- *
- * loadServices is the only writer for anything with a container now.
- */
-function setNavSwitch(service, on, { disabled = false, reason = '' } = {}) {
-    const input = navSwitch(service);
-    if (!input || input.dataset.busy === '1') return;
-    input.checked = Boolean(on);
-    input.disabled = disabled;
-    const label = input.closest('.switch');
-    if (label) label.title = disabled && reason ? reason : label.getAttribute('aria-title') || label.title;
 }
 
 // ------------------------------------------------------- blocking actions ---
@@ -559,8 +574,17 @@ function openAction({ key, title, note }) {
     cancel.textContent = 'Cancel';
     resetProgress();
     $('action-overlay').hidden = false;
+    // Focus goes into the card, onto the card itself while it has no button to
+    // offer -- Cancel appears once there is a job id, Close once it is over --
+    // so a keyboard is inside the overlay from the start rather than on
+    // whatever was clicked behind it.
+    el('.action-card').focus();
     return action;
 }
+
+/** The buttons in the overlay that can take focus right now. */
+const actionFocusables = () =>
+    [...document.querySelectorAll('.action-card button')].filter((b) => !b.hidden && !b.disabled);
 
 function actionAppend(line) {
     const log = $('action-log');
@@ -620,13 +644,44 @@ function startActionWatchdog() {
     actionWatchdog = setInterval(checkActionJob, 4000);
 }
 
+/** The states a job does not leave. */
+const FINAL_JOB_STATES = new Set(['succeeded', 'failed', 'cancelled']);
+
+/** What the panel says about a job it has no record of at all. */
+const LOST_JOB = 'the panel restarted and lost track of this job — check the result';
+
+/**
+ * Asks the server how one job is doing.
+ *
+ * Resolves with the job as the server has it, with { status: 'queued' } for one
+ * still waiting its turn, or with { status: 'gone' } when nothing anywhere
+ * knows it. Throws when the panel cannot be reached, which is never an answer.
+ *
+ * `gone` is checked a second way before it is believed. /api/jobs/<id> only
+ * looks at the running job and the finished ones, not at the line waiting --
+ * so a job queued behind a half-hour rebuild came back `gone` within seconds of
+ * being asked for, and an overlay asking about it declared it done before it
+ * had started. The queue view does list the waiting ones, and it carries the
+ * history as well, for a job that finished in the gap between the two reads.
+ */
+async function askJob(id) {
+    const payload = await api(`/api/jobs/${id}`);
+    if (payload?.job) return payload.job;
+
+    const view = await api('/api/jobs/queue');
+    if (view?.current?.id === id) return view.current;
+    if ((view?.pending ?? []).some((job) => job.id === id)) return { id, status: 'queued' };
+    const finished = (view?.history ?? []).find((job) => job.id === id);
+    return finished ?? { id, status: 'gone' };
+}
+
 async function checkActionJob() {
     const action = pendingAction;
     if (!action?.jobId || action.finished) return stopActionWatchdog();
 
-    let payload;
+    let job;
     try {
-        payload = await api(`/api/jobs/${action.jobId}`);
+        job = await askJob(action.jobId);
     } catch {
         // The panel is unreachable this instant. That is what the update
         // overlay expects to happen to it, so it is never a reason to give up
@@ -637,11 +692,12 @@ async function checkActionJob() {
     // this overlay, or the user may have closed it and started another.
     if (pendingAction !== action || action.finished) return stopActionWatchdog();
 
-    const job = payload?.job;
-    if (!job) {
-        // Fell out of the server's history, so it ended a while ago and we
-        // missed it. There is no status left to report beyond that it is over.
-        if (payload?.gone) finishAction({ id: action.jobId, status: 'succeeded' });
+    if (job.status === 'gone') {
+        // No record of it anywhere: the history is held in memory, so this is
+        // the panel having restarted underneath the job, or the job being old
+        // enough to have fallen out. Either way there is nobody left who knows
+        // how it went, and saying "Done" would be a guess dressed as a fact.
+        finishAction({ id: action.jobId, status: 'unknown', error: LOST_JOB });
         return;
     }
     if (job.status === 'queued' || job.status === 'running') {
@@ -672,6 +728,9 @@ function adoptActionJob(jobId) {
     // Nothing can be cancelled until there is something to name, and some
     // things are not cancellable at all.
     $('action-cancel').hidden = pendingAction.cancellable === false;
+    // The one thing to press now exists, so focus moves onto it -- unless it
+    // has already gone somewhere else inside the card.
+    if (!$('action-cancel').hidden && document.activeElement === el('.action-card')) $('action-cancel').focus();
     for (const line of earlyLines.get(jobId) ?? []) appendJobLine(line);
     earlyLines.clear();
     const ended = earlyEnds.get(jobId);
@@ -684,19 +743,25 @@ function finishAction(job) {
     if (!pendingAction || pendingAction.finished) return;
     const cancelled = job.status === 'cancelled';
     const ok = job.status === 'succeeded';
+    // Neither a success nor a failure: see checkActionJob.
+    const unknown = job.status === 'unknown';
     actionAppend(
         cancelled
             ? '\n■ Cancelled. Anything it had already done is still done.'
             : ok
               ? '\n✓ Done.'
-              : `\n✗ Failed: ${job.error ?? 'it did not finish'}`,
+              : unknown
+                ? `\n? Not known: ${job.error ?? LOST_JOB}.`
+                : `\n✗ Failed: ${job.error ?? 'it did not finish'}`,
     );
 
     pendingAction.finished = true;
     stopActionWatchdog();
     $('action-spinner').hidden = true;
     $('action-cancel').hidden = true;
-    $('action-title').textContent = `${pendingAction.title} — ${cancelled ? 'cancelled' : ok ? 'done' : 'failed'}`;
+    $('action-title').textContent = `${pendingAction.title} — ${
+        cancelled ? 'cancelled' : ok ? 'done' : unknown ? 'result unknown' : 'failed'
+    }`;
 
     // Full either way: the bar tracks the job reaching its end, not the job
     // succeeding. Which of those happened is the colour, the title and the last
@@ -743,10 +808,21 @@ function closeAction() {
     // What exists, what is running and what every tab shows can all have
     // changed while this was on screen. Failures here are the panel not
     // knowing something yet, which the next poll fixes.
-    for (const reload of [loadServices, refreshStatus, loadApps, loadTunnel, loadBackup]) {
+    //
+    // The backup card only when it is on screen. Reading it means discovering
+    // drives, which starts a container, and doing that after every install,
+    // start and stop was the panel's most expensive habit for a card nobody
+    // was looking at. Rescan is there for a drive plugged in meanwhile.
+    const reloads = [loadServices, refreshStatus, loadApps, loadTunnel];
+    if (backupOnScreen()) reloads.push(loadBackup);
+    for (const reload of reloads) {
         Promise.resolve(reload()).catch(() => {});
     }
 }
+
+/** Whether the Backup card is the one showing. */
+const backupOnScreen = () =>
+    $('tab-nextcloud')?.classList.contains('active') && activeSubtab('nextcloud') === 'nextcloud-backup';
 
 $('action-close').addEventListener('click', closeAction);
 
@@ -756,6 +832,11 @@ document.addEventListener(
     'keydown',
     (event) => {
         if (!pendingAction) return;
+        // The confirm dialog asked from in here ("Cancel this job?") is on top
+        // and owns the keyboard. Taking Escape from it left the question with
+        // no keyboard way to say no; taking Tab left its buttons unreachable.
+        // A modal <dialog> already keeps its own focus.
+        if ($('confirm-dialog').open) return;
         if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
@@ -763,12 +844,24 @@ document.addEventListener(
             return;
         }
         // The overlay stops the mouse reaching the page behind it; tab does not
-        // care about overlays, so focus is put back by hand.
+        // care about overlays, so focus is kept inside by hand: round the
+        // buttons that are showing, or on the card when there are none.
         if (event.key === 'Tab') {
             const card = el('.action-card');
-            if (card && !card.contains(document.activeElement)) {
+            if (!card) return;
+            const buttons = actionFocusables();
+            const inside = card.contains(document.activeElement);
+            if (!buttons.length) {
                 event.preventDefault();
-                $('action-close').focus();
+                card.focus();
+                return;
+            }
+            const first = buttons[0];
+            const last = buttons[buttons.length - 1];
+            const at = document.activeElement;
+            if (!inside || at === card || (event.shiftKey ? at === first : at === last)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
             }
         }
     },
@@ -1007,14 +1100,38 @@ window.addEventListener('resize', () => {
  * Disk first, because filling it up is the thing that actually goes wrong.
  */
 let pollTimer = null;
+
+/*
+ * Whether there is anybody to poll for.
+ *
+ * A tab left open in the background used to ask for the whole machine's status
+ * every four seconds and the services every ten, for as long as the browser
+ * kept it -- days, on a desktop -- and kept doing it after signing out, each
+ * request a 401 that bounced the sign-in screen again. Nothing reads the
+ * answers while the page is hidden or signed out, so nothing is asked.
+ */
+const panelOpen = () => !$('app').classList.contains('hidden');
+const pollable = () => panelOpen() && !document.hidden;
+
 const startPolling = () => {
     refreshStatus();
-    if (!pollTimer) pollTimer = setInterval(refreshStatus, 4000);
+    // Here rather than only on boot, so signing in from the form gets the
+    // sidebar switches straight away instead of on the next ten-second tick.
+    loadServices().catch(() => {});
+    if (!pollTimer) pollTimer = setInterval(() => pollable() && refreshStatus(), 4000);
 };
 const stopPolling = () => {
     clearInterval(pollTimer);
     pollTimer = null;
 };
+
+// Coming back to the tab gets a fresh picture at once rather than one up to
+// ten seconds old, which is what pausing would otherwise cost.
+document.addEventListener('visibilitychange', () => {
+    if (!pollable()) return;
+    refreshStatus();
+    loadServices().catch(() => {});
+});
 
 // The manager's process id for this run. A change means it restarted with
 // different code underneath this tab.
@@ -1213,6 +1330,9 @@ async function refreshStatus() {
     // One minute, five, fifteen -- the three the kernel reports, in that order.
     $('ov-load').textContent = h.loadAverage?.length ? h.loadAverage.join('  ') : '–';
 
+    // The LAN and Tailscale addresses the app pages build their links from.
+    refreshAppLinks();
+
     renderMeter('ov-disk', h.disk, 'Disk usage');
     renderMeter('ov-mem', h.memory, 'Memory');
     renderContainers(h.containers);
@@ -1231,6 +1351,68 @@ let appsState = null;
 /* Loaded once per page load rather than on every poll: see loadApps. */
 let mealPlanRefsLoaded = false;
 
+/*
+ * Settings somebody has changed and not yet applied.
+ *
+ * loadApps runs after every job, every tunnel and Tailscale change and every
+ * time the overlay closes, and it used to write the saved settings back over
+ * every field each time. So: tick two boxes, change a port, publish a name on
+ * the Tunnel tab, come back -- and the form said what was saved an hour ago,
+ * and Apply would have sent that. Whatever was being edited was quietly gone.
+ *
+ * A form is dirty from its first input or change until it is applied, or until
+ * Discard changes throws the edits away. While it is dirty its fields are left
+ * alone; the badges, links and notices around it still update, because those
+ * are about the app rather than about what is being typed.
+ */
+const dirtyForms = new Set();
+
+/** The fields each form owns. Built on demand: MC_* are defined further down. */
+const formFields = (name) =>
+    ({
+        nextcloud: ['nextcloud-pub-web', 'nextcloud-port', 'nextcloud-user', 'nextcloud-domains'],
+        jellyfin: ['jellyfin-pub-web', 'jellyfin-port', 'jellyfin-hwaccel'],
+        mealplan: ['mealplan-pub-web', 'mealplan-port', 'mealplan-ref'],
+        minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
+        backup: ['backup-enabled', 'backup-mirror', 'backup-interval', 'backup-destination'],
+    })[name] ?? [];
+
+// Spelled out rather than built from APP_KEYS, which is declared further down
+// and would not exist yet when this line runs.
+const FORM_NAMES = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft', 'backup'];
+
+function setFormDirty(name, dirty) {
+    if (dirty) dirtyForms.add(name);
+    else dirtyForms.delete(name);
+    // The way back out, shown only while there is something to go back from.
+    const revert = $(`${name}-revert`);
+    if (revert) revert.hidden = !dirty;
+}
+const isDirty = (name) => dirtyForms.has(name);
+
+/** Which form a field belongs to, or null for one that is not a setting. */
+function formOf(id) {
+    if (!id) return null;
+    return FORM_NAMES.find((name) => formFields(name).includes(id)) ?? null;
+}
+
+// One listener for every form: a field's own id says which form it is in.
+for (const type of ['input', 'change']) {
+    document.addEventListener(type, (event) => {
+        const name = formOf(event.target?.id);
+        if (name) setFormDirty(name, true);
+    });
+}
+
+for (const name of FORM_NAMES) {
+    $(`${name}-revert`)?.addEventListener('click', () => {
+        setFormDirty(name, false);
+        // Read back fresh rather than restored from a copy, so it is what the
+        // server has now, not what it had when the editing started.
+        Promise.resolve(name === 'backup' ? loadBackup() : loadApps()).catch(() => {});
+    });
+}
+
 async function loadApps() {
     const r = await api('/api/apps');
     appsState = r;
@@ -1240,32 +1422,38 @@ async function loadApps() {
     // sequence of assignments, so a single missing key used to throw and leave
     // every field below it unpopulated, which the next save then posted back as
     // empty values. Nothing in here should be able to do that again.
-    $('nextcloud-pub-web').checked = c.nextcloud?.publish?.web !== false;
-    $('nextcloud-port').value = c.nextcloud?.hostPort ?? 8080;
-    $('nextcloud-user').value = c.nextcloud?.adminUser ?? 'admin';
-    $('nextcloud-domains').value = c.nextcloud?.trustedDomains ?? 'localhost';
+    if (!isDirty('nextcloud')) {
+        $('nextcloud-pub-web').checked = c.nextcloud?.publish?.web !== false;
+        $('nextcloud-port').value = c.nextcloud?.hostPort ?? 8080;
+        $('nextcloud-user').value = c.nextcloud?.adminUser ?? 'admin';
+        $('nextcloud-domains').value = c.nextcloud?.trustedDomains ?? 'localhost';
+        // Held in a variable rather than read back off the DOM: the list is
+        // rows of text with a remove button each, and rebuilding it from the
+        // config on every render is what keeps the two from drifting.
+        sharedPaths = [...(c.nextcloud?.sharedPaths ?? [])];
+        renderSharedPaths();
+    }
     renderAppState('nextcloud', r.apps.nextcloud);
     loadNextcloudAdmin();
 
     // --- Jellyfin ---
-    $('jellyfin-pub-web').checked = c.jellyfin?.publish?.web !== false;
-    $('jellyfin-port').value = c.jellyfin?.hostPort ?? 8096;
-    $('jellyfin-hwaccel').checked = Boolean(c.jellyfin?.hardwareAcceleration);
-    // Held in a variable rather than read back off the DOM: the list is rows of
-    // text with a remove button each, and rebuilding it from the config on
-    // every render is what keeps the two from drifting.
-    mediaPaths = [...(c.jellyfin?.mediaPaths ?? [])];
-    renderMediaPaths();
-    sharedPaths = [...(c.nextcloud?.sharedPaths ?? [])];
-    renderSharedPaths();
+    if (!isDirty('jellyfin')) {
+        $('jellyfin-pub-web').checked = c.jellyfin?.publish?.web !== false;
+        $('jellyfin-port').value = c.jellyfin?.hostPort ?? 8096;
+        $('jellyfin-hwaccel').checked = Boolean(c.jellyfin?.hardwareAcceleration);
+        mediaPaths = [...(c.jellyfin?.mediaPaths ?? [])];
+        renderMediaPaths();
+    }
     renderAppState('jellyfin', r.apps.jellyfin);
 
     // --- Meal Plan ---
-    $('mealplan-pub-web').checked = c.mealplan?.publish?.web !== false;
-    $('mealplan-port').value = c.mealplan?.hostPort ?? 8083;
-    // Only set when the field is not being typed in, so a reload landing
-    // mid-edit does not overwrite what somebody is halfway through.
-    if (document.activeElement !== $('mealplan-ref')) $('mealplan-ref').value = c.mealplan?.ref ?? 'main';
+    if (!isDirty('mealplan')) {
+        $('mealplan-pub-web').checked = c.mealplan?.publish?.web !== false;
+        $('mealplan-port').value = c.mealplan?.hostPort ?? 8083;
+        // Only set when the field is not being typed in, so a reload landing
+        // mid-edit does not overwrite what somebody is halfway through.
+        if (document.activeElement !== $('mealplan-ref')) $('mealplan-ref').value = c.mealplan?.ref ?? 'main';
+    }
     renderAppState('mealplan', r.apps.mealplan);
     loadMealPlanPassword();
     // Once per page load. loadApps runs on a timer, and the refs call reaches
@@ -1277,8 +1465,11 @@ async function loadApps() {
     }
 
     // --- Minecraft ---
-    fillMinecraftSettings(c.minecraft ?? {});
+    if (!isDirty('minecraft')) fillMinecraftSettings(c.minecraft ?? {});
     renderAppState('minecraft', r.apps.minecraft);
+
+    // Everything above was drawn from the addresses known right now.
+    appLinkInputs = appLinkSignature();
 
     for (const app of APP_KEYS) {
         const running = Boolean(r.apps[app]?.container?.running);
@@ -1509,6 +1700,86 @@ function appStatusNote(state, { absent, stopped }) {
     return { text: stopped, bad: false };
 }
 
+/*
+ * The "Open it" block of an app's page: its addresses when it is up and
+ * reachable, and otherwise a sentence saying why not.
+ *
+ * Its own function because it depends on two things that arrive on their own
+ * schedule. The "on this network" address comes from the status poll
+ * (hostSnapshot) and the Tailscale ones from loadTailscale (tsState); both
+ * used to be read only when loadApps happened to run, and on a fresh page
+ * loadApps usually wins that race -- so a running Nextcloud showed no local
+ * link and plain-http Tailscale ones until something else reloaded the apps,
+ * which on a quiet afternoon could be never. refreshAppLinks redraws just these
+ * blocks when either of them changes.
+ */
+const APP_LINK_COPY = {
+    nextcloud: 'Not installed yet. Installing builds it and leaves it switched off.',
+    jellyfin: 'Not installed yet. Installing downloads the image and leaves it switched off.',
+    mealplan: 'Not installed yet. Installing builds it and leaves it switched off.',
+};
+
+function renderAppLink(name, state) {
+    const link = $(`${name}-link`);
+    if (!link || !(name in APP_LINK_COPY) || !state) return;
+    const cfg = appsState?.config?.[name] ?? {};
+    const running = state.container?.running;
+    const web = Boolean(cfg.publish?.web);
+    link.hidden = false;
+    // Hidden by default each pass, so the branches below only have to say
+    // when it should appear rather than every branch remembering to hide it.
+    if (name === 'nextcloud') $('nextcloud-webdav-card').hidden = true;
+
+    if (running && (web || state.publicUrl)) {
+        link.className = 'verdict ok';
+        link.innerHTML = appLinks(web ? cfg.hostPort : null, state.publicUrl, name);
+
+        if (name === 'nextcloud') {
+            // Only offered when it is actually reachable, which is the same
+            // condition as the links above -- an address nobody can connect
+            // to is worse than no address.
+            const dav = webdavLinks(web ? cfg.hostPort : null, state.publicUrl);
+            $('nextcloud-webdav-card').hidden = !dav;
+            $('nextcloud-webdav').innerHTML = dav;
+        }
+    } else if (running) {
+        link.className = 'verdict';
+        link.textContent =
+            'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Tunnel & domains.';
+    } else {
+        const note = appStatusNote(state, {
+            absent: APP_LINK_COPY[name],
+            stopped: 'Not running. Its switch in the sidebar starts it.',
+        });
+        link.className = note.bad ? 'verdict bad' : 'verdict';
+        link.textContent = note.text;
+    }
+}
+
+/** What the app links were last drawn from, so they are redrawn only on a change. */
+let appLinkInputs = null;
+
+const appLinkSignature = () =>
+    JSON.stringify([
+        hostSnapshot?.lanAddress ?? null,
+        hostSnapshot?.tailscale?.host ?? null,
+        (tsState?.serve ?? []).map((a) => [a.key, a.on, a.broken, a.url]),
+    ]);
+
+/**
+ * Redraws the address blocks -- and nothing else -- when the addresses they
+ * are built from have changed since they were last drawn. Cheap enough to call
+ * on every status poll: almost always the signature matches and it returns.
+ */
+function refreshAppLinks() {
+    if (!appsState) return;
+    const signature = appLinkSignature();
+    if (signature === appLinkInputs) return;
+    appLinkInputs = signature;
+    for (const name of Object.keys(APP_LINK_COPY)) renderAppLink(name, appsState.apps?.[name]);
+    renderMinecraftJoin();
+}
+
 function renderAppState(name, state) {
     const badge = $(`${name}-state`);
     const container = state.container ?? {};
@@ -1526,34 +1797,7 @@ function renderAppState(name, state) {
     }
 
     if (name === 'nextcloud') {
-        const link = $('nextcloud-link');
-        const cfg = appsState.config.nextcloud;
-        link.hidden = false;
-        // Hidden by default each pass, so the branches below only have to say
-        // when it should appear rather than every branch remembering to hide it.
-        $('nextcloud-webdav-card').hidden = true;
-        if (running && (cfg.publish.web || state.publicUrl)) {
-            link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl, 'nextcloud');
-
-            // Only offered when it is actually reachable, which is the same
-            // condition as the links above -- an address nobody can connect to
-            // is worse than no address.
-            const dav = webdavLinks(cfg.publish.web ? cfg.hostPort : null, state.publicUrl);
-            $('nextcloud-webdav-card').hidden = !dav;
-            $('nextcloud-webdav').innerHTML = dav;
-        } else if (running) {
-            link.className = 'verdict';
-            link.textContent =
-                'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Tunnel & domains.';
-        } else {
-            const note = appStatusNote(state, {
-                absent: 'Not installed yet. Installing builds it and leaves it switched off.',
-                stopped: 'Not running. Its switch in the sidebar starts it.',
-            });
-            link.className = note.bad ? 'verdict bad' : 'verdict';
-            link.textContent = note.text;
-        }
+        renderAppLink(name, state);
 
         // What is running, and when the image behind it was built. The version
         // is only knowable while it is up, and the build date is only useful
@@ -1568,28 +1812,12 @@ function renderAppState(name, state) {
     }
 
     if (name === 'jellyfin') {
-        const link = $('jellyfin-link');
-        const cfg = appsState.config.jellyfin ?? {};
-        link.hidden = false;
-        if (running && (cfg.publish?.web || state.publicUrl)) {
-            link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl, 'jellyfin');
-        } else if (running) {
-            link.className = 'verdict';
-            link.textContent =
-                'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Tunnel & domains.';
-        } else {
-            const note = appStatusNote(state, {
-                absent: 'Not installed yet. Installing downloads the image and leaves it switched off.',
-                stopped: 'Not running. Its switch in the sidebar starts it.',
-            });
-            link.className = note.bad ? 'verdict bad' : 'verdict';
-            link.textContent = note.text;
-        }
+        renderAppLink(name, state);
 
         // No media folders is not an error, but it is the reason an otherwise
         // working Jellyfin shows an empty library, so it is said out loud.
         const notice = $('jellyfin-notice');
+        const cfg = appsState.config.jellyfin ?? {};
         if (!state.blockers?.length && !(cfg.mediaPaths ?? []).length) {
             notice.hidden = false;
             notice.className = 'verdict';
@@ -1626,24 +1854,7 @@ function renderAppState(name, state) {
     }
 
     if (name === 'mealplan') {
-        const link = $('mealplan-link');
-        const cfg = appsState.config.mealplan ?? {};
-        link.hidden = false;
-        if (running && (cfg.publish?.web || state.publicUrl)) {
-            link.className = 'verdict ok';
-            link.innerHTML = appLinks(cfg.publish?.web ? cfg.hostPort : null, state.publicUrl, 'mealplan');
-        } else if (running) {
-            link.className = 'verdict';
-            link.textContent =
-                'Running, but not published on the host and not on a domain. Tick "Publish on the host" under Settings, or give it an address under Tunnel & domains.';
-        } else {
-            const note = appStatusNote(state, {
-                absent: 'Not installed yet. Installing builds it and leaves it switched off.',
-                stopped: 'Not running. Its switch in the sidebar starts it.',
-            });
-            link.className = note.bad ? 'verdict bad' : 'verdict';
-            link.textContent = note.text;
-        }
+        renderAppLink(name, state);
 
         const build = $('mealplan-build');
         build.textContent = state.build?.builtAt
@@ -1725,6 +1936,7 @@ function addMediaPath() {
     mediaPaths.push(path);
     box.value = '';
     renderMediaPaths();
+    setFormDirty('jellyfin', true);
     // Nothing is saved until Apply, so say so rather than let the row imply it.
     toast('Added. Press Apply settings to mount it.');
 }
@@ -1764,6 +1976,7 @@ function addSharedPath() {
     sharedPaths.push(path);
     box.value = '';
     renderSharedPaths();
+    setFormDirty('nextcloud', true);
     toast('Added. Press Apply settings to share it.');
 }
 
@@ -1779,6 +1992,7 @@ $('nextcloud-shared-list').addEventListener('click', (event) => {
     if (!button) return;
     sharedPaths.splice(Number(button.dataset.sharedRemove), 1);
     renderSharedPaths();
+    setFormDirty('nextcloud', true);
 });
 
 $('jellyfin-media-add').addEventListener('click', addMediaPath);
@@ -1795,6 +2009,7 @@ $('jellyfin-media-list').addEventListener('click', (event) => {
     if (!button) return;
     mediaPaths.splice(Number(button.dataset.mediaRemove), 1);
     renderMediaPaths();
+    setFormDirty('jellyfin', true);
 });
 
 function collectAppConfig(name) {
@@ -1890,20 +2105,40 @@ $('nextcloud-pass-save').addEventListener('click', async () => {
 for (const name of APP_KEYS) {
     // The switch is a power control: it takes effect on the spot. Everything
     // that needs an explicit Apply stays a checkbox.
+    /*
+     * Held from the click until the job the save started has finished, not
+     * just until the PUT answers. The PUT only saves and queues the restart;
+     * a second Apply pressed while that restart runs queued a second one
+     * behind it, which for Nextcloud is minutes of the same work twice.
+     */
     $(`${name}-save`).addEventListener('click', async () => {
+        const id = `${name}-save`;
+        if (isHeld(id)) return;
         const err = $(`${name}-error`);
         err.hidden = true;
+        holdControl(id);
         try {
-            await api(`/api/apps/${name}`, { method: 'PUT', body: { config: collectAppConfig(name) } });
+            const r = await api(`/api/apps/${name}`, { method: 'PUT', body: { config: collectAppConfig(name) } });
+            // Saved, so what is in the form is now what the server has, and
+            // the next reload is free to write it back.
+            setFormDirty(name, false);
             setTimeout(loadApps, 2000);
+            if (r?.jobId) await waitForJob(r.jobId);
         } catch (e) {
             err.textContent = e.message;
             err.hidden = false;
+        } finally {
+            releaseControl(id);
         }
     });
 
     $(`${name}-update`).addEventListener('click', async () => {
+        const id = `${name}-update`;
+        if (isHeld(id)) return;
         const label = appsState?.apps?.[name]?.label ?? name;
+        // Off for as long as the rebuild is queued or running, whatever a Check
+        // pressed meanwhile says: the button is already doing what it offers.
+        holdControl(id);
         /*
          * No confirmation here.
          *
@@ -1914,16 +2149,21 @@ for (const name of APP_KEYS) {
          * actually made. The peek in the corner is the acknowledgement instead,
          * and the queue page is where it can be watched or cancelled.
          */
-        const result = await queueAction({
-            title: `Rebuilding ${label}`,
-            request: (headers) => api(`/api/apps/${name}/update`, { method: 'POST', headers }),
-        });
-
-        // Built, so the answer the check gave is spent: the button goes back to
-        // needing a fresh one rather than staying lit over a commit that is now
-        // the installed one.
+        let result = null;
+        try {
+            result = await queueAction({
+                title: `Rebuilding ${label}`,
+                request: (headers) => api(`/api/apps/${name}/update`, { method: 'POST', headers }),
+            });
+        } finally {
+            // Built, so the answer the check gave is spent: the button goes
+            // back to needing a fresh one rather than staying lit over a commit
+            // that is now the installed one. Anything else -- refused, failed,
+            // cancelled -- leaves the update that was found still waiting, so
+            // it comes back on.
+            releaseControl(id, { enabled: !result?.ok });
+        }
         if (result?.ok) {
-            $(`${name}-update`).disabled = true;
             setAppStatus(name, 'current',
                 name === 'mealplan' ? 'Built from the newest commit' : 'Updated to the newest image',
                 'Check again whenever you want to know if it has moved on.');
@@ -1991,6 +2231,12 @@ function setAppStatus(name, state, head, detail) {
 }
 const setMealPlanStatus = (state, head, detail) => setAppStatus('mealplan', state, head, detail);
 
+/*
+ * Both of these leave the button off while its own rebuild is queued or
+ * running (isHeld): a Check pressed meanwhile still says what it found, and
+ * lighting the button under a rebuild already in hand is how the same rebuild
+ * got queued twice.
+ */
 function renderImageCheck(name, r) {
     const label = appsState?.apps?.[name]?.label ?? name;
     const update = $(`${name}-update`);
@@ -2019,7 +2265,7 @@ function renderImageCheck(name, r) {
         ? `\n${r.majorChanges.join(' and ')} would move to a new major version. It upgrades its database on the first start and cannot be rolled back, so read the release notes first.`
         : '';
     setAppStatus(name, 'update', major ? 'Major update available' : 'Update available', what + major);
-    update.disabled = false;
+    update.disabled = isHeld(update.id);
 }
 
 function renderRepoCheck(name, r) {
@@ -2031,10 +2277,10 @@ function renderRepoCheck(name, r) {
         // not built it yet. "Up to date" here would be a guess.
         setAppStatus(name, null, `${r.ref} is at ${r.shortSha} (${when}).`,
             `This install has not built ${label} yet, so there is nothing to compare it against.`);
-        update.disabled = false;
+        update.disabled = isHeld(update.id);
     } else if (r.updateAvailable) {
         setAppStatus(name, 'update', 'Update available', `${r.shortSha}\n${r.message}`);
-        update.disabled = false;
+        update.disabled = isHeld(update.id);
     } else {
         setAppStatus(name, 'current', 'Up to date', `${r.ref} · ${r.shortSha} · ${when}`);
         update.disabled = true;
@@ -2064,7 +2310,8 @@ for (const name of APP_KEYS) {
 // being moved to, which is itself a reason to rebuild.
 $('mealplan-ref').addEventListener('input', () => {
     const changed = $('mealplan-ref').value.trim() !== (appsState?.config?.mealplan?.ref ?? 'main');
-    $('mealplan-update').disabled = !changed;
+    // Never switched on under a rebuild that is already queued or running.
+    $('mealplan-update').disabled = isHeld('mealplan-update') || !changed;
     setMealPlanStatus(null, changed
         ? 'Branch changed. Updating will build from it.'
         : 'Checked against GitHub every hour. Check for update asks right now.');
@@ -2156,7 +2403,15 @@ function collectMinecraftSettings() {
 
 // Ticking the licence is the one thing standing between an install and a
 // server, so it saves itself rather than waiting for an Apply further down.
-$('mc-eula').addEventListener('change', () => $('minecraft-save').click());
+// While an apply is already running the button is held, and a click on it does
+// nothing -- so that is said, rather than the tick looking saved when it is not.
+$('mc-eula').addEventListener('change', () => {
+    if (isHeld('minecraft-save')) {
+        toast('Settings are still being applied. Press Apply settings once that has finished.', 'bad');
+        return;
+    }
+    $('minecraft-save').click();
+});
 
 /** The addresses to type into each game, built from the address that works from here. */
 function renderMinecraftJoin() {
@@ -2279,8 +2534,10 @@ function renderMinecraftPlayers() {
 
     // --- allow list ---
     const toggle = $('mc-wl-on');
-    if (toggle.dataset.busy !== '1') toggle.checked = Boolean(p.whitelistOn);
-    toggle.disabled = !p.installed;
+    // Left alone while its own request is out: minecraftAct reloads this list
+    // before it returns, and that redraw used to switch it back on mid-request.
+    if (!isHeld('mc-wl-on')) toggle.checked = Boolean(p.whitelistOn);
+    toggle.disabled = !p.installed || isHeld('mc-wl-on');
     $('mc-wl-hint').textContent = p.whitelistOn
         ? 'On: only the players below can join. Everyone else is turned away at the door.'
         : 'Off: anyone who knows the address can join. The list below is kept, and applies the moment this is turned on.';
@@ -2321,12 +2578,14 @@ async function minecraftAct(body, { quiet = false } = {}) {
 $('mc-wl-on').addEventListener('change', async () => {
     const box = $('mc-wl-on');
     const wanted = box.checked;
-    box.dataset.busy = '1';
-    box.disabled = true;
-    const ok = await minecraftAct({ action: 'whitelist', enabled: wanted });
-    if (!ok) box.checked = !wanted;
-    box.dataset.busy = '0';
-    box.disabled = false;
+    holdControl('mc-wl-on');
+    let ok = false;
+    try {
+        ok = await minecraftAct({ action: 'whitelist', enabled: wanted });
+    } finally {
+        if (!ok) box.checked = !wanted;
+        releaseControl('mc-wl-on', { enabled: mcPlayers?.installed !== false });
+    }
 });
 
 /** An Add button and the name box beside it, Enter included. */
@@ -2450,12 +2709,18 @@ async function loadMinecraftConsoles() {
     } else if (c.state === 'starting') {
         body.innerHTML = '<p class="muted">The server is starting. The console bridge signs in once the world has loaded, usually within a minute or two.</p>';
     } else if (c.state === 'sign-in') {
+        const signIn = microsoftSignInUrl(c.url);
+        const open = signIn
+            ? `<a href="${escapeHtml(signIn)}" target="_blank" rel="noreferrer noopener">${escapeHtml(signIn)} ↗</a>`
+            : `<code>${escapeHtml(c.url ?? '')}</code>`;
         body.innerHTML = `
           <p>Sign the server in to its own Microsoft account. Once is enough; it remembers it.
             A new account needs an Xbox profile first: sign in to
             <a href="https://www.xbox.com" target="_blank" rel="noreferrer noopener">xbox.com ↗</a> with it once and pick a gamertag.</p>
+          ${signIn ? '' : `<p class="verdict bad">The address below came from the server's log and does not look like a Microsoft one, so it is not a link here.
+            Microsoft's own page for these codes is <code>https://www.microsoft.com/link</code>. Do not sign in anywhere else.</p>`}
           <ol class="steps">
-            <li>Open <a href="${escapeHtml(c.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(c.url)} ↗</a> on any device.</li>
+            <li>Open ${open} on any device.</li>
             <li>Enter the code <code class="mc-code">${escapeHtml(c.code)}</code></li>
             <li>Sign in with the <strong>spare</strong> account, using its password (not a passwordless sign-in).</li>
           </ol>
@@ -2481,6 +2746,34 @@ async function loadMinecraftConsoles() {
             <span class="muted">(${fmtNum(c.friends)} of ${fmtNum(c.maxFriends)} friends)</span></p>
           ${joinSteps(c.gamertag)}`;
     }
+}
+
+/**
+ * The sign-in address, but only if it really is Microsoft's.
+ *
+ * It is read out of the Minecraft server's log, and anything that can get a
+ * line into that log -- a player's chat message, a plugin, a crafted name --
+ * could otherwise put a link of its choosing on this card, next to the words
+ * "sign in with the spare account". So it is a link only when it is https on
+ * one of the hosts Microsoft signs people in from, subdomains included, and
+ * shown as plain text with a warning when it is anything else. The pattern
+ * that pulls it out of the log is anchored on the server as well; this is the
+ * second lock, at the point where it becomes clickable.
+ */
+const MICROSOFT_HOSTS = ['microsoft.com', 'live.com', 'microsoftonline.com', 'xbox.com'];
+
+function microsoftSignInUrl(raw) {
+    let url;
+    try {
+        url = new URL(String(raw ?? '').trim());
+    } catch {
+        return null;
+    }
+    // No credentials and no odd port: https://microsoft.com@evil.example/ is a
+    // link to evil.example, and none of Microsoft's pages need either.
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+    const host = url.hostname.toLowerCase();
+    return MICROSOFT_HOSTS.some((d) => host === d || host.endsWith(`.${d}`)) ? url.href : null;
 }
 
 $('mc-consoles-reset').addEventListener('click', resetMinecraftConsoles);
@@ -2880,7 +3173,7 @@ function renderInstallGate(key, state) {
         <h3>${label} is not installed</h3>
         <p class="muted">${
             state?.runnable === false
-                ? 'Installing downloads the firmware and checks it against the hashes the release publishes.'
+                ? 'Installing sets it up. There is nothing to keep running afterwards, so it gets no switch. Everything behind this is what it will look like.'
                 : 'Installing builds its image and creates its container. It stays switched off afterwards -- the switch in the sidebar is what starts it. Everything behind this is what it will look like.'
         }</p>
         <button class="primary big" data-install="${escapeHtml(key)}">Install ${label}</button>
@@ -2918,10 +3211,10 @@ function renderUninstallCards() {
         <p class="muted">Installing it again afterwards starts from nothing, and rebuilds.</p>
       </div>
       <label class="check">
-        <input type="checkbox" data-keepdata="${key}"> Keep the data, remove only the containers and images
+        <input type="checkbox" data-keepdata="${escapeHtml(key)}"> Keep the data, remove only the containers and images
       </label>
       <div class="row">
-        <button class="ghost danger" data-douninstall="${key}" ${installed ? '' : 'disabled'}>
+        <button class="ghost danger" data-douninstall="${escapeHtml(key)}" ${installed ? '' : 'disabled'}>
           ${installed ? 'Uninstall' : 'Not installed'}
         </button>
         <span class="muted">${installed ? '' : 'There is nothing here to remove.'}</span>
@@ -2939,7 +3232,7 @@ document.addEventListener('click', async (event) => {
         title: `Installing ${label}`,
         note:
             serviceState[key]?.runnable === false
-                ? 'Downloading the firmware and checking it against the published hashes.'
+                ? 'Setting it up. Leave this open until it says it is done.'
                 : 'The first install builds an image from source, which can take a long time. It does not start the service -- that is the switch. Leave this open.',
         request: () => api(`/api/services/${key}/install`, { method: 'POST' }),
     });
@@ -2968,7 +3261,17 @@ document.addEventListener('click', async (event) => {
         key,
         title: `Uninstalling ${state?.label ?? key}`,
         note: `Removing ${what}. Stopping partway through would leave half of it behind, so this runs to the end.`,
-        request: () => api(`/api/services/${key}/uninstall`, { method: 'POST', body: { confirm: key, keepData } }),
+        // The note says it runs to the end, and the overlay used to offer
+        // Cancel anyway -- which the server then refused, or worse, honoured
+        // half way through deleting the volumes. No button, and the no-cancel
+        // header so the queue page's own Cancel is off for it too.
+        cancellable: false,
+        request: () =>
+            api(`/api/services/${key}/uninstall`, {
+                method: 'POST',
+                body: { confirm: key, keepData },
+                headers: { 'X-QSH-No-Cancel': '1' },
+            }),
     });
 });
 
@@ -3053,13 +3356,13 @@ function renderTunnel() {
     // A blocked service stays in the list rather than being disabled: a greyed
     // option gives no reason, and picking it is how the reason gets shown.
     svc.innerHTML = t.services
-        .map((x) => `<option value="${x.key}">${escapeHtml(x.label)}${x.blocked ? ' (needs a password first)' : ''}</option>`)
+        .map((x) => `<option value="${escapeHtml(x.key)}">${escapeHtml(x.label)}${x.blocked ? ' (needs a password first)' : ''}</option>`)
         .join('');
     if (keepSvc && t.services.some((x) => x.key === keepSvc)) svc.value = keepSvc;
 
     const zone = $('pub-zone');
     const keepZone = zone.value;
-    zone.innerHTML = t.zones.map((z) => `<option value="${z.id}">${escapeHtml(z.name)}</option>`).join('');
+    zone.innerHTML = t.zones.map((z) => `<option value="${escapeHtml(z.id)}">${escapeHtml(z.name)}</option>`).join('');
     if (keepZone && t.zones.some((z) => z.id === keepZone)) zone.value = keepZone;
 
     renderPublishForm();
@@ -3321,7 +3624,10 @@ function renderTailscale() {
                     ? `<span class="ts-addr"><a href="${escapeHtml(a.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(a.url)} ↗</a>${tsCopy(a.url)}</span>`
                     : `<span class="muted">Would be at ${escapeHtml(a.url)}</span>`
                 : '';
-            const disabled = a.on ? '' : !ready || a.blocked ? 'disabled' : '';
+            // Off while its own request is out, whatever the state says: this
+            // whole list is redrawn on every Tailscale read, and that redraw
+            // used to hand the switch back mid-request.
+            const disabled = isHeld(`ts-serve:${a.key}`) || (!a.on && (!ready || a.blocked)) ? 'disabled' : '';
             return `<div class="ts-row">
                 <div class="ts-row-main">
                     <span class="ts-row-title">${escapeHtml(a.label)}${a.localPort ? ` <span class="muted">→ port ${a.localPort}</span>` : ''}</span>
@@ -3329,7 +3635,7 @@ function renderTailscale() {
                     ${dav}
                 </div>
                 <label class="switch" title="${a.on ? 'Turn HTTPS off' : 'Turn HTTPS on'}">
-                    <input type="checkbox" data-ts-serve="${a.key}" ${a.on ? 'checked' : ''} ${disabled} aria-label="HTTPS for ${escapeHtml(a.label)}">
+                    <input type="checkbox" data-ts-serve="${escapeHtml(a.key)}" ${a.on ? 'checked' : ''} ${disabled} aria-label="HTTPS for ${escapeHtml(a.label)}">
                     <span class="track"></span>
                 </label>
                 ${note}
@@ -3370,6 +3676,9 @@ function renderTailscale() {
               .join('')
         : '<p class="muted">Tailscale is not running on this machine, so there is no tailnet to list.</p>';
 
+    // The apps' own pages offer the HTTPS addresses switched on above.
+    refreshAppLinks();
+
     // Install: which account to sign in with.
     const acct = $('ts-install-account');
     acct.hidden = !t.account;
@@ -3404,16 +3713,27 @@ $('ts-serve').addEventListener('change', async (event) => {
     const key = box.dataset.tsServe;
     const on = box.checked;
     const app = tsState?.serve?.find((a) => a.key === key);
+    const held = `ts-serve:${key}`;
+    if (isHeld(held)) return;
     // Back to what it really is until the job says otherwise.
     box.checked = !on;
-    box.disabled = true;
-    // A refusal is toasted by queueAction, and a failed job shows in the peek.
-    await queueAction({
-        title: `${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${app?.label ?? key}`,
-        request: (headers) => api(`/api/tailscale/serve/${key}`, { method: 'POST', body: { on }, headers }),
-    });
-    await loadTailscale({ fresh: true });
-    loadApps();
+    holdControl(held, box);
+    try {
+        // A refusal is toasted by queueAction, and a failed job shows in the peek.
+        await queueAction({
+            title: `${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${app?.label ?? key}`,
+            request: (headers) =>
+                api(`/api/tailscale/serve/${encodeURIComponent(key)}`, { method: 'POST', body: { on }, headers }),
+        });
+        await loadTailscale({ fresh: true });
+    } finally {
+        // Let go, then drawn again from whatever is known -- the fresh read if
+        // it worked, the last one if it did not. loadTailscale draws nothing
+        // when it fails, which used to leave this switch off until a reload.
+        pendingControls.delete(held);
+        renderTailscale();
+    }
+    loadApps().catch(() => {});
 });
 
 // --- the Mullvad exit node ---
@@ -3667,7 +3987,10 @@ let logStream = null;
 const logBuffers = new Map();
 const LOG_TILE_LINES = 400;
 
-function logTile(key, label) {
+function logTile(rawKey, label) {
+    // The keys come from the server's container list; escaped once here for
+    // the half-dozen attributes they go into.
+    const key = escapeHtml(rawKey);
     return `<article class="log-tile" data-tile="${key}">
       <div class="log-tile-head">
         <span class="dot" data-tiledot="${key}"></span>
@@ -3928,7 +4251,10 @@ function renderQueue(pending) {
 
 const refreshQueueSoon = debounce(async () => {
     try {
-        const { job } = await api('/api/jobs/current');
+        const { job, busy } = await api('/api/jobs/current');
+        // Taken from the server rather than kept only from start/end events,
+        // so a missed `end` does not leave the badge counting a job for ever.
+        queueBusy = Boolean(busy);
         renderQueue(job?.pending);
     } catch {
         /* the console is cosmetic */
@@ -3948,7 +4274,14 @@ const refreshQueueSoon = debounce(async () => {
  * and what is behind it.
  */
 
-/** id -> resolve, for callers waiting on a job they sent to the queue. */
+/**
+ * id -> the callers waiting on that job, each with its own settle and check.
+ *
+ * A set per id rather than one waiter: the server folds a second identical
+ * request into the job that is already waiting last in line and hands back the
+ * same id, and a map of one waiter per id let the second caller overwrite the
+ * first, which then waited for ever.
+ */
 const queueEnds = new Map();
 /*
  * Jobs that ended before anyone was waiting on them.
@@ -3961,15 +4294,85 @@ const queueEnds = new Map();
  */
 const queueEnded = new Map();
 
+/** Ids the stream has said started, for the peek; see queueAction. Capped. */
+const startedJobs = new Set();
+
 function settleQueueJob(job) {
-    const waiter = queueEnds.get(job.id);
-    if (waiter) {
-        queueEnds.delete(job.id);
-        waiter(job);
+    const waiters = queueEnds.get(job.id);
+    if (waiters?.size) {
+        for (const waiter of [...waiters]) waiter.settle(job);
         return;
     }
     queueEnded.set(job.id, job);
     if (queueEnded.size > 50) queueEnded.delete(queueEnded.keys().next().value);
+}
+
+/*
+ * Asks again about every job somebody is waiting on, now rather than at the
+ * next tick. Called when the job stream comes back after a drop: whatever ended
+ * while it was away sent its `end` into nothing, and the snapshot a reconnect
+ * brings only describes a job that is still running.
+ */
+function recheckJobWaiters({ except = new Set() } = {}) {
+    for (const [id, waiters] of queueEnds) {
+        if (except.has(id)) continue;
+        for (const waiter of waiters) waiter.check();
+    }
+}
+
+/**
+ * Resolves with a job once it has finished, however that news arrives.
+ *
+ * The stream's `end` event is the fast way and nearly always the one that
+ * lands. It is also delivered exactly once, so a connection that drops across
+ * the moment a job ends -- a laptop lid, a phone locking, the panel restarting
+ * -- used to leave the caller waiting for ever, with its button greyed out
+ * until the page was reloaded. So it asks as well: every five seconds while it
+ * waits, and straight away when the stream reconnects.
+ *
+ * A job nobody has any record of resolves as `unknown`, not as a success. Its
+ * record lived in the panel's memory and the panel has lost it; the honest
+ * answer is that it is over and nobody can say how it went.
+ */
+function waitForJob(id) {
+    return new Promise((resolve) => {
+        const early = queueEnded.get(id);
+        if (early) {
+            queueEnded.delete(id);
+            resolve(early);
+            return;
+        }
+
+        let timer = null;
+        let asking = false;
+        const waiters = queueEnds.get(id) ?? new Set();
+        queueEnds.set(id, waiters);
+
+        const waiter = {
+            settle(job) {
+                if (!waiters.has(waiter)) return;
+                waiters.delete(waiter);
+                if (!waiters.size) queueEnds.delete(id);
+                clearInterval(timer);
+                resolve(job);
+            },
+            async check() {
+                if (asking || !waiters.has(waiter)) return;
+                asking = true;
+                try {
+                    const job = await askJob(id);
+                    if (FINAL_JOB_STATES.has(job.status)) waiter.settle(job);
+                    else if (job.status === 'gone') waiter.settle({ id, status: 'unknown', error: LOST_JOB });
+                } catch {
+                    /* the panel is unreachable this instant; the next tick asks again */
+                } finally {
+                    asking = false;
+                }
+            },
+        };
+        waiters.add(waiter);
+        timer = setInterval(() => waiter.check(), 5000);
+    });
 }
 
 /**
@@ -3998,25 +4401,24 @@ async function queueAction({ title, request, onEnd, noCancel = false }) {
         return { ok: true, status: 'succeeded' };
     }
 
-    showPeek({ id: response.jobId, name: title, state: 'Queued' });
+    // With nothing ahead of it the job has usually started -- and its `start`
+    // event been and gone -- before this response arrives, so "Queued" here
+    // would sit over a job that is running for as long as it runs.
+    showPeek({ id: response.jobId, name: title, state: startedJobs.has(response.jobId) ? 'Running' : 'Queued' });
     refreshQueueSoon();
 
-    return new Promise((resolve) => {
-        const finish = (job) => {
-            const result = { ...job, ok: job.status === 'succeeded' };
-            Promise.resolve()
-                .then(() => onEnd?.(result))
-                .catch(() => {});
-            resolve(result);
-        };
-        const early = queueEnded.get(response.jobId);
-        if (early) {
-            queueEnded.delete(response.jobId);
-            finish(early);
-        } else {
-            queueEnds.set(response.jobId, finish);
-        }
-    });
+    const job = await waitForJob(response.jobId);
+    // Learnt by asking rather than from the stream, the peek and the badge
+    // never heard either; this is the one place that knows to tell them.
+    // Repeating it after an `end` that did arrive changes nothing.
+    peekEnded(job);
+    refreshQueueSoon();
+
+    const result = { ...job, ok: job.status === 'succeeded' };
+    Promise.resolve()
+        .then(() => onEnd?.(result))
+        .catch(() => {});
+    return result;
 }
 
 // --- the peek: a glance at queued work, not a modal ---
@@ -4031,6 +4433,11 @@ function showPeek({ id, name, state }) {
     $('queue-peek-state').textContent = state;
     $('queue-peek-log').textContent = '';
     $('queue-peek').hidden = false;
+    // Toasts stack above the peek rather than under it: on a phone the two
+    // share the bottom of the screen, and a toast was landing on the peek's
+    // log, unreadable and in front of the thing it was about. The stylesheet
+    // lifts .toast by this much.
+    document.documentElement.style.setProperty('--peek-h', `${$('queue-peek').offsetHeight + 12}px`);
 }
 
 function peekLine(jobId, line) {
@@ -4046,7 +4453,8 @@ function peekLine(jobId, line) {
 function peekEnded(job) {
     if (!peekJobId || job.id !== peekJobId) return;
     $('queue-peek-state').textContent =
-        { succeeded: 'Done', cancelled: 'Cancelled' }[job.status] ?? `Failed: ${job.error ?? 'unknown'}`;
+        { succeeded: 'Done', cancelled: 'Cancelled', unknown: 'Lost track of it — check the result' }[job.status] ??
+        `Failed: ${job.error ?? 'unknown'}`;
     // A failure is worth leaving on screen longer than a success.
     clearTimeout(peekHideTimer);
     peekHideTimer = setTimeout(hidePeek, job.status === 'succeeded' ? 4000 : 12000);
@@ -4056,6 +4464,7 @@ function hidePeek() {
     clearTimeout(peekHideTimer);
     peekJobId = null;
     $('queue-peek').hidden = true;
+    document.documentElement.style.setProperty('--peek-h', '0px');
 }
 
 $('queue-peek').addEventListener('click', () => {
@@ -4207,31 +4616,6 @@ $('queue-current-cancel').addEventListener('click', async () => {
 });
 
 /**
- * A job that renders on its own page rather than in the console overlay.
- *
- * Flashing is watched from the screen you started it on: you have a board in
- * your hand and the port you picked is on that screen, so throwing a modal over
- * it hides the context you need if something goes wrong.
- */
-let inlineJob = null;
-
-function claimJob(namePrefix, { el, state, onEnd }) {
-    inlineJob = { namePrefix, el, state, onEnd };
-    el.textContent = '';
-}
-
-function inlineJobHandles(name) {
-    return inlineJob && String(name || '').startsWith(inlineJob.namePrefix);
-}
-
-function appendInline(line) {
-    const el = inlineJob.el;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    el.textContent += `${line}\n`;
-    if (atBottom) el.scrollTop = el.scrollHeight;
-}
-
-/**
  * Everything the panel's own jobs have printed this session.
  *
  * Kept whether or not the logs tab is open, because the interesting moment for
@@ -4286,11 +4670,27 @@ function adoptRunningJob(job, note) {
 function openJobStream() {
     jobStream?.close();
     jobStream = new EventSource('/api/jobs/stream');
+    /*
+     * Connected, or connected again. Anything that ended while the stream was
+     * away has had its one `end` event already, into nothing, so everybody
+     * waiting on a job asks about it now rather than at their next tick -- the
+     * overlay's watchdog included. On the first connection there is nothing
+     * waiting and this does nothing.
+     */
+    jobStream.addEventListener('open', () => {
+        recheckJobWaiters();
+        if (pendingAction?.jobId && !pendingAction.finished) checkActionJob();
+    });
     // A job already running when this page loaded: what it has printed so far
     // goes into the panel's log, so opening All logs shows it rather than
     // starting from the next line.
     jobStream.addEventListener('snapshot', (event) => {
         const job = JSON.parse(event.data);
+        // The server's picture of what is still to do. A job somebody is
+        // waiting on that is in neither half of it has ended, so it is asked
+        // about -- which settles it with its real outcome, or as unknown.
+        const live = new Set([...(job.status === 'running' ? [job.id] : []), ...(job.pending ?? []).map((p) => p.id)]);
+        recheckJobWaiters({ except: live });
         if (job.status !== 'running') return;
         queueBusy = true;
         for (const line of job.lines ?? []) pushJobLine(line);
@@ -4308,6 +4708,8 @@ function openJobStream() {
     });
     jobStream.addEventListener('start', (event) => {
         const job = JSON.parse(event.data);
+        startedJobs.add(job.id);
+        if (startedJobs.size > 50) startedJobs.delete(startedJobs.values().next().value);
         queueBusy = true;
         renderQueue(job.pending);
         pushJobLine(`\n> ${job.name}`);
@@ -4327,7 +4729,7 @@ function openJobStream() {
         }
         // Nothing pops up any more, so a job with no log of its own on screen
         // says once that it has started.
-        if (!inlineJobHandles(job.name) && !pendingAction) toast(`${job.name}…`);
+        if (!pendingAction) toast(`${job.name}…`);
     });
     // Something was accepted but has not started. Saying so is the difference
     // between a queue and a click that appeared to do nothing.
@@ -4356,10 +4758,9 @@ function openJobStream() {
         pushJobLine(line);
         peekLine(jobId, line);
         appendQueuePageLine(jobId, line);
-        // The overlay shows the action it started; a tab watching its own job
-        // shows that one. Everything is in All logs either way.
+        // The overlay shows the action it started, the peek and the queue page
+        // the queued one. Everything is in All logs either way.
         actionLine(jobId, line);
-        if (inlineJob) appendInline(line);
     });
     jobStream.addEventListener('end', (event) => {
         const job = JSON.parse(event.data);
@@ -4391,13 +4792,6 @@ function openJobStream() {
             return;
         }
 
-        if (inlineJob) {
-            appendInline(job.status === 'succeeded' ? '\n✓ Done.' : `\n✗ Failed: ${job.error}`);
-            inlineJob.onEnd?.(job);
-            inlineJob = null;
-            refreshStatus();
-            return;
-        }
         toast(
             { succeeded: `${job.name}: done`, cancelled: `${job.name}: cancelled` }[job.status] ?? `${job.name}: failed`,
             { succeeded: 'good', cancelled: '' }[job.status] ?? 'bad',
@@ -4466,12 +4860,26 @@ $('password-save').addEventListener('click', async () => {
         await waitForPanelRestart('Password saved. The panel is restarting, and will ask you to sign in.');
     } catch (e) {
         toast(e.message, 'bad');
+    } finally {
+        // Only reached with the page still here: a restart that worked has
+        // reloaded it. One that never came back says so in the result line,
+        // and the button has to be usable again for whatever comes next --
+        // it used to stay greyed out until a reload.
         $('password-save').disabled = false;
     }
 });
 
 $('panel-port-save').addEventListener('click', async () => {
-    const port = Number($('panel-port').value);
+    const raw = $('panel-port').value.trim();
+    const port = Number(raw);
+    // Said before the question rather than after it: a confirmation dialog
+    // offering to move the panel to port 0, or to where it already is, is a
+    // question with no good answer.
+    if (!raw) return toast('Type the port to move the panel to first.', 'bad');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return toast('A port is a whole number from 1 to 65535.', 'bad');
+    }
+    if (panelPort && port === panelPort) return toast(`The panel is already on port ${port}.`);
     const move = await askConfirm({
         title: `Move this panel to port ${port}?`,
         body: 'It restarts, and this page will follow it to the new address. Anything you have bookmarked stops working.',
@@ -4521,6 +4929,8 @@ $('password-clear').addEventListener('click', async () => {
         await waitForPanelRestart('Password removed. The panel is restarting.');
     } catch (e) {
         toast(e.message, 'bad');
+    } finally {
+        // As for password-save: only reached if the page did not reload.
         $('password-clear').disabled = false;
     }
 });
@@ -4534,10 +4944,22 @@ $('password-clear').addEventListener('click', async () => {
  * container has picked the work up, and the result is read out of a status file
  * once the panel is running again.
  */
+/** The port the panel says it is on, from /api/system. Null until it has said. */
+let panelPort = null;
+
 async function loadGlobal() {
     const r = await api('/api/system');
     $('global-panel-version').textContent = r.panelVersion || '–';
     $('global-stack-dir').textContent = r.stackDir || '–';
+
+    // The port box started empty and stayed that way, so "Move the panel"
+    // pressed as found asked to move it to port 0. It starts on the port the
+    // panel is actually on now -- unless somebody is typing a new one in.
+    panelPort = Number(r.panelPort) || null;
+    if (panelPort && document.activeElement !== $('panel-port')) $('panel-port').value = panelPort;
+    $('panel-port-state').textContent = panelPort
+        ? `This panel is on port ${panelPort}${r.panelBind ? `, listening on ${r.panelBind}` : ''}.`
+        : 'The panel could not say which port it is on.';
 
     const last = r.lastUpdate;
     if (!last) return;
@@ -4707,7 +5129,7 @@ function followPanelUpdate() {
 }
 
 // Nothing else in the panel is guarded like this, because nothing else deletes
-// the node, its chain data and the panel in one go.
+// every service, all of their data and the panel itself in one go.
 const TEARDOWN_PHRASE = 'DELETE EVERYTHING';
 
 $('global-teardown-confirm').addEventListener('input', (event) => {
@@ -4844,7 +5266,9 @@ setInterval(() => {
 // finishing is reflected without a reload.
 // Ten seconds, not thirty: this is now the only thing that writes the switches,
 // so how stale it is, is how stale they are.
-setInterval(() => loadServices().catch(() => {}), 10_000);
+// Paused while the tab is hidden or signed out, like the status poll; see
+// pollable().
+setInterval(() => pollable() && loadServices().catch(() => {}), 10_000);
 
 api('/api/session')
     .then((s) => {
@@ -4864,8 +5288,8 @@ api('/api/session')
                 'The stored password cannot be read, so none will be accepted. It was truncated by an old bug in how the hash was saved. Clear ADMIN_PASSWORD_HASH in the .env file in your install directory, recreate the panel container, and set a new password from Global settings.';
         }
         if (s.authenticated) {
+            // showApp starts the polls, the services one included.
             showApp();
-            loadServices().catch(() => {});
             loadUpdateBanner();
         } else showLogin();
     })
@@ -4948,10 +5372,17 @@ async function loadBackup() {
     backupDrives = r.drives ?? [];
     backupSources = r.sources ?? [];
     renderBackupSources();
-    renderBackupDrives(c.destination);
-    $('backup-enabled').checked = Boolean(c.enabled);
-    $('backup-mirror').checked = Boolean(c.mirrorDeletes);
-    $('backup-interval').value = c.intervalMinutes ?? 15;
+    // The drive list is always redrawn -- a drive may have been plugged in --
+    // but while the form has unsaved edits it keeps the drive picked in it,
+    // and the boxes keep what was typed. See dirtyForms.
+    if (isDirty('backup')) {
+        renderBackupDrives($('backup-destination').value || c.destination);
+    } else {
+        renderBackupDrives(c.destination);
+        $('backup-enabled').checked = Boolean(c.enabled);
+        $('backup-mirror').checked = Boolean(c.mirrorDeletes);
+        $('backup-interval').value = c.intervalMinutes ?? 15;
+    }
 
     const last = $('backup-last');
     if (c.lastRunAt) {
@@ -4987,6 +5418,7 @@ $('backup-save').addEventListener('click', async () => {
     };
     try {
         await api('/api/backup', { method: 'PUT', body });
+        setFormDirty('backup', false);
         kResult('backup-result', 'Saved.', false);
         await loadBackup();
     } catch (e) {

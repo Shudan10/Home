@@ -199,7 +199,11 @@ body::before {
     flex-direction: column;
     position: sticky;
     top: 0;
+    /* dvh where it is understood: on a phone 100vh is the height with the
+       browser's toolbars hidden, so the bottom of the drawer -- sign out and
+       the version -- sat underneath them. The vh line is the fallback. */
     height: 100vh;
+    height: 100dvh;
     z-index: 30;
 }
 /* Width is intentionally not transitioned: animating the width of a flex item
@@ -622,11 +626,6 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
-td.port { font-family: var(--mono); }
-table.toggles td:nth-child(3), table.toggles td:nth-child(4),
-table.toggles th:nth-child(3), table.toggles th:nth-child(4) { text-align: center; width: 90px; }
-table.ports td:first-child { font-family: var(--mono); width: 90px; }
-table.proxies td:last-child { text-align: right; white-space: nowrap; }
 .empty { color: var(--muted); font-style: italic; }
 
 .tag {
@@ -725,19 +724,30 @@ dialog .row label { flex: 1; min-width: 110px; }
 
 /* ----------------------------------------------------------------- toast */
 
+/* Lifted by --peek-h while the queue peek is showing (set in showPeek), so the
+   two stack instead of the toast landing on the peek's log. Clear of the home
+   indicator on a phone, and never wider than the screen: a long error used to
+   run off both edges as one pill-shaped line. */
 .toast {
     position: fixed;
     left: 50%;
-    bottom: 24px;
+    bottom: calc(24px + var(--peek-h, 0px) + env(safe-area-inset-bottom));
     transform: translateX(-50%);
+    width: max-content;
+    max-width: min(92vw, 560px);
     background: var(--panel-2);
     border: 1px solid var(--line);
     border-radius: 999px;
     padding: 10px 20px;
     z-index: 60;
     font-size: 14px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
     box-shadow: var(--shadow-2);
 }
+/* More than one line: the round ends of a pill cut into the first and last of
+   them, so it becomes an ordinary card. Set by toast() after measuring. */
+.toast.multiline { border-radius: var(--radius); }
 .toast.bad { border-color: var(--danger); color: var(--danger); }
 .toast.good { border-color: var(--accent-dim); }
 
@@ -851,6 +861,9 @@ dialog .row label { flex: 1; min-width: 110px; }
     box-shadow: var(--shadow-3);
 }
 .action-card p { margin: 0; }
+/* Focused by hand while it has no button to offer (see openAction); the card is
+   already the only thing on screen, so a ring round it says nothing. */
+.action-card:focus { outline: none; }
 .action-head { display: flex; align-items: center; gap: 10px; }
 .action-head h3 { margin: 0; font-size: 17px; }
 /* The log grows to fill the card rather than being a fixed height: a stop
@@ -1115,10 +1128,16 @@ button.big { font-size: 15px; padding: 11px 22px; }
 .switch.mini input:checked + .track::before { transform: translate(13px, -50%); }
 .switch.mini input:disabled + .track { opacity: 0.3; }
 
-/* No room for them on the icon rail, and nothing to label them with. */
-.sidebar.collapsed .switch.mini { display: none; }
+/* No room for them on the icon rail, and nothing to label them with -- the
+   Install buttons no more than the switches; on the rail one read as a stray
+   word laid across the icon. Back in the drawer, which is always full width.
+   :not([hidden]) so that bringing them back does not also bring back the ones
+   that are hidden on purpose (a switch before install, Install after it). */
+.sidebar.collapsed .switch.mini,
+.sidebar.collapsed .nav-install { display: none; }
 @media (max-width: 860px) {
-    .sidebar.collapsed .switch.mini { display: inline-block; }
+    .sidebar.collapsed .switch.mini:not([hidden]) { display: inline-block; }
+    .sidebar.collapsed .nav-install:not([hidden]) { display: inline-block; }
 }
 
 /* ------------------------------------------------------------- log zoom */
@@ -1645,16 +1664,6 @@ select { font-family: var(--mono); font-size: 13.5px; }
     overflow-wrap: anywhere;
 }
 
-/* ------------------------------------------------------------------ proxy */
-
-/* The proxy page while it is off: one card and nothing else, so it is narrowed
-   and centred rather than stretched across a screen it has no content for.
-   `.alone` is set by loadProxies; without this rule that toggle did nothing. */
-#tab-proxy.alone .proxy-intro {
-    max-width: 640px;
-    margin: 0 auto;
-}
-
 /* Two ways in to an app, listed rather than run together: the public address
    and the one on this network are not interchangeable, and the label after each
    is what says which is which. */
@@ -1939,8 +1948,8 @@ main {
 
 .queue-peek {
     position: fixed;
-    right: 20px;
-    bottom: 24px;
+    right: max(20px, env(safe-area-inset-right));
+    bottom: calc(24px + env(safe-area-inset-bottom));
     width: min(380px, calc(100vw - 32px));
     z-index: 61;
     background: var(--panel-2);
