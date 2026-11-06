@@ -103,7 +103,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         # compose and their containers and volumes are left behind as orphans.
         # Jellyfin and Meal Plan were missing here, so an uninstall left both
         # running, with their data. Minecraft is in the list for the same reason.
-        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile tunnel down --remove-orphans --rmi local)
+        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile tunnel --profile mullvad down --remove-orphans --rmi local)
         [ "$KEEP_DATA" = "1" ] || down+=(--volumes)
         d compose "${compose_files[@]}" --project-directory "$STACK_DIR" "${down[@]}" 2>/dev/null \
             || warn "compose down reported an error; removing objects individually."
@@ -112,7 +112,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
     say "Removing leftover containers"
     # quickstart-home-proxy is from before the tunnel, for installs that never
     # updated far enough to have it retired.
-    for name in quickstart-home-manager quickstart-home-tunnel quickstart-home-proxy \
+    for name in quickstart-home-manager quickstart-home-tunnel quickstart-home-mullvad quickstart-home-proxy \
                quickstart-home-nextcloud quickstart-home-nextcloud-db \
                quickstart-home-nextcloud-redis quickstart-home-nextcloud-imaginary \
                quickstart-home-jellyfin quickstart-home-mealplan quickstart-home-minecraft; do
@@ -145,6 +145,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
 
     say "Removing the network"
     d network rm quickstart-home-net >/dev/null 2>&1 && ok "removed network quickstart-home-net" || true
+    d network rm quickstart-home-vpn >/dev/null 2>&1 && ok "removed network quickstart-home-vpn" || true
 
     # Our images are gone by this point, so their build cache is now dangling
     # and this reclaims it. Plain

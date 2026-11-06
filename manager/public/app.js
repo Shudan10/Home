@@ -248,7 +248,10 @@ function selectTab(name) {
     // Asked on arrival: the tunnel's health is Cloudflare's to report, live.
     if (name === 'tunnel') loadTunnel();
     // Devices come and go, so this is read fresh on arrival too.
-    if (name === 'tailscale') loadTailscale();
+    if (name === 'tailscale') {
+        loadTailscale();
+        if (activeSubtab('tailscale') === 'ts-mullvad') loadMullvad();
+    }
     // The player lists change by themselves -- people join and leave -- so
     // they are fetched on arrival and then kept fresh while the tab is open.
     if (name === 'minecraft') {
@@ -3367,20 +3370,6 @@ function renderTailscale() {
               .join('')
         : '<p class="muted">Tailscale is not running on this machine, so there is no tailnet to list.</p>';
 
-    // Mullvad: what this machine can tell from here, which is only about itself.
-    const mv = $('ts-mullvad-status');
-    const mvText = t.exitNode?.mullvad
-        ? ['bad', `This machine itself is using the Mullvad exit node ${t.exitNode.name}. See This machine.`]
-        : t.mullvadLocations
-          ? ['ok', `The add-on is on, and this machine can see ${t.mullvadLocations} Mullvad locations. It does not need them: you can remove it from the add-on's devices to free a place.`]
-          : null;
-    mv.hidden = !mvText;
-    if (mvText) {
-        mv.className = `verdict ${mvText[0]}`;
-        mv.textContent = mvText[1];
-    }
-    $('ts-mullvad-home').textContent = tailscaleHttps('nextcloud') ?? (t.self?.dnsName ? `http://${t.self.dnsName}:${(t.serve ?? []).find((a) => a.key === 'nextcloud')?.localPort ?? ''}` : 'your server’s Tailscale address');
-
     // Install: which account to sign in with.
     const acct = $('ts-install-account');
     acct.hidden = !t.account;
@@ -3425,6 +3414,173 @@ $('ts-serve').addEventListener('change', async (event) => {
     });
     await loadTailscale({ fresh: true });
     loadApps();
+});
+
+// --- the Mullvad exit node ---
+
+let mvState = null;
+let mvLocations = null;
+let mvPoll = null;
+
+async function loadMullvad() {
+    try {
+        mvState = await api('/api/mullvad');
+    } catch {
+        return;
+    }
+    renderMullvad();
+    if (!mvLocations) {
+        api('/api/mullvad/locations')
+            .then((r) => {
+                mvLocations = r.locations;
+                renderMullvadLocations();
+            })
+            .catch((e) => {
+                $('mv-location-new').innerHTML = `<option value="">Could not load Mullvad's cities: ${escapeHtml(e.message)}</option>`;
+            });
+    }
+}
+
+function renderMullvadLocations() {
+    const options = (selected) =>
+        (mvLocations ?? [])
+            .map(
+                (l) =>
+                    `<option value="${escapeHtml(l.id)}" ${l.id === selected ? 'selected' : ''}>${escapeHtml(l.label)}${l.km !== null ? ` · ${l.km.toLocaleString()} km` : ''}</option>`,
+            )
+            .join('');
+    const fresh = $('mv-location-new');
+    fresh.innerHTML = options(fresh.value || mvLocations?.[0]?.id);
+    $('mv-location').innerHTML = options(mvState?.location);
+}
+
+function renderMullvad() {
+    const m = mvState;
+    if (!m) return;
+    $('mv-setup').hidden = m.connected;
+    for (const id of ['mv-live', 'mv-move', 'mv-remove-card']) $(id).hidden = !m.connected;
+    $('mv-use').hidden = true;
+    clearTimeout(mvPoll);
+    if (!m.connected) return;
+    if (mvLocations) renderMullvadLocations();
+
+    const ts = m.tailscale;
+    const running = Boolean(m.container?.running);
+    const signedIn = ts?.state === 'Running';
+    const ready = running && m.tunnelUp && signedIn && ts.approved;
+
+    const tag = $('mv-state');
+    tag.textContent = ready ? 'ready' : !running ? 'stopped' : !m.tunnelUp ? 'not connected to Mullvad' : 'needs finishing';
+    tag.className = `tag ${ready ? 'ok' : 'warn'}`;
+
+    $('mv-server').textContent = m.relay ? `${m.relay} · ${m.locationLabel ?? ''}` : '–';
+    $('mv-exit').textContent = m.exit
+        ? `${m.exit.ip} · ${[m.exit.city, m.exit.country].filter(Boolean).join(', ')}${m.exit.mullvad ? '' : ' (not Mullvad!)'}`
+        : '–';
+    $('mv-expiry').textContent = m.expiry ? `paid until ${new Date(m.expiry).toLocaleDateString()}` : '–';
+    $('mv-device').textContent = m.deviceName ?? '–';
+
+    $('mv-checks-title').textContent = ready ? 'Status' : 'Finish setting it up';
+    const check = (done, text) => `<li><span class="svc-dot ${done ? 'ok' : 'bad'}"></span><span>${text}</span></li>`;
+    $('mv-checks').innerHTML = [
+        check(running, running ? 'The exit node is running.' : 'The exit node is not running. Its log is under All logs.'),
+        check(m.tunnelUp, m.tunnelUp ? 'Connected to Mullvad.' : 'Not connected to Mullvad yet. Give it a minute after starting; if it stays like this, try another city.'),
+        check(signedIn, signedIn ? `Signed in to your tailnet as <strong>${escapeHtml(ts.name ?? 'home-mullvad')}</strong>.` : 'Not signed in to your tailnet yet.'),
+        check(ts?.approved, ts?.approved ? 'Approved as an exit node.' : 'Not approved as an exit node yet.'),
+    ].join('');
+
+    // The one thing to do next, spelled out.
+    let next = '';
+    if (running && !signedIn && ts?.authURL) {
+        next = `<div class="verdict">
+            <p><strong>Sign it in to your tailnet.</strong> Open this link and sign in with the same account as this machine${
+                /@privaterelay\.appleid\.com$/i.test(tsState?.account ?? '') ? ' (Sign in with Apple)' : ''
+            }:</p>
+            <p><a href="${escapeHtml(ts.authURL)}" target="_blank" rel="noreferrer noopener">${escapeHtml(ts.authURL)} ↗</a></p>
+        </div>`;
+    } else if (signedIn && !ts.approved) {
+        next = `<div class="verdict">
+            <p><strong>Approve it as an exit node.</strong> Tailscale asks for this once, so nobody can turn a device into an exit node without you knowing.</p>
+            <ol class="steps">
+                <li>Open <a href="https://login.tailscale.com/admin/machines" target="_blank" rel="noreferrer noopener">Machines in the admin console ↗</a>.</li>
+                <li>Find <strong>${escapeHtml(ts.name ?? 'home-mullvad')}</strong>, select <strong>…</strong>, then <strong>Edit route settings</strong>.</li>
+                <li>Tick <strong>Use as exit node</strong> and save.</li>
+                <li>While you are there, select <strong>…</strong> again and choose <strong>Disable key expiry</strong>, so it does not stop working in six months.</li>
+            </ol>
+        </div>`;
+    }
+    $('mv-next').innerHTML = next;
+
+    $('mv-use').hidden = !ready;
+    const name = ts?.name ?? 'home-mullvad';
+    for (const el of document.querySelectorAll('.mv-name')) el.textContent = name;
+    $('mv-linux-on').textContent = `sudo tailscale set --exit-node=${name}`;
+
+    // While it waits on something done elsewhere -- a sign-in, an approval --
+    // the page notices by itself rather than needing Check again.
+    if (!ready && activeSubtab('tailscale') === 'ts-mullvad' && $('tab-tailscale').classList.contains('active')) {
+        mvPoll = setTimeout(loadMullvad, 8000);
+    }
+}
+
+document.querySelector('[data-subtab="ts-mullvad"]').addEventListener('click', loadMullvad);
+
+$('mv-refresh').addEventListener('click', async () => {
+    $('mv-refresh').disabled = true;
+    await loadMullvad();
+    $('mv-refresh').disabled = false;
+});
+
+$('mv-connect').addEventListener('click', async () => {
+    const err = $('mv-connect-error');
+    err.hidden = true;
+    const account = $('mv-account').value.replace(/\D/g, '');
+    const location = $('mv-location-new').value;
+    if (!account) {
+        err.textContent = 'Type your Mullvad account number first.';
+        err.hidden = false;
+        return;
+    }
+    $('mv-connect').disabled = true;
+    const result = await queueAction({
+        title: 'Setting up the Mullvad exit node',
+        request: (headers) => api('/api/mullvad/connect', { method: 'POST', body: { account, location }, headers }),
+    });
+    $('mv-connect').disabled = false;
+    if (result.ok) {
+        $('mv-account').value = '';
+    } else {
+        err.textContent = result.error || 'Setting it up did not finish. The Update Queue has its log.';
+        err.hidden = false;
+    }
+    loadMullvad();
+});
+
+$('mv-move-go').addEventListener('click', async () => {
+    const location = $('mv-location').value;
+    if (!location || location === mvState?.location) return toast('That is the city it is already in.');
+    $('mv-move-go').disabled = true;
+    await queueAction({
+        title: 'Moving the Mullvad exit node',
+        request: (headers) => api('/api/mullvad/location', { method: 'POST', body: { location }, headers }),
+    });
+    $('mv-move-go').disabled = false;
+    loadMullvad();
+});
+
+$('mv-remove').addEventListener('click', async () => {
+    const sure = await askConfirm({
+        title: 'Remove the Mullvad exit node?',
+        body: 'Devices using it go back to their normal connection. Its device is removed from your Mullvad account and its Tailscale sign-in is signed out. You can set it up again any time.',
+        confirmLabel: 'Remove',
+        danger: true,
+    });
+    if (!sure) return;
+    await queueAction({
+        title: 'Removing the Mullvad exit node',
+        request: (headers) => api('/api/mullvad/remove', { method: 'POST', headers }),
+    });
+    loadMullvad();
 });
 
 // Opening on the system this page is being read on saves a click.

@@ -14,6 +14,7 @@ import * as host from './lib/host.js';
 import * as selfservice from './lib/selfservice.js';
 import * as tunnel from './lib/tunnel.js';
 import * as tailscale from './lib/tailscale.js';
+import * as mullvad from './lib/mullvad.js';
 import * as lifecycle from './lib/lifecycle.js';
 import * as minecraft from './lib/minecraft.js';
 import * as updates from './lib/updates.js';
@@ -1489,6 +1490,44 @@ route('POST', /^\/api\/tailscale\/serve\/(nextcloud|jellyfin|mealplan|panel)$/, 
     const job = jobs.start(`${on ? 'Turning on' : 'Turning off'} Tailscale HTTPS for ${label}`, (onLine) =>
         on ? tailscale.serveOn(key, onLine) : tailscale.serveOff(key, onLine),
     );
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+/*
+ * The Mullvad exit node: lib/mullvad.js has the why. Setting up, moving city
+ * and removing are jobs, since each waits on Mullvad and on a container.
+ */
+route('GET', /^\/api\/mullvad$/, async (req, res) => {
+    const ts = await tailscale.status().catch(() => ({}));
+    sendJson(res, 200, await mullvad.status(ts.devices ?? []));
+});
+
+route('GET', /^\/api\/mullvad\/locations$/, async (req, res) => {
+    try {
+        sendJson(res, 200, { locations: await mullvad.locations() });
+    } catch (err) {
+        fail(res, err.status ?? 502, err.message);
+    }
+});
+
+route('POST', /^\/api\/mullvad\/connect$/, async (req, res) => {
+    const body = await readBody(req);
+    if (!String(body.account ?? '').replace(/\D/g, '')) return fail(res, 400, 'Type your Mullvad account number first.');
+    if (!body.location) return fail(res, 400, 'Pick a city.');
+    const job = jobs.start('Setting up the Mullvad exit node', (onLine) => mullvad.connect(body.account, body.location, onLine));
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/mullvad\/location$/, async (req, res) => {
+    const body = await readBody(req);
+    if (!mullvad.isConnected()) return fail(res, 409, 'Set it up first.');
+    if (!body.location) return fail(res, 400, 'Pick a city.');
+    const job = jobs.start('Moving the Mullvad exit node', (onLine) => mullvad.setLocation(body.location, onLine));
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/mullvad\/remove$/, async (req, res) => {
+    const job = jobs.start('Removing the Mullvad exit node', (onLine) => mullvad.remove(onLine));
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 

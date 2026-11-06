@@ -80,6 +80,15 @@ Android and Linux, and turns on HTTPS addresses for the apps with
 is no Tailscale token to make; HTTPS certificates have to be switched on once
 in Tailscale's admin console first, and the page says where.
 
+**Mullvad exit node** — on the same page, the panel can turn this machine into
+a Tailscale exit node that sends what it carries through Mullvad, on your own
+Mullvad account. A phone or laptop that picks it stays on the tailnet, so the
+apps keep working, while its web traffic leaves through Mullvad; neither needs
+the Mullvad app. It runs in its own container (`manager/mullvad/`), and only
+traffic from the tailnet goes through Mullvad: this machine, its apps and the
+Cloudflare tunnel keep using the home connection. If the tunnel to Mullvad
+drops, tailnet traffic stops rather than falling back to the home address.
+
 ## Installing
 
 ```bash

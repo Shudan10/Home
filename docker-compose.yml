@@ -283,9 +283,54 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # A Tailscale exit node that sends what it carries on through Mullvad, on
+  # the Mullvad account of whoever runs this. A phone or laptop that picks it
+  # stays on the tailnet -- the apps here keep working -- while its web
+  # traffic leaves through Mullvad. manager/mullvad/ has the routing.
+  #
+  # Behind a profile: nothing to do until an account is connected. The panel
+  # writes the WireGuard settings it got from Mullvad into .env and starts it.
+  # Its own network, not the apps' one: devices using it have no business
+  # reaching the containers, and nothing here needs to reach it.
+  mullvad:
+    image: quickstart-home/mullvad-exit:1
+    build:
+      context: ./manager/mullvad
+    container_name: quickstart-home-mullvad
+    hostname: home-mullvad
+    profiles: ["mullvad"]
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    environment:
+      WG_PRIVATE_KEY: ${MULLVAD_WG_PRIVATE_KEY:-}
+      WG_ADDRESS: ${MULLVAD_WG_ADDRESS:-}
+      WG_ADDRESS6: ${MULLVAD_WG_ADDRESS6:-}
+      WG_PEER_PUBLIC_KEY: ${MULLVAD_PEER_PUBLIC_KEY:-}
+      WG_ENDPOINT: ${MULLVAD_ENDPOINT:-}
+      TS_HOSTNAME: ${MULLVAD_TS_HOSTNAME:-home-mullvad}
+    volumes:
+      - mullvad-tailscale:/var/lib/tailscale
+    networks:
+      - vpn
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   home:
     name: quickstart-home-net
+  vpn:
+    name: quickstart-home-vpn
 
 volumes:
   nextcloud-db-data:
@@ -303,3 +348,7 @@ volumes:
   # The world, the server's settings, and its allow, operator and ban lists.
   minecraft-data:
     name: quickstart-home-minecraft-data
+  # The exit node's sign-in to your tailnet, so a restart or a new location
+  # does not mean signing in again.
+  mullvad-tailscale:
+    name: quickstart-home-mullvad-tailscale

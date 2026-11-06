@@ -1566,74 +1566,98 @@
         </div>
       </div>
 
-      <!-- Mullvad through Tailscale. All of it happens in the admin console and
-           on the phone: this machine has no say in another device's exit node,
-           so this is a guide, plus a check that this machine is not using one. -->
+      <!-- A Mullvad exit node on this machine, on your own Mullvad account.
+           Phones and laptops pick it in Tailscale and need no Mullvad app. -->
       <div id="sub-ts-mullvad" class="subtab">
         <div class="grid">
-          <article class="card span2 guide">
-            <h3>Mullvad VPN</h3>
+          <article class="card span2" id="mv-setup" hidden>
+            <h3>Mullvad VPN through Tailscale</h3>
             <p class="muted">
-              Tailscale sells Mullvad VPN as an add-on. Your phone stays on your tailnet the
-              whole time, so your apps keep working, while everything else it does on the
-              internet goes out through a Mullvad server in a country you pick. There is no
-              separate Mullvad app or account: Tailscale sets those up for you.
+              This machine connects to Mullvad with your account and offers itself to your
+              tailnet as an <em>exit node</em>. A phone or laptop that picks it stays on your
+              tailnet, so your apps keep working, while everything else it does on the internet
+              goes out through Mullvad. The Mullvad app is not needed on them.
             </p>
-            <div class="verdict" id="ts-mullvad-status" hidden></div>
-
-            <h3 class="sub">1. Buy the add-on</h3>
-            <ol class="steps">
-              <li>Open <a href="https://login.tailscale.com/admin/settings/general" target="_blank" rel="noreferrer noopener">General settings in the admin console ↗</a>.</li>
-              <li>Scroll to <strong>Mullvad VPN</strong> and select <strong>Configure</strong>, then go through checkout.</li>
-            </ol>
+            <p class="muted">
+              Only traffic from devices that pick it goes through Mullvad. This machine, its apps
+              and the Cloudflare tunnel keep using your home connection.
+            </p>
+            <label>Mullvad account number
+              <input id="mv-account" type="password" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="16 digits">
+            </label>
+            <label>City
+              <select id="mv-location-new"><option value="">Loading Mullvad's cities…</option></select>
+            </label>
             <p class="hint">
-              At the time of writing it costs $5 a month for up to five devices. See
-              <a href="https://tailscale.com/pricing" target="_blank" rel="noreferrer noopener">tailscale.com/pricing ↗</a>
-              for the current price.
+              Nearest first. A city near home is fastest: traffic goes from your phone to home,
+              and from home to this city.
             </p>
-
-            <h3 class="sub">2. Choose which devices get it</h3>
-            <ol class="steps">
-              <li>In the same <strong>Mullvad VPN</strong> section, select <strong>Add devices</strong>.</li>
-              <li>Pick your phone, and any laptop you want it on. Each one uses one of the five places.</li>
-            </ol>
+            <div class="row">
+              <button type="button" class="primary" id="mv-connect">Set up</button>
+            </div>
+            <p class="error" id="mv-connect-error" hidden></p>
             <p class="hint">
-              Leave this machine out. A server using Mullvad would send all its own traffic
-              through it too, including the Cloudflare tunnel and app updates.
+              It uses one of the five devices your Mullvad account allows. The account number
+              stays on this machine, in the stack's <code>.env</code>.
             </p>
+          </article>
 
-            <h3 class="sub">3. Turn it on, on the phone</h3>
-            <p><strong>iPhone and iPad:</strong></p>
-            <ol class="steps">
-              <li>Open Tailscale and tap <strong>Exit Node</strong>.</li>
-              <li>Tap <strong>Location Based</strong> and pick a country or city.</li>
-            </ol>
-            <p><strong>Android:</strong></p>
-            <ol class="steps">
-              <li>Open Tailscale and select <strong>Exit Node</strong> (or <strong>Use exit node</strong> in the menu).</li>
-              <li>Pick a Mullvad location.</li>
-            </ol>
-            <p class="hint">
-              The first time can take up to two minutes while Tailscale sets up the account.
-              To stop using it, set the exit node back to <strong>None</strong>.
-            </p>
+          <article class="card span2" id="mv-live" hidden>
+            <div class="node-head">
+              <h3>Mullvad exit node</h3>
+              <span id="mv-state" class="tag">–</span>
+            </div>
+            <dl class="kv">
+              <div><dt>Server</dt><dd id="mv-server">–</dd></div>
+              <div><dt>Seen from the internet as</dt><dd id="mv-exit">–</dd></div>
+              <div><dt>Mullvad account</dt><dd id="mv-expiry">–</dd></div>
+              <div class="wide"><dt>Device on your Mullvad account</dt><dd id="mv-device">–</dd></div>
+            </dl>
+            <h3 class="sub" id="mv-checks-title">Finish setting it up</h3>
+            <ul class="ts-checks" id="mv-checks"></ul>
+            <div id="mv-next"></div>
+            <div class="row">
+              <button type="button" class="ghost" id="mv-refresh">Check again</button>
+            </div>
+          </article>
 
-            <h3 class="sub">4. Check it</h3>
-            <ol class="steps">
-              <li>
-                On the phone, open <a href="https://mullvad.net/check" target="_blank" rel="noreferrer noopener">mullvad.net/check ↗</a>.
-                It should say you are connected through Mullvad.
-              </li>
-              <li>
-                Open Nextcloud at <code id="ts-mullvad-home">your server's Tailscale address</code>. It
-                should open as usual: traffic to your tailnet does not go through Mullvad.
-              </li>
-            </ol>
+          <article class="card span2 guide" id="mv-use" hidden>
+            <h3>Use it on your devices</h3>
+            <p class="muted">Turn the Mullvad app off on them first: a phone runs one VPN at a time.</p>
+            <p><strong>iPhone, iPad and Android:</strong> open Tailscale, select <strong>Exit Node</strong>, and pick <strong class="mv-name">home-mullvad</strong>.</p>
+            <p><strong>Mac and Windows:</strong> select the Tailscale icon in the menu bar or tray, then <strong>Exit Node</strong> → <strong class="mv-name">home-mullvad</strong>.</p>
+            <p><strong>Linux:</strong></p>
+            <pre class="cmd" id="mv-linux-on">sudo tailscale set --exit-node=home-mullvad</pre>
+            <p>To stop, set the exit node back to <strong>None</strong>, or on Linux:</p>
+            <pre class="cmd">sudo tailscale set --exit-node=</pre>
             <p class="hint">
-              While an exit node is on, the phone cannot reach things on whatever Wi-Fi it is on,
-              like a printer, unless you turn on <strong>Allow local network access</strong> in
-              the Tailscale app. Your server is still reachable over Tailscale either way.
+              To check, open <a href="https://mullvad.net/check" target="_blank" rel="noreferrer noopener">mullvad.net/check ↗</a>
+              on the device. Away from home it may be slower than at home: the traffic goes
+              through your home connection on its way to Mullvad.
             </p>
+          </article>
+
+          <article class="card span2" id="mv-move" hidden>
+            <h3>Change city</h3>
+            <label>City
+              <select id="mv-location"></select>
+            </label>
+            <div class="row">
+              <button type="button" class="ghost" id="mv-move-go">Move</button>
+            </div>
+            <p class="hint">Devices using it drop for a few seconds while it reconnects.</p>
+          </article>
+
+          <article class="card span2 danger-zone" id="mv-remove-card" hidden>
+            <h3>Remove</h3>
+            <p class="muted">
+              Signs the exit node out of your tailnet, removes its device from your Mullvad
+              account, and forgets the account number here. Devices using it go back to their
+              normal connection.
+            </p>
+            <div class="row">
+              <button type="button" class="danger" id="mv-remove">Remove the Mullvad exit node</button>
+            </div>
           </article>
         </div>
       </div>

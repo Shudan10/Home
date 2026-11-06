@@ -136,6 +136,8 @@ function device(node, users, self = false) {
         connection,
         owner: users?.[String(node.UserID)]?.LoginName ?? null,
         exitNode: Boolean(node.ExitNode),
+        // Offered as an exit node and approved in the admin console.
+        exitNodeOption: Boolean(node.ExitNodeOption),
         keyExpiry: realTime(node.KeyExpiry),
         self,
     };

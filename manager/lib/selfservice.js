@@ -312,6 +312,7 @@ ${compose} up -d --force-recreate manager || {
 // Plan were missing from this list, so "remove everything" left both running.
 const CONTAINERS = [
     'quickstart-home-tunnel',
+    'quickstart-home-mullvad',
     'quickstart-home-nextcloud',
     'quickstart-home-nextcloud-db',
     'quickstart-home-nextcloud-redis',
@@ -342,6 +343,7 @@ const VOLUMES = [
     'quickstart-home-jellyfin-cache',
     'quickstart-home-mealplan-data',
     'quickstart-home-minecraft-data',
+    'quickstart-home-mullvad-tailscale',
 ];
 
 // Pulled by the stack but not built by it, so they may well be shared with
@@ -351,6 +353,8 @@ const BASE_IMAGES = [
     // The exact tag: `docker rmi` without one means :latest, which never
     // matches. Keep in step with the tunnel service in docker-compose.yml.
     'cloudflare/cloudflared:2026.10.7',
+    // The Mullvad exit node is built on this; keep in step with its Dockerfile.
+    'tailscale/tailscale:v1.104',
     // From before the tunnel, so an upgraded install cleans them up too.
     'nginx:1.27-alpine',
     'certbot/certbot:latest',
@@ -412,6 +416,7 @@ docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \\
 
 # Only once every container is off it.
 docker network rm quickstart-home-net >/dev/null 2>&1 || true
+docker network rm quickstart-home-vpn >/dev/null 2>&1 || true
 # Our images are gone by now, so their build cache is dangling and this reclaims
 # it. Without -a, cache that other projects still reference is left alone.
 docker builder prune -f >/dev/null 2>&1 || true

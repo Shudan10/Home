@@ -58,6 +58,7 @@ export const STACK_CONTAINERS = [
     { key: 'mealplan', label: 'meal plan', name: MEALPLAN_CONTAINER },
     { key: 'minecraft', label: 'minecraft', name: MINECRAFT_CONTAINER },
     { key: 'tunnel', label: 'cloudflare tunnel', name: TUNNEL_CONTAINER },
+    { key: 'mullvad', label: 'mullvad exit node', name: 'quickstart-home-mullvad' },
     { key: 'manager', label: 'control panel', name: MANAGER_CONTAINER },
 ];
 
