@@ -1787,7 +1787,17 @@ main {
        adjacent controls where a fat target would be easier to hit wrongly. */
     button, .nav-item, .subtab-btn { min-height: 44px; }
     .nav-row { min-height: 44px; }
-    .switch { min-height: 44px; display: inline-flex; align-items: center; }
+    /* The tap area grows, the switch does not. Growing the switch itself
+       stretched its track -- drawn to fill the whole box -- into a tall pill
+       with the knob floating in the middle. The invisible checkbox is what
+       takes the tap, so it is the thing made 44x44, centred on the switch. */
+    .switch input {
+        top: 50%;
+        left: 50%;
+        width: max(100%, 44px);
+        height: max(100%, 44px);
+        transform: translate(-50%, -50%);
+    }
 
     /* Hover glow is meaningless without a pointer, and on touch it sticks
        after a tap until something else is touched. */
