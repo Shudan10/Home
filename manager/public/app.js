@@ -285,6 +285,10 @@ function selectTab(name) {
     $('page-title').textContent = title;
     // Read on arrival rather than polled: nothing on it changes by itself.
     if (name === 'global') loadGlobal().catch(() => {});
+    if (name === 'backups') {
+        loadBackup().catch(() => {});
+        if (activeSubtab('backups') === 'backups-restore') loadRestore().catch(() => {});
+    }
     // This one does change by itself, but the stream pushes those changes --
     // this is the first paint.
     if (name === 'queue') loadQueue();
@@ -537,6 +541,13 @@ function progressFromLine(line) {
             pendingAction.backupIndex = (pendingAction.backupIndex ?? -1) + 1;
             return;
         }
+    }
+
+    // App backups are one app after another, each a "> Name" line; the bar
+    // moves an app's share at a time.
+    if (pendingAction.key === 'snapshots' && /^> /.test(line)) {
+        pendingAction.snapIndex = (pendingAction.snapIndex ?? -1) + 1;
+        return setProgress(Math.min(0.95, pendingAction.snapIndex / (pendingAction.snapTotal || 1)));
     }
 
     for (const [re, fraction] of ACTION_MARKS) {
@@ -823,8 +834,7 @@ function closeAction() {
 }
 
 /** Whether the Backup card is the one showing. */
-const backupOnScreen = () =>
-    $('tab-nextcloud')?.classList.contains('active') && activeSubtab('nextcloud') === 'nextcloud-backup';
+const backupOnScreen = () => $('tab-backups')?.classList.contains('active');
 
 $('action-close').addEventListener('click', closeAction);
 
@@ -1376,7 +1386,10 @@ const formFields = (name) =>
         jellyfin: ['jellyfin-pub-web', 'jellyfin-port', 'jellyfin-hwaccel'],
         mealplan: ['mealplan-pub-web', 'mealplan-port', 'mealplan-ref'],
         minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
-        backup: ['backup-enabled', 'backup-mirror', 'backup-interval', 'backup-destination'],
+        backup: [
+            'backup-enabled', 'backup-mirror', 'backup-interval', 'backup-destination', 'snap-enabled', 'snap-keep',
+            ...['nextcloud', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'panel'].map((k) => `snap-svc-${k}`),
+        ],
     })[name] ?? [];
 
 // Spelled out rather than built from APP_KEYS, which is declared further down
@@ -5704,10 +5717,11 @@ if ('serviceWorker' in navigator) {
     });
 }
 
-// ------------------------------------------------------------------ backup --
+// ----------------------------------------------------------------- backups --
 
 /**
- * The Backup tab.
+ * The Backups page: one drive, each app's data as nightly dated copies, and
+ * Nextcloud's files as a running copy -- plus the Restore tab.
  *
  * Destinations are chosen from a discovered list rather than typed, because a
  * mistyped path here does not fail: Docker creates a bind mount source that is
@@ -5715,18 +5729,18 @@ if ('serviceWorker' in navigator) {
  */
 let backupSources = [];
 let backupDrives = [];
+let snapState = null;
 
 function renderBackupSources() {
     const note = $('backup-sources-note');
     if (!note) return;
     if (!backupSources.length) {
         note.className = 'verdict bad';
-        note.textContent =
-            'Nextcloud has no shared folders yet, so there is nothing to back up. Add one under Settings.';
+        note.textContent = 'Nextcloud is not installed, or keeps no files yet, so there is nothing here to copy.';
         return;
     }
     note.className = 'verdict';
-    note.textContent = `Backs up what Nextcloud is serving: ${backupSources.join(', ')}.`;
+    note.textContent = `Copies what Nextcloud is serving: ${backupSources.join(', ')}.`;
 }
 
 function renderBackupDrives(selected) {
@@ -5734,18 +5748,18 @@ function renderBackupDrives(selected) {
     if (!sel) return;
     if (!backupDrives.length) {
         sel.innerHTML = '<option value="">No drives found</option>';
-        return;
+    } else {
+        const gb = (n) => `${(n / 1e9).toFixed(0)} GB`;
+        sel.innerHTML =
+            '<option value="">Choose a drive…</option>' +
+            backupDrives
+                .map(
+                    (d) =>
+                        `<option value="${escapeHtml(d.path)}"${d.path === selected ? ' selected' : ''}>` +
+                        `${escapeHtml(d.path)} — ${gb(d.free)} free of ${gb(d.total)}</option>`,
+                )
+                .join('');
     }
-    const gb = (n) => `${(n / 1e9).toFixed(0)} GB`;
-    sel.innerHTML =
-        '<option value="">Choose a drive…</option>' +
-        backupDrives
-            .map(
-                (d) =>
-                    `<option value="${escapeHtml(d.path)}"${d.path === selected ? ' selected' : ''}>` +
-                    `${escapeHtml(d.path)} — ${gb(d.free)} free of ${gb(d.total)}</option>`,
-            )
-            .join('');
     // A destination saved earlier for a drive that is not plugged in now would
     // otherwise silently become "Choose a drive", and saving would clear it.
     if (selected && !backupDrives.some((d) => d.path === selected)) {
@@ -5756,21 +5770,75 @@ function renderBackupDrives(selected) {
     }
 }
 
+/** "3 hours ago", or the date once it is far enough back for that to read better. */
+function whenAgo(iso) {
+    const t = new Date(iso);
+    const mins = Math.round((Date.now() - t) / 60_000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} min ago`;
+    if (mins < 24 * 60) return `${Math.round(mins / 60)} h ago`;
+    return t.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function snapLastLine(s) {
+    if (!s.present) return '<span class="muted">Not installed</span>';
+    const last = s.last;
+    if (!last) return '<span class="muted">Not backed up yet</span>';
+    if (last.ok === false) return `<span class="bad-text">Failed ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}</span>`;
+    const size = last.bytes ? ` · ${humanBytes(last.bytes)}` : '';
+    return `<span class="ok-text">Backed up ${escapeHtml(whenAgo(last.at))}${size}</span>`;
+}
+
+function renderSnapshots(keepEdits) {
+    const box = $('snap-services');
+    if (!snapState || !box) return;
+    const c = snapState.config;
+    if (!keepEdits) {
+        $('snap-enabled').checked = Boolean(c.enabled);
+        $('snap-keep').value = c.keep ?? 3;
+    }
+    const checked = (s) => (keepEdits && $(`snap-svc-${s.key}`) ? $(`snap-svc-${s.key}`).checked : s.included);
+    box.innerHTML = snapState.services
+        .map(
+            (s) => `
+        <div class="snap-row${s.present ? '' : ' absent'}">
+          <label class="check">
+            <input type="checkbox" id="snap-svc-${s.key}"${checked(s) ? ' checked' : ''}${s.present ? '' : ' disabled'}>
+            <strong>${escapeHtml(s.label)}</strong>
+          </label>
+          <p class="hint">${escapeHtml(s.what)}</p>
+          <div class="snap-status">${snapLastLine(s)}</div>
+          <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present ? '' : ' disabled'}>Back up now</button>
+        </div>`,
+        )
+        .join('');
+    const next = $('snap-next');
+    if (!snapState.nextRunAt) {
+        next.textContent = c.enabled ? 'Choose a drive above and save, and the nightly copies start.' : 'Nightly copies are off. Back up now still works.';
+    } else {
+        const at = new Date(snapState.nextRunAt);
+        next.textContent = `Next copy: ${at.toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' })} (${c.timezone}).`;
+    }
+}
+
 async function loadBackup() {
     let r;
+    let snaps;
     try {
-        r = await api('/api/backup');
+        [r, snaps] = await Promise.all([api('/api/backup'), api('/api/snapshots')]);
     } catch {
         return;
     }
     const c = r.config ?? {};
     backupDrives = r.drives ?? [];
     backupSources = r.sources ?? [];
+    snapState = snaps;
     renderBackupSources();
     // The drive list is always redrawn -- a drive may have been plugged in --
     // but while the form has unsaved edits it keeps the drive picked in it,
     // and the boxes keep what was typed. See dirtyForms.
-    if (isDirty('backup')) {
+    const editing = isDirty('backup');
+    if (editing) {
         renderBackupDrives($('backup-destination').value || c.destination);
     } else {
         renderBackupDrives(c.destination);
@@ -5778,16 +5846,16 @@ async function loadBackup() {
         $('backup-mirror').checked = Boolean(c.mirrorDeletes);
         $('backup-interval').value = c.intervalMinutes ?? 15;
     }
+    renderSnapshots(editing);
 
     const last = $('backup-last');
+    last.hidden = false;
     if (c.lastRunAt) {
-        last.hidden = false;
         last.className = c.lastOk === false ? 'verdict bad' : 'verdict ok';
-        last.textContent = `${c.lastOk === false ? 'Last attempt failed' : 'Last backup'}: ${c.lastResult ?? ''} (${new Date(c.lastRunAt).toLocaleString()})`;
+        last.textContent = `${c.lastOk === false ? 'Last attempt failed' : 'Last copy'}: ${c.lastResult ?? ''} (${new Date(c.lastRunAt).toLocaleString()})`;
     } else {
-        last.hidden = false;
         last.className = 'verdict';
-        last.textContent = 'No backup has run yet.';
+        last.textContent = 'Nextcloud\'s files have not been copied yet.';
     }
 }
 
@@ -5805,14 +5873,26 @@ $('backup-rescan').addEventListener('click', async () => {
 $('backup-save').addEventListener('click', async () => {
     const err = $('backup-error');
     err.hidden = true;
-    const body = {
-        enabled: $('backup-enabled').checked,
-        destination: $('backup-destination').value,
-        intervalMinutes: Number($('backup-interval').value),
-        mirrorDeletes: $('backup-mirror').checked,
-    };
+    const services = {};
+    for (const s of snapState?.services ?? []) {
+        const box = $(`snap-svc-${s.key}`);
+        if (box && s.present) services[s.key] = box.checked;
+    }
     try {
-        await api('/api/backup', { method: 'PUT', body });
+        // The drive first: the nightly copies need one to be switched on.
+        await api('/api/backup', {
+            method: 'PUT',
+            body: {
+                enabled: $('backup-enabled').checked,
+                destination: $('backup-destination').value,
+                intervalMinutes: Number($('backup-interval').value),
+                mirrorDeletes: $('backup-mirror').checked,
+            },
+        });
+        await api('/api/snapshots', {
+            method: 'PUT',
+            body: { enabled: $('snap-enabled').checked, keep: Number($('snap-keep').value), services },
+        });
         setFormDirty('backup', false);
         kResult('backup-result', 'Saved.', false);
         await loadBackup();
@@ -5825,7 +5905,7 @@ $('backup-save').addEventListener('click', async () => {
 $('backup-run').addEventListener('click', async () => {
     const pending = runAction({
         key: 'backup',
-        title: 'Backing up',
+        title: 'Copying Nextcloud files',
         note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
         request: () => api('/api/backup/run', { method: 'POST' }),
     });
@@ -5840,4 +5920,131 @@ $('backup-run').addEventListener('click', async () => {
     }
     const job = await pending;
     if (job) loadBackup().catch(() => {});
+});
+
+/** Backs up one app, or every one that is ticked when `service` is null. */
+async function runSnapshots(service) {
+    if (isDirty('backup')) {
+        toast('Save or discard your changes first.', 'bad');
+        return;
+    }
+    const label = service ? snapState?.services.find((s) => s.key === service)?.label : null;
+    const pending = runAction({
+        key: 'snapshots',
+        title: label ? `Backing up ${label}` : 'Backing up app data',
+        note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
+        request: () => api('/api/snapshots/run', { method: 'POST', body: service ? { service } : {} }),
+    });
+    if (pendingAction) {
+        pendingAction.snapTotal = service ? 1 : (snapState?.services ?? []).filter((s) => s.present && s.included).length || 1;
+        pendingAction.snapIndex = -1;
+    }
+    const job = await pending;
+    if (job) loadBackup().catch(() => {});
+}
+
+$('snap-run-all').addEventListener('click', () => runSnapshots(null));
+$('snap-services').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-snap-run]');
+    if (button) runSnapshots(button.dataset.snapRun);
+});
+
+// --------------------------------------------------------------- restore --
+
+const COPY_KIND = { nightly: 'Nightly', manual: 'Backed up by hand', 'before-restore': 'Saved before a restore' };
+
+const RESTORE_WARNINGS = {
+    nextcloud:
+        'Nextcloud is unavailable for a few minutes. Users, shares, calendars, contacts and settings go back to how they were then. ' +
+        'Your files stay as they are now, and Nextcloud checks every one of them afterwards.',
+    kachat: 'KaChat Nextcloud is unavailable for a few minutes. Its accounts, links and every file in it go back to how they were then.',
+    jellyfin: 'Jellyfin stops for a minute. Users, watch history and libraries go back to how they were then.',
+    mealplan: 'Meal Plan stops for a moment. Every week, recipe and list goes back to how it was then.',
+    minecraft: 'The Minecraft server stops, and everyone playing is disconnected. The worlds go back to how they were then.',
+    panel:
+        'The panel restarts. Every setting and password it keeps goes back to how it was then, including the password you sign in to this panel with. ' +
+        'Apps keep running; a changed setting takes effect the next time that app is updated or restarted.',
+};
+
+async function loadRestore() {
+    const box = $('restore-list');
+    const err = $('restore-error');
+    err.hidden = true;
+    box.innerHTML = '<p class="muted">Reading the drive…</p>';
+    if (!snapState) await loadBackup();
+    let r;
+    try {
+        r = await api('/api/snapshots/copies');
+    } catch (e) {
+        r = { copies: {}, error: e.message };
+    }
+    if (r.error) {
+        err.hidden = false;
+        err.textContent = r.error;
+    }
+    const services = snapState?.services ?? [];
+    box.innerHTML = services
+        .map((s) => {
+            const copies = r.copies?.[s.key] ?? [];
+            const rows = copies.length
+                ? copies
+                      .map(
+                          (c) => `
+                <li class="restore-copy">
+                  <span class="restore-when">${escapeHtml(new Date(c.createdAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>
+                  <span class="muted">${escapeHtml(COPY_KIND[c.kind] ?? c.kind)} · ${humanBytes(c.bytes)}</span>
+                  <button type="button" class="ghost mini" data-restore="${escapeHtml(c.id)}" data-restore-when="${escapeHtml(c.createdAt)}">Restore</button>
+                </li>`,
+                      )
+                      .join('')
+                : '<li class="muted">No copies on the drive yet.</li>';
+            const options =
+                (s.key === 'nextcloud'
+                    ? `<label class="check"><input type="checkbox" id="restore-putback-${s.key}"> Also put back files that are missing from Nextcloud, from the copy of its files on the drive</label>`
+                    : '') +
+                `<label class="check"><input type="checkbox" id="restore-nosave-${s.key}"> Don't save it as it is now first (only if it is too broken to be copied)</label>`;
+            return `
+            <article class="card">
+              <h3>${escapeHtml(s.label)}</h3>
+              <ul class="restore-copies">${rows}</ul>
+              ${copies.length ? `<div class="restore-options">${options}</div>` : ''}
+            </article>`;
+        })
+        .join('');
+}
+
+$('restore-refresh').addEventListener('click', () => loadRestore());
+$('backups-restore-tab').addEventListener('click', () => loadRestore());
+
+$('restore-list').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-restore]');
+    if (!button) return;
+    const id = button.dataset.restore;
+    const key = id.split('/')[0];
+    const s = snapState?.services.find((x) => x.key === key);
+    const when = new Date(button.dataset.restoreWhen).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const putBack = Boolean($(`restore-putback-${key}`)?.checked);
+    const saveFirst = !$(`restore-nosave-${key}`)?.checked;
+    const ok = await askConfirm({
+        title: `Restore ${s?.label ?? key} to ${when}?`,
+        body:
+            `${RESTORE_WARNINGS[key] ?? ''}\n\n` +
+            (saveFirst
+                ? 'It is saved as it is now first, so you can undo this from the same list.'
+                : 'It will NOT be saved first, so this cannot be undone.') +
+            (putBack ? '\n\nMissing files are copied back from the drive; files that are there now are left alone.' : ''),
+        confirmLabel: 'Restore',
+        danger: true,
+    });
+    if (!ok) return;
+    const job = await runAction({
+        key: 'restore',
+        title: `Restoring ${s?.label ?? key}`,
+        note: 'This runs in the manager, so closing this page does not stop it.',
+        request: () => api('/api/snapshots/restore', { method: 'POST', body: { id, putBack, saveFirst } }),
+    });
+    if (job) {
+        loadBackup().catch(() => {});
+        loadRestore().catch(() => {});
+    }
 });

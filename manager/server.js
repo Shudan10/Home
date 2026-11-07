@@ -13,6 +13,7 @@ import { loadManagerConfig, readEnvFile, saveManagerConfig, updateEnvFile } from
 import * as dockerctl from './lib/dockerctl.js';
 import * as apps from './lib/apps.js';
 import * as backup from './lib/backup.js';
+import * as snapshots from './lib/snapshots.js';
 import * as mountwatch from './lib/mountwatch.js';
 import * as host from './lib/host.js';
 import * as selfservice from './lib/selfservice.js';
@@ -855,6 +856,70 @@ function enqueueBackup() {
             throw err;
         }
     }, { key: 'backup' });
+}
+
+// ----------------------------------------------------------- app backups --
+
+/*
+ * The Backups page's other half: dated copies of each app's own data, made
+ * nightly, and putting one back. See lib/snapshots.js.
+ */
+route('GET', /^\/api\/snapshots$/, async (req, res) => {
+    sendJson(res, 200, await snapshots.status());
+});
+
+/** What is on the drive. Read from the drive, which takes a container. */
+route('GET', /^\/api\/snapshots\/copies$/, async (req, res) => {
+    try {
+        sendJson(res, 200, { copies: await snapshots.listCopies() });
+    } catch (err) {
+        sendJson(res, 200, { copies: {}, error: err.message });
+    }
+});
+
+route('PUT', /^\/api\/snapshots$/, async (req, res) => {
+    const { cfg, errors } = snapshots.validateSnapshotConfig((await readBody(req)) ?? {});
+    if (errors.length) return fail(res, 400, errors[0], { details: errors });
+    if (cfg.enabled && !backup.loadBackupConfig().destination) {
+        return fail(res, 400, 'Pick a drive to back up to first.');
+    }
+    snapshots.saveSnapshotConfig(cfg);
+    sendJson(res, 200, { ok: true, ...(await snapshots.status()) });
+});
+
+route('POST', /^\/api\/snapshots\/run$/, async (req, res) => {
+    const body = (await readBody(req)) ?? {};
+    const only = body.service ? String(body.service) : null;
+    if (only && !snapshots.serviceFor(only)) return fail(res, 404, 'There is no such app to back up.');
+    const job = enqueueSnapshots({ kind: 'manual', only });
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+route('POST', /^\/api\/snapshots\/restore$/, async (req, res) => {
+    const body = (await readBody(req)) ?? {};
+    const id = String(body.id ?? '');
+    const service = snapshots.serviceFor(id.split('/')[0]);
+    if (!service) return fail(res, 400, 'That is not a backup this panel made.');
+    const job = jobs.start(`Restore ${service.label}`, (onLine) =>
+        snapshots.restore({
+            id,
+            putBack: Boolean(body.putBack),
+            saveFirst: body.saveFirst !== false,
+            onLine,
+            restartPanel: () => selfservice.restartManager(),
+        }),
+    // Keeps Nextcloud's cron and the other timers off the app while it is
+    // stopped and being put back.
+    { app: service.key });
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
+// Keyed, so the nightly run asked for while a manual one waits is the same run.
+function enqueueSnapshots({ kind, only = null }) {
+    const name = only ? `Back up ${snapshots.serviceFor(only).label}` : 'Back up app data';
+    return jobs.start(name, (onLine) => snapshots.backUp({ kind, only, onLine }), {
+        key: `snapshots:${only ?? 'all'}`,
+    });
 }
 
 route('GET', /^\/api\/jobs\/stream$/, async (req, res) => {
@@ -2445,6 +2510,9 @@ async function bootstrap() {
     // its own files has no backup source and every tick does nothing.
     await backup.resolveDataVolume();
     backup.scheduleFromConfig(log, enqueueBackup);
+    // The nightly copies run at 3 in the morning here, not in UTC.
+    await snapshots.adoptHostTimezone(log);
+    snapshots.schedule(() => enqueueSnapshots({ kind: 'nightly' }), log);
 
     // A bind mount is resolved once, when the container starts. Unplug the
     // drive Jellyfin reads from and plug it back in and the host is looking at

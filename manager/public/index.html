@@ -186,6 +186,10 @@
           <span class="nav-count" id="queue-count" hidden>0</span>
           <span class="sys-label">Update Queue</span>
         </button>
+        <button type="button" class="sys-item" data-tab="backups" title="Backups" aria-label="Backups">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18v12a1 1 0 01-1 1H4a1 1 0 01-1-1zM3 7l2-3h14l2 3M12 10v6M9 13l3 3 3-3"/></svg>
+          <span class="sys-label">Backups</span>
+        </button>
         <button type="button" class="sys-item" data-tab="global" title="Global settings" aria-label="Global settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.6 1.7 1.7 0 00-1.9.4l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.7 9a1.7 1.7 0 00-.4-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
           <span class="sys-label">Global settings</span>
@@ -267,7 +271,6 @@
       <nav class="subnav" aria-label="Nextcloud">
         <button class="subtab-btn active" data-subtab="nextcloud-overview">Overview</button>
         <button class="subtab-btn" data-subtab="nextcloud-settings">Settings</button>
-        <button class="subtab-btn" data-subtab="nextcloud-backup">Backup</button>
         <button class="subtab-btn" data-subtab="nextcloud-updates">Updates</button>
         <button class="subtab-btn" data-subtab="nextcloud-uninstall">Uninstall</button>
       </nav>
@@ -401,79 +404,6 @@
               pointing the desktop sync client at a folder on this same
               machine &mdash; syncing would store everything twice on one disk.
             </p>
-          </article>
-        </div>
-      </div>
-
-      <div id="sub-nextcloud-backup" class="subtab">
-        <div class="grid">
-          <article class="card span2">
-            <h3>Back up Nextcloud to a drive</h3>
-            <p class="muted">
-              Copies the folders Nextcloud is serving onto a drive plugged into
-              this machine. A copy, not a sync &mdash; nothing that happens to
-              the originals is repeated onto the drive, which is the point of
-              having one.
-            </p>
-            <div id="backup-sources-note" class="verdict"></div>
-            <div id="backup-last" class="verdict" hidden></div>
-          </article>
-
-          <article class="card span2">
-            <h3>Drive</h3>
-            <label>
-              Back up to
-              <select id="backup-destination"></select>
-            </label>
-            <p class="hint">
-              If your drive is not listed, plug it in and open it once in your
-              file manager, then press Rescan.
-            </p>
-            <div class="row">
-              <button type="button" id="backup-rescan" class="ghost">Rescan drives</button>
-            </div>
-          </article>
-
-          <article class="card">
-            <h3>Schedule</h3>
-            <label class="check">
-              <input type="checkbox" id="backup-enabled"> Back up automatically
-            </label>
-            <label class="inline">
-              Check every
-              <input type="number" id="backup-interval" min="5" max="43200" step="5" style="max-width:6rem">
-              minutes
-            </label>
-            <p class="hint">
-              Checking is cheap &mdash; about a second, even across thousands of
-              files &mdash; so a short interval costs almost nothing. A check
-              that finds no changes does nothing and says nothing; only a real
-              copy appears in the log. A run that finds the drive unplugged
-              records why and waits for the next one.
-            </p>
-          </article>
-
-          <article class="card">
-            <h3>Deleted files</h3>
-            <label class="check">
-              <input type="checkbox" id="backup-mirror"> Remove files from the drive when they are deleted here
-            </label>
-            <p class="hint">
-              Off by default, and worth leaving off. With this on the drive is a
-              mirror, and a mirror of a folder you have just deleted something
-              from is a folder with that thing deleted from it.
-            </p>
-          </article>
-
-          <article class="card span2">
-            <h3>Apply</h3>
-            <div class="row">
-              <button type="button" id="backup-save" class="primary">Save settings</button>
-              <button type="button" id="backup-revert" class="ghost" hidden>Discard changes</button>
-              <button type="button" id="backup-run" class="ghost">Back up now</button>
-            </div>
-            <p class="error" id="backup-error" hidden></p>
-            <div id="backup-result" class="verdict" hidden></div>
           </article>
         </div>
       </div>
@@ -1840,6 +1770,134 @@
       </div>
       <!-- One tile per container, all fed by a single multiplexed stream. -->
       <div class="log-grid" id="log-grid"></div>
+    </section>
+
+    <!-- ---------------------------------------------------------- backups -->
+    <!-- Every backup in one place, on one drive: each app's own data as dated
+         copies made every night, Nextcloud's files as a running copy, and
+         putting any of it back. -->
+    <section id="tab-backups" class="tab">
+      <nav class="subnav" aria-label="Backups">
+        <button class="subtab-btn active" data-subtab="backups-main">Back up</button>
+        <button class="subtab-btn" data-subtab="backups-restore" id="backups-restore-tab">Restore</button>
+      </nav>
+
+      <div id="sub-backups-main" class="subtab active">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Backup drive</h3>
+            <p class="muted">
+              Everything on this page is copied to one drive plugged into this
+              machine. Copies, not a sync &mdash; nothing that happens to the
+              originals is repeated onto the drive, which is the point of having one.
+            </p>
+            <label>
+              Back up to
+              <select id="backup-destination"></select>
+            </label>
+            <p class="hint">
+              If your drive is not listed, plug it in and open it once in your
+              file manager, then press Rescan.
+            </p>
+            <div class="row">
+              <button type="button" id="backup-rescan" class="ghost">Rescan drives</button>
+            </div>
+          </article>
+
+          <article class="card span2">
+            <h3>App data</h3>
+            <p class="muted">
+              A dated copy of each app's own data: databases, settings, users,
+              worlds. Each one is made from a still moment, so it can be put
+              back whole from the Restore tab. They go in a folder named
+              <code>Home Server backups</code> on the drive.
+            </p>
+            <label class="check">
+              <input type="checkbox" id="snap-enabled"> Back up every night at 3 AM
+            </label>
+            <label class="inline">
+              Keep the last
+              <input type="number" id="snap-keep" min="1" max="30" step="1" style="max-width:5rem">
+              copies of each app
+            </label>
+            <p class="hint" id="snap-next"></p>
+            <div class="snap-list" id="snap-services"></div>
+            <div class="row">
+              <button type="button" id="snap-run-all" class="ghost">Back up all now</button>
+            </div>
+          </article>
+
+          <article class="card span2">
+            <h3>Nextcloud files</h3>
+            <p class="muted">
+              Your files themselves, copied as an ordinary folder you can open on
+              any computer. New and changed files are copied as soon as the
+              check below finds them.
+            </p>
+            <div id="backup-sources-note" class="verdict"></div>
+            <div id="backup-last" class="verdict" hidden></div>
+            <label class="check">
+              <input type="checkbox" id="backup-enabled"> Copy new and changed files automatically
+            </label>
+            <label class="inline">
+              Check every
+              <input type="number" id="backup-interval" min="5" max="43200" step="5" style="max-width:6rem">
+              minutes
+            </label>
+            <p class="hint">
+              Checking is cheap &mdash; about a second, even across thousands of
+              files &mdash; and a check that finds nothing to copy does nothing
+              and says nothing. A drive that is unplugged is noted and tried again
+              next time.
+            </p>
+            <label class="check">
+              <input type="checkbox" id="backup-mirror"> Remove files from the drive when they are deleted here
+            </label>
+            <p class="hint">
+              Off by default, and worth leaving off. With this on the drive is a
+              mirror, and a mirror of a folder you have just deleted something
+              from is a folder with that thing deleted from it.
+            </p>
+            <div class="row">
+              <button type="button" id="backup-run" class="ghost">Copy files now</button>
+            </div>
+          </article>
+
+          <article class="card span2">
+            <h3>Apply</h3>
+            <div class="row">
+              <button type="button" id="backup-save" class="primary">Save settings</button>
+              <button type="button" id="backup-revert" class="ghost" hidden>Discard changes</button>
+            </div>
+            <p class="error" id="backup-error" hidden></p>
+            <div id="backup-result" class="verdict" hidden></div>
+          </article>
+        </div>
+      </div>
+
+      <div id="sub-backups-restore" class="subtab">
+        <div class="grid">
+          <article class="card span2">
+            <h3>Put an app back the way it was</h3>
+            <p class="muted">
+              Pick an app and one of its copies. The panel first saves the app as
+              it is now &mdash; so a restore can itself be undone from this same
+              list &mdash; then stops it, puts the copy back and starts it again.
+              Only that app changes; everything else keeps running.
+            </p>
+            <p class="hint">
+              Anything changed in that app since the copy was made is replaced.
+              The list is read from the drive, so it also shows copies made
+              before this machine was reinstalled.
+            </p>
+            <div class="row">
+              <button type="button" id="restore-refresh" class="ghost">Refresh list</button>
+            </div>
+            <p class="error" id="restore-error" hidden></p>
+          </article>
+          <div class="span2 restore-list" id="restore-list"></div>
+        </div>
+      </div>
     </section>
 
     <!-- -------------------------------------------------- global settings -->

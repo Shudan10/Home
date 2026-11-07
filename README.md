@@ -113,6 +113,19 @@ are not on the internet. Calls use a public STUN server, so no port is opened
 anywhere; calls between two phones on strict networks need a relay (TURN),
 which is not set up.
 
+**Backups** — one page, in the top bar, for everything worth keeping, all on one
+drive plugged into the machine. Each app's own data (both Nextclouds' databases
+and settings, KaChat's files, Jellyfin's users and watch history, Meal Plan,
+the Minecraft worlds, and the panel's own `.env` and `conf/`) is copied as a
+dated archive every night at 3 AM, in the machine's timezone, and the last few
+are kept (three unless changed) in `Home Server backups/` on the drive.
+Nextcloud's files are copied separately, as an ordinary folder, whenever they
+change. The Restore tab lists what is on the drive and puts any copy back from
+the panel: it saves the app as it is first, so a restore can be undone the same
+way, then stops the app, replaces its data and starts it again. Nextcloud can
+also have files missing from it copied back from the drive. The panel-settings
+copy holds passwords, so anyone with the drive can read them.
+
 ## Installing
 
 ```bash

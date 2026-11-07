@@ -16,7 +16,7 @@ import { isSafeHostPath, loadAppsConfig } from './apps.js';
  * So: rsync, one pass, no daemon, nothing to misread when the drive is pulled.
  */
 
-const IMAGE = 'quickstart-home/manager:1';
+export const IMAGE = 'quickstart-home/manager:1';
 
 /** Where removable drives appear once the desktop has mounted them. */
 const SEARCH_ROOTS = ['/media', '/run/media', '/mnt'];
@@ -432,15 +432,24 @@ function rsyncFlags(cfg, { dryRun }) {
  * Everything that varies -- the folder below the mount, the name, the flags --
  * goes in as arguments rather than into the script.
  */
-const DRIVE_GONE = 90;
+export const DRIVE_GONE = 90;
 
-const COPY_SCRIPT = [
-    'set -o pipefail',
-    'rest=$1; name=$2; dry=$3; shift 3',
+/**
+ * The last look at the drive, as shell, for any throwaway container that has
+ * the drive's mount point at /dest-root and the host root at /host. Shared with
+ * the app backups in snapshots.js, which write and read the same drive.
+ */
+export const DRIVE_GUARD = [
     'fs() { df -P "$1" 2>/dev/null | awk \'NR==2 {print $1}\'; }',
     'if [ "$(stat -c %d /dest-root)" = "$(stat -c %d /host)" ] || [ "$(fs /dest-root)" = "$(fs /host)" ]; then',
     `  echo "The backup drive is not mounted any more, so nothing was written." >&2; exit ${DRIVE_GONE}`,
     'fi',
+].join('\n');
+
+const COPY_SCRIPT = [
+    'set -o pipefail',
+    'rest=$1; name=$2; dry=$3; shift 3',
+    DRIVE_GUARD,
     'out="/dest-root/${rest:+$rest/}$name"',
     'if [ "$dry" = 1 ]; then',
     '  rsync "$@" "/src/$name/" "$out/" 2>/dev/null',

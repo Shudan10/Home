@@ -153,6 +153,80 @@ export function run(cmd, args, { onLine, timeoutMs = 15 * 60_000, cwd = STACK_LO
 
 export const docker = (args, opts) => run('docker', args, opts);
 
+/**
+ * Two docker commands with the first one's output fed into the second's input,
+ * like `a | b` -- without a shell, so neither command is ever re-parsed.
+ *
+ * What a database dump needs: the dump runs inside the database's own
+ * container, and the file it becomes has to land on a drive only a throwaway
+ * container can reach. Neither container can see the other's side, and the
+ * panel between them holds nothing but the stream.
+ *
+ * Both have to succeed. A dump that died half way still closes its output
+ * cleanly, so the receiving side finishing is no evidence of anything; the
+ * sending side's exit code is the only thing that says the stream was whole.
+ * stderr from both, and stdout from the second, go to `onLine`.
+ */
+export function pipeDocker(fromArgs, toArgs, { onLine, timeoutMs = 60 * 60_000 } = {}) {
+    return new Promise((resolve, reject) => {
+        const jobId = jobContext.getStore()?.id ?? null;
+        const from = spawn('docker', fromArgs, { cwd: STACK_LOCAL });
+        const to = spawn('docker', toArgs, { cwd: STACK_LOCAL });
+        const entries = [{ child: from, jobId }, { child: to, jobId }];
+        if (jobId) for (const e of entries) LIVE.add(e);
+
+        let stderr = '';
+        let pending = '';
+        const emit = (chunk) => {
+            stderr = keepTail(stderr + chunk);
+            if (!onLine) return;
+            pending += chunk;
+            const lines = pending.split('\n');
+            pending = lines.pop() ?? '';
+            for (const line of lines) onLine(line);
+        };
+
+        from.stdout.pipe(to.stdin);
+        // The reader going away mid-stream is reported by its own exit code;
+        // the EPIPE the writer then gets is not a second error worth throwing.
+        to.stdin.on('error', () => {});
+        from.stderr.on('data', (d) => emit(d.toString()));
+        to.stderr.on('data', (d) => emit(d.toString()));
+        to.stdout.on('data', (d) => emit(d.toString()));
+
+        const codes = new Map();
+        let failedToStart = null;
+        const timer = setTimeout(() => {
+            from.kill('SIGKILL');
+            to.kill('SIGKILL');
+        }, timeoutMs);
+        const settle = () => {
+            if (codes.size < 2) return;
+            clearTimeout(timer);
+            for (const e of entries) LIVE.delete(e);
+            if (pending && onLine) onLine(pending);
+            const a = codes.get(from);
+            const b = codes.get(to);
+            if (failedToStart) return reject(new CommandError(`failed to run docker: ${failedToStart}`, { code: -1, stdout: '', stderr }));
+            if (a === 0 && b === 0) return resolve({ stderr });
+            const code = a !== 0 ? a : b;
+            reject(new CommandError(`docker exited with code ${code}: ${errorTail(stderr)}`, { code, stdout: '', stderr }));
+        };
+        for (const child of [from, to]) {
+            child.on('error', (err) => {
+                failedToStart = err.message;
+                codes.set(child, -1);
+                settle();
+            });
+            child.on('close', (code) => {
+                codes.set(child, code ?? -1);
+                if (child === from && code !== 0) to.stdin.end();
+                settle();
+            });
+        }
+    });
+}
+
 function composeFiles() {
     const files = ['-f', COMPOSE_FILE];
     const override = path.join(CONF_DIR, 'apps-ports.yml');
