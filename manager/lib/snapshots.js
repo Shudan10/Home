@@ -1,7 +1,9 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadManagerConfig, saveManagerConfig } from './store.js';
 import { docker, pipeDocker, containerState, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER, MINECRAFT_CONTAINER, NEXTCLOUD_CONTAINER } from './dockerctl.js';
 import { IMAGE, DRIVE_GUARD, DRIVE_GONE, MAX_DELETES, briefError, checkDestination, loadBackupConfig, saveBackupConfig, backupSources, resolveDataVolume, run as copyNextcloudFiles } from './backup.js';
-import { STACK_HOST } from './paths.js';
+import { STACK_HOST, STACK_LOCAL } from './paths.js';
 import { rcon } from './minecraft.js';
 import { cancelRequested } from './jobs.js';
 
@@ -207,6 +209,106 @@ const stampFor = (d) => `${localDate(d)}_${pad(d.getHours())}${pad(d.getMinutes(
 
 const ID_RE = /^([a-z]+)\/(\d{4}-\d{2}-\d{2}_\d{6})(_before-restore)?$/;
 
+// ------------------------------------------------------------------- logs ---
+
+/*
+ * Every backup and restore keeps its whole log as a file, in one folder of
+ * the install (logs/backups), so the page can say what happened in a line
+ * and link to the rest. The Update Queue's copy lives only in memory and only
+ * for the last ten jobs; these outlast both.
+ *
+ * rsync's progress lines are left out. They are most of what it prints, they
+ * say nothing once the copy is over, and with them a night's log was
+ * thousands of lines of "12,878,868,891B 17% 51.3MB/s".
+ */
+export const LOG_DIR = path.join(STACK_LOCAL, 'logs', 'backups');
+const KEEP_LOGS = 60;
+const PROGRESS_LINE = /^\s*[\d,]+B?\s+\d+%/;
+export const LOG_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{6} [a-z -]+\.log$/;
+
+/*
+ * The panel runs as root and the folder is the user's, so anything it makes
+ * there is given to whoever owns the install -- or the uninstaller, running
+ * as that user, could not remove it.
+ */
+function giveToOwner(p) {
+    try {
+        const { uid, gid } = fs.statSync(STACK_LOCAL);
+        fs.chownSync(p, uid, gid);
+    } catch {
+        /* not root, or not there: nothing to hand over */
+    }
+}
+
+function openLog(what) {
+    const name = `${stampFor(new Date())} ${what}.log`;
+    const file = path.join(LOG_DIR, name);
+    try {
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+        giveToOwner(path.dirname(LOG_DIR));
+        giveToOwner(LOG_DIR);
+    } catch {
+        /* a log that cannot be written is not a reason to stop a backup */
+    }
+    const write = (text) => {
+        const lines = String(text).split('\n').filter((l) => !PROGRESS_LINE.test(l));
+        if (!lines.some((l) => l.trim())) return;
+        try {
+            fs.appendFileSync(file, `${lines.join('\n')}\n`);
+        } catch {
+            /* as above */
+        }
+    };
+    write(`${new Date().toString()}`);
+    return {
+        name,
+        tee: (onLine) => (line) => {
+            onLine(line);
+            write(line);
+        },
+        close() {
+            giveToOwner(file);
+            try {
+                const old = fs.readdirSync(LOG_DIR).filter((n) => LOG_NAME_RE.test(n)).sort().reverse().slice(KEEP_LOGS);
+                for (const n of old) fs.rmSync(path.join(LOG_DIR, n), { force: true });
+            } catch {
+                /* as above */
+            }
+        },
+    };
+}
+
+/** The newest logs, newest first. */
+export function listLogs() {
+    try {
+        return fs.readdirSync(LOG_DIR).filter((n) => LOG_NAME_RE.test(n)).sort().reverse();
+    } catch {
+        return [];
+    }
+}
+
+export function readLog(name) {
+    if (!LOG_NAME_RE.test(String(name))) return null;
+    try {
+        return fs.readFileSync(path.join(LOG_DIR, name), 'utf8');
+    } catch {
+        return null;
+    }
+}
+
+/*
+ * A result as the page shows it: a sentence. Results saved before errors
+ * were shortened carry rsync's progress in them, and are cleaned the same
+ * way on the way out rather than left to fill the row.
+ */
+function tidy(text) {
+    if (!text) return text;
+    let t = String(text);
+    if (/docker exited with code 1(43|37)\b/.test(t)) t = `${t.split(/docker exited with code/)[0]}stopped before it finished.`;
+    t = t.replace(/\s*[\d,]+B\s+\d+%\s+[\d.]+[KMGT]?B\/s\s+[\d:]+(\s*\(xfr#\d+, to-chk=\d+\/\d+\))?/g, '').trim();
+    return t.length > 280 ? `${t.slice(0, 277)}…` : t;
+}
+
 // ------------------------------------------------------- on the drive ---
 
 /*
@@ -218,8 +320,7 @@ const ID_RE = /^([a-z]+)\/(\d{4}-\d{2}-\d{2}_\d{6})(_before-restore)?$/;
  */
 function onDrive(target, script, args = [], { mounts = [], readOnly = false, interactive = false } = {}) {
     return [
-        // --init so that Cancel's TERM reaches the script: see copyArgs in backup.js.
-        'run', '--rm', '--init',
+        'run', '--rm',
         ...(interactive ? ['-i'] : []),
         ...mounts.flatMap((m) => ['-v', m]),
         '-v', `${target.anchor}:/dest-root${readOnly ? ':ro' : ''}`,
@@ -456,7 +557,20 @@ async function copyFiles(onLine, { allowDeletes = false } = {}) {
  * Copies every service that is switched on and installed (or just `only`).
  * One failing does not stop the rest; the job fails at the end, naming them.
  */
-export async function backUp({ kind = 'manual', only = null, allowDeletes = false, onLine = () => {} } = {}) {
+export async function backUp(opts = {}) {
+    const log = openLog(opts.kind === 'nightly' ? 'nightly backup' : opts.only ? `backup ${opts.only}` : 'backup');
+    const onLine = log.tee(opts.onLine ?? (() => {}));
+    try {
+        return await backUpEach({ ...opts, onLine, logName: log.name });
+    } catch (err) {
+        onLine(`\n${err.message}`);
+        throw err;
+    } finally {
+        log.close();
+    }
+}
+
+async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, onLine = () => {}, logName = null } = {}) {
     const target = await driveTarget();
     const cfg = loadSnapshotConfig();
     const volumes = await existingVolumes();
@@ -476,7 +590,7 @@ export async function backUp({ kind = 'manual', only = null, allowDeletes = fals
             const { id, bytes } = await copyService(s, target, { kind, onLine });
             await prune(s, target, cfg.keep, onLine).catch((err) => onLine(`Could not remove older copies: ${err.message}`));
             if (s.key === 'nextcloud' && !cancelRequested()) await copyFiles(onLine, { allowDeletes });
-            recordLast(s.key, { at: new Date().toISOString(), ok: true, id, bytes, result: 'Backed up.' });
+            recordLast(s.key, { at: new Date().toISOString(), ok: true, id, bytes, result: 'Backed up.', log: logName });
             onLine(`${s.label}: done.`);
             copied += 1;
         } catch (err) {
@@ -484,19 +598,19 @@ export async function backUp({ kind = 'manual', only = null, allowDeletes = fals
                 // Its earlier copies are untouched -- older ones are only
                 // removed after a new one is whole -- so there is nothing to
                 // warn about beyond tonight's not being there.
-                recordLast(s.key, { at: new Date().toISOString(), ok: false, result: 'Cancelled before it finished. Its earlier copies are still on the drive.' });
+                recordLast(s.key, { at: new Date().toISOString(), ok: false, result: 'Cancelled before it finished. Its earlier copies are still on the drive.', log: logName });
                 onLine(`${s.label}: cancelled. Nothing it already had on the drive was touched.`);
                 break;
             }
             const said = err.message.startsWith('The database was copied') ? err.message : briefError(err);
-            recordLast(s.key, { at: new Date().toISOString(), ok: false, result: said });
+            recordLast(s.key, { at: new Date().toISOString(), ok: false, result: said, log: logName });
             onLine(`${s.label}: failed. ${said}`);
             failed.push(s.label);
             // Nothing else will get further on a drive that has gone.
             if (/drive went away|not on a drive of its own/.test(err.message)) break;
         }
     }
-    if (failed.length) throw new Error(`Could not back up ${failed.join(', ')}. The log above says why.`);
+    if (failed.length) throw new Error(`Could not back up ${failed.join(', ')}. The log says why.`);
     onLine(`\nBacked up ${copied} app${copied === 1 ? '' : 's'} to ${loadBackupConfig().destination}/${ROOT}.`);
     return { copied };
 }
@@ -554,7 +668,7 @@ async function putBackFiles(onLine) {
             'rsync -a --ignore-existing --info=stats1 --chown="$(stat -c %u:%g /dst)" --exclude=lost+found "$from/" /dst/',
         ].join('\n');
         await docker(
-            ['run', '--rm', '--init', '-v', `${src}:/dst`, '-v', `${files.anchor}:/dest-root:ro`, '-v', '/:/host:ro', IMAGE, 'sh', '-c', `set -eu\n${script}`, 'sh', files.rest, name],
+            ['run', '--rm', '-v', `${src}:/dst`, '-v', `${files.anchor}:/dest-root:ro`, '-v', '/:/host:ro', IMAGE, 'sh', '-c', `set -eu\n${script}`, 'sh', files.rest, name],
             { onLine, timeoutMs: 12 * 60 * 60_000 },
         );
     }
@@ -593,7 +707,21 @@ async function unpack(s, target, id, onLine) {
  * `restartPanel` is called for the panel's own settings, which are only read
  * when the panel starts.
  */
-export async function restore({ id, putBack = false, saveFirst = true, onLine = () => {}, restartPanel = async () => {} }) {
+export async function restore(opts) {
+    const key = String(opts?.id ?? '').split('/')[0];
+    const log = openLog(`restore ${byKey.has(key) ? key : 'unknown'}`);
+    const onLine = log.tee(opts.onLine ?? (() => {}));
+    try {
+        return await restoreOne({ ...opts, onLine });
+    } catch (err) {
+        onLine(`\n${err.message}`);
+        throw err;
+    } finally {
+        log.close();
+    }
+}
+
+async function restoreOne({ id, putBack = false, saveFirst = true, onLine = () => {}, restartPanel = async () => {} }) {
     const m = ID_RE.exec(String(id ?? ''));
     const s = m && serviceFor(m[1]);
     if (!s) throw new Error('That is not a backup this panel made.');
@@ -683,6 +811,8 @@ export async function status() {
     const volumes = await existingVolumes();
     return {
         config: { enabled: cfg.enabled, keep: cfg.keep, hour: NIGHTLY_HOUR, timezone: process.env.TZ || 'UTC' },
+        logs: listLogs().slice(0, 20),
+        logFolder: path.join(STACK_HOST, 'logs', 'backups'),
         nextRunAt: nextRun(cfg),
         root: ROOT,
         services: SERVICES.map((s) => ({
@@ -691,7 +821,7 @@ export async function status() {
             what: s.what,
             present: isPresent(s, volumes),
             included: isIncluded(cfg, s.key),
-            last: cfg.last[s.key] ?? null,
+            last: cfg.last[s.key] ? { ...cfg.last[s.key], result: tidy(cfg.last[s.key].result) } : null,
             ...(s.key === 'nextcloud' ? { files: filesStatus() } : {}),
         })),
     };
@@ -701,11 +831,10 @@ function filesStatus() {
     const b = loadBackupConfig();
     return {
         hasFiles: backupSources().length > 0,
-        mirrorDeletes: Boolean(b.mirrorDeletes),
         lastRunAt: b.lastRunAt,
         lastOk: b.lastOk,
         lastSkipped: b.lastSkipped ?? 0,
-        lastError: b.lastOk === false ? b.lastResult : null,
+        lastError: b.lastOk === false ? tidy(b.lastResult) : null,
         heldDeletes: b.heldDeletes ?? 0,
         maxDeletes: MAX_DELETES,
         // Where on the drive the copy goes: the folder a mirror is in charge

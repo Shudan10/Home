@@ -1379,7 +1379,7 @@ const formFields = (name) =>
         mealplan: ['mealplan-pub-web', 'mealplan-port', 'mealplan-ref'],
         minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
         backup: [
-            'backup-mirror', 'backup-destination', 'snap-enabled', 'snap-keep',
+            'backup-destination', 'snap-enabled', 'snap-keep',
             ...['nextcloud', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'panel'].map((k) => `snap-svc-${k}`),
         ],
     })[name] ?? [];
@@ -5774,15 +5774,19 @@ function snapFilesLine(f) {
     return `<div><span class="ok-text">Files: copied ${escapeHtml(whenAgo(f.lastRunAt))}</span>${skipped}</div>${held}`;
 }
 
+/** A link to a run's whole log, which lives in the install's logs/backups folder. */
+const logLink = (name) =>
+    name ? ` · <a href="/api/snapshots/logs/${encodeURIComponent(name)}" target="_blank" rel="noopener">View log</a>` : '';
+
 function snapLastLine(s) {
     if (!s.present) return '<span class="muted">Not installed</span>';
     const last = s.last;
     if (!last) return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not' : 'Not'} backed up yet</div>`;
     // Nextcloud's row has two lines, so each says which half it is about.
     const what = s.key === 'nextcloud' ? 'Database and settings: ' : '';
-    if (last.ok === false) return `<div class="bad-text">${what}${what ? 'failed' : 'Failed'} ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}</div>`;
+    if (last.ok === false) return `<div class="bad-text">${what}${what ? 'failed' : 'Failed'} ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}${logLink(last.log)}</div>`;
     const size = last.bytes ? ` · ${humanBytes(last.bytes)}` : '';
-    return `<div class="ok-text">${what || 'Backed up '}${what ? 'backed up ' : ''}${escapeHtml(whenAgo(last.at))}${size}</div>`;
+    return `<div class="ok-text">${what || 'Backed up '}${what ? 'backed up ' : ''}${escapeHtml(whenAgo(last.at))}${size}${logLink(last.log)}</div>`;
 }
 
 function renderSnapshots(keepEdits) {
@@ -5794,21 +5798,15 @@ function renderSnapshots(keepEdits) {
         $('snap-keep').value = c.keep ?? 3;
     }
     const checked = (s) => (keepEdits && $(`snap-svc-${s.key}`) ? $(`snap-svc-${s.key}`).checked : s.included);
-    const mirror = keepEdits && $('backup-mirror') ? $('backup-mirror').checked : Boolean(snapState.services.find((s) => s.key === 'nextcloud')?.files?.mirrorDeletes);
-    // Tucked under Nextcloud's row: the one setting its files have, and one
-    // that is better left alone.
+    // What the mirror is in charge of, said plainly: it is not a choice any
+    // more, so the one thing worth knowing is which folder it keeps in step.
     const nextcloudExtra = (s) =>
         s.key === 'nextcloud' && s.files?.hasFiles
-            ? `<details class="snap-more">
-                 <summary>Mirror</summary>
-                 <label class="check"><input type="checkbox" id="backup-mirror"${mirror ? ' checked' : ''}> Keep the drive an exact copy of Nextcloud (mirror)</label>
-                 <p class="hint">
-                   With this on, every night anything in <strong>${escapeHtml((s.files.folders ?? []).join(', ') || 'the files folder on the drive')}</strong>
-                   that is not in Nextcloud is removed &mdash; including anything put there that was never in Nextcloud. Nothing else on the drive is touched.
-                   No more than ${s.files.maxDeletes ?? 250} files are removed in one night; more than that waits here for you to say yes.
-                 </p>
-                 <p class="hint">With it off, nothing is ever removed from the drive: files deleted from Nextcloud stay on it.</p>
-               </details>`
+            ? `<p class="hint snap-mirror">
+                 Your files are mirrored to <strong>${escapeHtml((s.files.folders ?? []).join(', ') || 'the drive')}</strong>:
+                 each night that folder is made to match Nextcloud, so anything in it that is not in Nextcloud is removed.
+                 More than ${s.files.maxDeletes ?? 250} removals in one night are held here for you to confirm.
+               </p>`
             : '';
     box.innerHTML = snapState.services
         .map(
@@ -5825,6 +5823,16 @@ function renderSnapshots(keepEdits) {
         </div>`,
         )
         .join('');
+    // Every run's whole log, in a folder of its own on this machine.
+    const logs = $('snap-logs');
+    if (logs) {
+        const recent = (snapState.logs ?? []).slice(0, 5);
+        logs.innerHTML =
+            `Each backup and restore keeps its full log in <code>${escapeHtml(snapState.logFolder ?? 'logs/backups')}</code>.` +
+            (recent.length
+                ? `<ul>${recent.map((n) => `<li><a href="/api/snapshots/logs/${encodeURIComponent(n)}" target="_blank" rel="noopener">${escapeHtml(n.replace(/\.log$/, ''))}</a></li>`).join('')}</ul>`
+                : '');
+    }
     const next = $('snap-next');
     if (!snapState.nextRunAt) {
         next.textContent = c.enabled ? 'Choose a drive above and save, and the nightly copies start.' : 'Nightly copies are off. Back up now still works.';
@@ -5880,10 +5888,7 @@ $('backup-save').addEventListener('click', async () => {
         // The drive first: the nightly copies need one to be switched on.
         await api('/api/backup', {
             method: 'PUT',
-            body: {
-                destination: $('backup-destination').value,
-                mirrorDeletes: Boolean($('backup-mirror')?.checked),
-            },
+            body: { destination: $('backup-destination').value },
         });
         await api('/api/snapshots', {
             method: 'PUT',

@@ -5,15 +5,18 @@ import { isSafeHostPath, loadAppsConfig } from './apps.js';
 /**
  * Copies folders from this machine onto a drive plugged into it.
  *
- * Deliberately a copy and not a sync. The obvious tool for this is the
- * Nextcloud desktop client, and it is the wrong one: a sync propagates
- * deletions, so a file removed or corrupted on the live side is removed from
- * the copy too, usually within seconds -- which is the exact failure a backup
- * exists to survive. It is also watching a removable drive, and a sync client
- * whose folder vanishes on unplug is a client watching every file disappear at
- * once.
+ * A mirror: once a night the folder on the drive is made to match what
+ * Nextcloud has on this machine, removals included, so the drive is always an
+ * exact copy rather than everything Nextcloud ever held. Not the Nextcloud
+ * desktop client, which syncs within seconds and is watching a removable
+ * drive -- a sync client whose folder vanishes on unplug is a client watching
+ * every file disappear at once.
  *
- * So: rsync, one pass, no daemon, nothing to misread when the drive is pulled.
+ * The danger of a mirror is the night the source looks empty and the backup
+ * is removed to match. So removals come after the copy, are counted first,
+ * and more than MAX_DELETES in one night are held for somebody to confirm.
+ *
+ * rsync, one pass, no daemon, nothing to misread when the drive is pulled.
  *
  * It runs once a night, as part of the 3 AM app backups in snapshots.js, right
  * after Nextcloud's database is copied -- not on a timer of its own. It used to
@@ -28,10 +31,6 @@ const SEARCH_ROOTS = ['/media', '/run/media', '/mnt'];
 
 export const DEFAULT_BACKUP_CONFIG = {
     destination: '',
-    // Off, and it stays off unless somebody deliberately asks. With this on the
-    // copy becomes a mirror, and a mirror of a folder you just deleted
-    // something from is a folder with that thing deleted from it.
-    mirrorDeletes: false,
     lastRunAt: null,
     lastResult: null,
     lastOk: null,
@@ -120,10 +119,12 @@ export async function resolveDataVolume() {
 export function loadBackupConfig() {
     const cfg = loadManagerConfig();
     const saved = { ...(cfg.backup ?? {}) };
-    // From when this ran on a timer of its own. Nothing reads them now.
+    // From when this ran on a timer of its own, and could be a copy rather
+    // than a mirror. Nothing reads them now.
     delete saved.intervalHours;
     delete saved.intervalMinutes;
     delete saved.enabled;
+    delete saved.mirrorDeletes;
     return { ...DEFAULT_BACKUP_CONFIG, ...saved };
 }
 
@@ -199,7 +200,6 @@ export function validateBackupConfig(input) {
     const errors = [];
     const out = { ...DEFAULT_BACKUP_CONFIG };
 
-    out.mirrorDeletes = Boolean(input.mirrorDeletes);
     const sources = backupSources();
 
     // Held to the same rule as a shared folder: it becomes a bind mount, where
@@ -273,8 +273,8 @@ export async function run(onLine = () => {}, { allowDeletes = false } = {}) {
          * merely postponed. So a mirror counts first, with a dry run that
          * writes nothing, and removes none at all when there are too many.
          */
-        let mirror = Boolean(cfg.mirrorDeletes);
-        if (mirror && !allowDeletes) {
+        let mirror = true;
+        if (!allowDeletes) {
             const pending = await deletionsPending(src, name, target, cfg);
             if (pending > MAX_DELETES) {
                 held += pending;
@@ -527,10 +527,9 @@ const COPY_SCRIPT = [
 function copyArgs(src, name, target, flags) {
     if (!target.anchor || target.anchor === '/') throw new Error('Refusing to write to the root of this machine.');
     return [
-        // --init: without it the script is PID 1, which ignores the TERM that
-        // Cancel sends, and the copy carried on after the panel said it had
-        // stopped. tini passes it on, and the container ends with its script.
-        'run', '--rm', '--init',
+        // No --init: the image's own entrypoint is tini, which already passes
+        // Cancel's TERM on to the script. A second one only adds a warning.
+        'run', '--rm',
         '-v', `${src}:/src/${name}:ro`,
         // Mount the drive, not the target folder: the folder may not exist
         // yet, and a bind mount source that is missing is created by Docker

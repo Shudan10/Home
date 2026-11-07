@@ -853,6 +853,18 @@ route('GET', /^\/api\/snapshots\/copies$/, async (req, res) => {
     }
 });
 
+/** One backup or restore log, as text. Names are checked against the folder's own pattern. */
+route('GET', /^\/api\/snapshots\/logs\/([^/]+)$/, async (req, res, match) => {
+    const text = snapshots.readLog(decodeURIComponent(match[1]));
+    if (text === null) return fail(res, 404, 'There is no such log.');
+    res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(text);
+});
+
 route('PUT', /^\/api\/snapshots$/, async (req, res) => {
     const { cfg, errors } = snapshots.validateSnapshotConfig((await readBody(req)) ?? {});
     if (errors.length) return fail(res, 400, errors[0], { details: errors });
