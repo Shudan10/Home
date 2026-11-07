@@ -1944,6 +1944,24 @@
             </p>
             <div id="global-update-result" class="verdict" hidden></div>
           </article>
+
+          <!-- Every app's Check and Update in one place. The rows drive the
+               same buttons as each app's own Updates tab, so the two can
+               never say different things. -->
+          <article class="card span2">
+            <h3>Update the apps</h3>
+            <p class="muted">
+              Each app checked and updated from here, the same as its own
+              Updates tab. Updates line up in the Update Queue and run one at a
+              time; your data is kept, and an update that fails leaves the app
+              running as it was.
+            </p>
+            <div class="row">
+              <button type="button" id="apps-check-all" class="ghost">Check all apps</button>
+              <button type="button" id="apps-update-all" class="primary" disabled>Update all</button>
+            </div>
+            <div class="app-updates" id="app-updates"></div>
+          </article>
         </div>
       </div>
 

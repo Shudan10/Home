@@ -284,7 +284,13 @@ function selectTab(name) {
     }
     $('page-title').textContent = title;
     // Read on arrival rather than polled: nothing on it changes by itself.
-    if (name === 'global') loadGlobal().catch(() => {});
+    if (name === 'global') {
+        loadGlobal().catch(() => {});
+        // Asked on arrival, but not on every visit: the hourly scan covers the
+        // rest, and Check all is there for right now.
+        buildAppUpdateRows();
+        if (Date.now() - appsCheckedAt > 10 * 60_000) checkAllApps();
+    }
     if (name === 'backups') {
         loadBackup().catch(() => {});
         if (activeSubtab('backups') === 'backups-restore') loadRestore().catch(() => {});
@@ -5708,6 +5714,100 @@ if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
 }
+
+// ------------------------------------------------------- update every app --
+
+/*
+ * Global settings, Update the apps: every app's Check and Update in one list.
+ *
+ * Each row presses the app's own buttons, on its own Updates tab, and shows
+ * what that tab shows -- copied across as it changes. So there is one check
+ * and one update per app, with everything they already get right (no update
+ * until a check found one, never queued twice, the queue peek, the banner),
+ * and the list cannot drift from the tabs.
+ */
+const UPDATE_LABELS = { nextcloud: 'Nextcloud', jellyfin: 'Jellyfin', mealplan: 'Family Hub', minecraft: 'Minecraft' };
+let appsCheckedAt = 0;
+
+const isInstalled = (name) => serviceState[name]?.installed !== false;
+
+function syncAppUpdateRow(name) {
+    const row = document.querySelector(`#app-updates [data-app="${name}"]`);
+    if (!row) return;
+    const status = row.querySelector('.status-line');
+    const installed = isInstalled(name);
+    row.classList.toggle('absent', !installed);
+    if (installed) {
+        const src = $(`${name}-check-status`);
+        status.className = src.className;
+        status.innerHTML = src.innerHTML;
+    } else {
+        status.className = 'status-line';
+        status.innerHTML = '<span class="status-dot"></span><span class="status-body"><span class="status-head">Not installed</span></span>';
+    }
+    row.querySelector(`[data-press="${name}-check"]`).disabled = !installed || $(`${name}-check`).disabled;
+    row.querySelector(`[data-press="${name}-update"]`).disabled = !installed || $(`${name}-update`).disabled;
+    $('apps-update-all').disabled = !APP_KEYS.some((n) => isInstalled(n) && !$(`${n}-update`).disabled);
+}
+
+function buildAppUpdateRows() {
+    const box = $('app-updates');
+    if (!box) return;
+    if (!box.childElementCount) {
+        box.innerHTML = APP_KEYS.map((name) => `
+            <div class="app-update-row" data-app="${name}">
+              <strong>${escapeHtml(appsState?.apps?.[name]?.label ?? UPDATE_LABELS[name] ?? name)}</strong>
+              <p class="status-line"></p>
+              <div class="row">
+                <button type="button" class="ghost mini" data-press="${name}-check">Check</button>
+                <button type="button" class="primary mini" data-press="${name}-update" disabled>Update</button>
+              </div>
+            </div>`).join('');
+        for (const name of APP_KEYS) {
+            const sync = () => syncAppUpdateRow(name);
+            const watch = { attributes: true, childList: true, subtree: true, characterData: true };
+            for (const id of [`${name}-check-status`, `${name}-update`, `${name}-check`]) {
+                const el = $(id);
+                if (el) new MutationObserver(sync).observe(el, watch);
+            }
+        }
+    }
+    for (const name of APP_KEYS) syncAppUpdateRow(name);
+}
+
+$('app-updates').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-press]');
+    if (button && !button.disabled) $(button.dataset.press)?.click();
+});
+
+function checkAllApps() {
+    appsCheckedAt = Date.now();
+    for (const name of APP_KEYS) {
+        if (isInstalled(name) && !$(`${name}-check`).disabled) $(`${name}-check`).click();
+    }
+}
+
+$('apps-check-all').addEventListener('click', checkAllApps);
+
+$('apps-update-all').addEventListener('click', async () => {
+    const ready = APP_KEYS.filter((n) => isInstalled(n) && !$(`${n}-update`).disabled);
+    if (!ready.length) return;
+    const label = (n) => appsState?.apps?.[n]?.label ?? UPDATE_LABELS[n] ?? n;
+    // A major version upgrades the app's database on its first start and
+    // cannot be rolled back, which is worth one look before it is part of a batch.
+    const major = ready.filter((n) => /major/i.test($(`${n}-check-status`)?.textContent ?? ''));
+    const ok = await askConfirm({
+        title: `Update ${ready.length === 1 ? label(ready[0]) : `${ready.length} apps`}?`,
+        body:
+            `${ready.map(label).join(', ')} will be updated one after another in the Update Queue. Each is down for a minute or so while it restarts.` +
+            (major.length
+                ? `\n\n${major.map(label).join(' and ')} would move to a new major version, which cannot be rolled back. Read the release notes first if you are unsure.`
+                : ''),
+        confirmLabel: 'Update',
+    });
+    if (!ok) return;
+    for (const n of ready) $(`${n}-update`).click();
+});
 
 // ----------------------------------------------------------------- backups --
 

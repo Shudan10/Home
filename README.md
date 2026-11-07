@@ -235,6 +235,11 @@ by itself: See update goes to the page that does it, and Later hides the banner
 in that browser until a newer version comes along. Checking asks GitHub and
 Docker Hub and sends them nothing about your server beyond the request itself.
 
+Global settings → Updates has the panel's own update and, under it, every
+app's: Check all apps, an Update button per app, and Update all, which lines
+them up in the Update Queue one after another (and says first if one of them
+is a new major version, which cannot be rolled back).
+
 ## Where things live
 
 Everything is in one directory (`~/.quickstart-home` by default):

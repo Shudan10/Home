@@ -2262,7 +2262,7 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
 .snap-row > .hint { grid-area: what; margin: 2px 0 0 26px; }
 .snap-row > .snap-status { grid-area: status; margin-left: 26px; font-size: 13px; }
 .snap-row > button { grid-area: action; }
-.snap-row.absent { opacity: 0.55; }
+.snap-row.absent, .app-update-row.absent { opacity: 0.55; }
 .ok-text { color: var(--ok); }
 .bad-text { color: var(--warn); }
 
@@ -2289,4 +2289,20 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
 #tab-backups button.mini { padding: 5px 12px; font-size: 13px; }
 .snap-row > .snap-mirror { grid-column: 1 / -1; margin: 6px 0 0 26px; }
 .snap-logs ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* Global settings, Update the apps: one row per app. */
+.app-updates { display: grid; margin-top: 14px; border-top: 1px solid var(--line); }
+.app-update-row {
+    display: grid;
+    grid-template-columns: minmax(7rem, 10rem) minmax(0, 1fr) auto;
+    gap: 6px 14px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+}
+.app-update-row .status-line { margin: 0; }
+.app-update-row .row { margin: 0; flex-wrap: nowrap; }
+@media (max-width: 860px) {
+    .app-update-row { grid-template-columns: 1fr; }
+}
 .snap-logs li { margin: 2px 0; }
