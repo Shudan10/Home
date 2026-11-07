@@ -5767,7 +5767,11 @@ function snapFilesLine(f) {
     const skipped = f.lastSkipped
         ? ` · <span class="bad-text" title="Usually their names have characters the drive cannot store, such as : or ?. The full list is in the log of that run.">${f.lastSkipped} file${f.lastSkipped === 1 ? '' : 's'} could not be written</span>`
         : '';
-    return `<div><span class="ok-text">Files: copied ${escapeHtml(whenAgo(f.lastRunAt))}</span>${skipped}</div>`;
+    const held = f.heldDeletes
+        ? `<div class="bad-text">${f.heldDeletes > 0 ? f.heldDeletes : 'Some'} files are no longer in Nextcloud and were all kept on the drive: more than the ${f.maxDeletes} a mirror removes by itself in one night.
+             <button type="button" class="ghost mini" data-snap-allow-deletes>Remove them from the drive</button></div>`
+        : '';
+    return `<div><span class="ok-text">Files: copied ${escapeHtml(whenAgo(f.lastRunAt))}</span>${skipped}</div>${held}`;
 }
 
 function snapLastLine(s) {
@@ -5796,9 +5800,14 @@ function renderSnapshots(keepEdits) {
     const nextcloudExtra = (s) =>
         s.key === 'nextcloud' && s.files?.hasFiles
             ? `<details class="snap-more">
-                 <summary>Deleted files</summary>
-                 <label class="check"><input type="checkbox" id="backup-mirror"${mirror ? ' checked' : ''}> Remove files from the drive when they are deleted from Nextcloud</label>
-                 <p class="hint">Off by default, and worth leaving off. With this on the drive is a mirror, and a mirror of a folder you have just deleted something from is a folder with that thing deleted from it.</p>
+                 <summary>Mirror</summary>
+                 <label class="check"><input type="checkbox" id="backup-mirror"${mirror ? ' checked' : ''}> Keep the drive an exact copy of Nextcloud (mirror)</label>
+                 <p class="hint">
+                   With this on, every night anything in <strong>${escapeHtml((s.files.folders ?? []).join(', ') || 'the files folder on the drive')}</strong>
+                   that is not in Nextcloud is removed &mdash; including anything put there that was never in Nextcloud. Nothing else on the drive is touched.
+                   No more than ${s.files.maxDeletes ?? 250} files are removed in one night; more than that waits here for you to say yes.
+                 </p>
+                 <p class="hint">With it off, nothing is ever removed from the drive: files deleted from Nextcloud stay on it.</p>
                </details>`
             : '';
     box.innerHTML = snapState.services
@@ -5890,7 +5899,7 @@ $('backup-save').addEventListener('click', async () => {
 });
 
 /** Backs up one app, or every one that is ticked when `service` is null. */
-async function runSnapshots(service) {
+async function runSnapshots(service, { allowDeletes = false } = {}) {
     if (isDirty('backup')) {
         toast('Save or discard your changes first.', 'bad');
         return;
@@ -5900,7 +5909,7 @@ async function runSnapshots(service) {
         key: 'snapshots',
         title: label ? `Backing up ${label}` : 'Backing up app data',
         note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
-        request: () => api('/api/snapshots/run', { method: 'POST', body: service ? { service } : {} }),
+        request: () => api('/api/snapshots/run', { method: 'POST', body: service ? { service, allowDeletes } : {} }),
     });
     if (pendingAction) {
         // Nextcloud's files are a step of their own, after its database.
@@ -5914,9 +5923,21 @@ async function runSnapshots(service) {
 }
 
 $('snap-run-all').addEventListener('click', () => runSnapshots(null));
-$('snap-services').addEventListener('click', (event) => {
+$('snap-services').addEventListener('click', async (event) => {
     const button = event.target.closest('[data-snap-run]');
     if (button) runSnapshots(button.dataset.snapRun);
+    if (event.target.closest('[data-snap-allow-deletes]')) {
+        const n = snapState?.services.find((s) => s.key === 'nextcloud')?.files?.heldDeletes ?? 0;
+        const ok = await askConfirm({
+            title: `Remove ${n > 0 ? n : 'those'} files from the backup drive?`,
+            body:
+                'They are on the drive but no longer in Nextcloud. That many at once can mean Nextcloud lost them rather than that you deleted them, ' +
+                'so check they are really meant to go first: once removed from the drive they cannot be recovered from it.',
+            confirmLabel: 'Remove them',
+            danger: true,
+        });
+        if (ok) runSnapshots('nextcloud', { allowDeletes: true });
+    }
 });
 
 // --------------------------------------------------------------- restore --
@@ -6010,7 +6031,8 @@ $('restore-list').addEventListener('click', async (event) => {
     const job = await runAction({
         key: 'restore',
         title: `Restoring ${s?.label ?? key}`,
-        note: 'This runs in the manager, so closing this page does not stop it.',
+        note: 'This runs in the manager, so closing this page does not stop it. It cannot be cancelled once started: stopped half way, the app would be left part restored.',
+        cancellable: false,
         request: () => api('/api/snapshots/restore', { method: 'POST', body: { id, putBack, saveFirst } }),
     });
     if (job) {

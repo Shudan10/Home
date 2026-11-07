@@ -56,12 +56,13 @@ class JobRunner extends EventEmitter {
      * app the job works on, so timers that touch that app can stay out of its
      * way.
      */
-    start(name, fn, { key = null, app = null } = {}) {
+    start(name, fn, { key = null, app = null, noCancel: mustFinish = false } = {}) {
         const asked = requestContext.getStore();
         const queued = asked?.queued === true;
         // Some jobs have to run to the end once they start -- uninstalling is
-        // the one that matters. They can still be dropped while they wait.
-        const noCancel = asked?.noCancel === true;
+        // the one that matters, and restoring an app from a backup. They can
+        // still be dropped while they wait.
+        const noCancel = asked?.noCancel === true || mustFinish === true;
         if (queued && asked.title) name = asked.title;
 
         /*
@@ -288,3 +289,15 @@ class JobRunner extends EventEmitter {
 }
 
 export const jobs = new JobRunner();
+
+/**
+ * Whether the job the calling code is running in has been asked to stop.
+ *
+ * Cancelling kills the processes running at that moment, which ends the step
+ * in progress. A job made of several steps -- backing up one app after
+ * another -- asks this between them, or it would carry on with the next.
+ */
+export function cancelRequested() {
+    const id = jobContext.getStore()?.id;
+    return Boolean(id && jobs.current?.id === id && jobs.current.cancelled);
+}

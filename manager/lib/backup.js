@@ -38,7 +38,41 @@ export const DEFAULT_BACKUP_CONFIG = {
     // How many files the last copy could not write, so the page can say so in
     // a few words rather than reciting their names.
     lastSkipped: 0,
+    // How many files the last copy did not remove from the drive because there
+    // were more than MAX_DELETES of them. See rsyncFlags.
+    heldDeletes: 0,
 };
+
+/*
+ * The most files a mirror removes from the drive in one run without asking.
+ *
+ * A mirror's worst night is the one where the folder it copies from looks
+ * empty -- a volume recreated, a path that changed, a drive mounted somewhere
+ * else -- and it faithfully removes the whole backup to match. A night's
+ * real deletions are a few files, or one folder; hundreds at once is the
+ * signature of something gone wrong, and is held for somebody to look at.
+ */
+export const MAX_DELETES = 250;
+
+/**
+ * An rsync failure in a sentence or two.
+ *
+ * rsync's progress goes to the same stream as its errors, so the tail of the
+ * output was a wall of "12,878,868,891B 17% 51.3MB/s" with the reason, if
+ * any, lost in it. Progress lines are dropped and only the last few that
+ * say something are kept. 143 and 137 are the copy being stopped (TERM,
+ * KILL), which is what Cancel does, not a fault.
+ */
+export function briefError(err) {
+    if (err?.code === 143 || err?.code === 137) return 'Stopped before it finished.';
+    const text = `${err?.stderr ?? ''}\n${err?.stdout ?? ''}`;
+    const lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !/^[\d,]+B?\s+\d+%/.test(l) && !/^(sent|total size|Number of|Total |Literal|Matched|File list|Number|Speedup)/i.test(l));
+    const said = lines.slice(-3).join(' ');
+    return said || String(err?.message ?? err).split('\n')[0].slice(0, 300);
+}
 
 /**
  * What this backs up: the folders Nextcloud is serving, and nothing else.
@@ -201,7 +235,7 @@ export function validateBackupConfig(input) {
  * directory -- so without this check an unplugged drive would produce a
  * cheerful backup onto the internal disk.
  */
-export async function run(onLine = () => {}) {
+export async function run(onLine = () => {}, { allowDeletes = false } = {}) {
     const cfg = loadBackupConfig();
     // Lazy rather than boot-order dependent: whatever calls this first gets it
     // resolved, so a reordering at startup cannot quietly leave it empty.
@@ -228,32 +262,61 @@ export async function run(onLine = () => {}) {
      */
     const PARTIAL = new Set([23, 24]);
     const skipped = [];
+    let held = 0;
 
     for (const src of sources) {
         const name = src.split('/').filter(Boolean).pop() || 'root';
         onLine(`\n> ${src}`);
+        /*
+         * All or nothing. rsync's own --max-delete removes the first N and
+         * then stops, which on the bad night is N files gone and the rest
+         * merely postponed. So a mirror counts first, with a dry run that
+         * writes nothing, and removes none at all when there are too many.
+         */
+        let mirror = Boolean(cfg.mirrorDeletes);
+        if (mirror && !allowDeletes) {
+            const pending = await deletionsPending(src, name, target, cfg);
+            if (pending > MAX_DELETES) {
+                held += pending;
+                mirror = false;
+                onLine(`${Number.isFinite(pending) ? pending : 'Some'} files on the drive are no longer in Nextcloud. That is more than ${MAX_DELETES} (or could not be counted), so none of them are removed tonight.`);
+            }
+        }
         // Trailing slash on the source: copy the contents into <dest>/<name>,
         // rather than nesting another <name> inside it on every run.
         // A non-zero exit rejects, so there is no code to test here -- the
         // throw is the failure path, and the job it runs under reports it.
         try {
-            await docker(copyArgs(src, name, target, rsyncFlags(cfg)), {
+            await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror })), {
                 onLine,
                 timeoutMs: 12 * 60 * 60_000,
             });
         } catch (err) {
             if (err.code === DRIVE_GONE) throw new Error(`The drive at ${target.anchor} went away before the copy started, so nothing was written.`);
-            if (!PARTIAL.has(err.code)) throw err;
+            if (!PARTIAL.has(err.code)) {
+                const e = new Error(briefError(err));
+                e.code = err.code;
+                throw e;
+            }
             // Pull the names out of rsync's own complaint, so the report names
             // the files rather than the exit code.
             for (const m of String(err.stderr || err.stdout || '').matchAll(/"\/dest[^"]*\/\.?([^/"]+?)\.[A-Za-z0-9]{6}"/g)) {
                 if (!skipped.includes(m[1])) skipped.push(m[1]);
             }
-            onLine(`\nSome files in ${src} could not be written to the drive.`);
+            if (PARTIAL.has(err.code)) onLine(`\nSome files in ${src} could not be written to the drive.`);
         }
     }
 
     const stamp = new Date().toISOString();
+    // Said every time, so a held deletion is never mistaken for a clean night.
+    // Infinity, from a count that could not be made, is stored as -1.
+    saveBackupConfig({ heldDeletes: Number.isFinite(held) ? held : -1 });
+    if (held) {
+        onLine(
+            `\nFiles that are no longer in Nextcloud were all kept on the drive: more than the ${MAX_DELETES} a mirror removes on its own. ` +
+                'The Backups page has a button to remove them if that was meant.',
+        );
+    }
     if (skipped.length) {
         const note =
             `Copied to ${cfg.destination}, but ${skipped.length} file(s) could not be written: ` +
@@ -347,8 +410,25 @@ export async function checkDestination(destination) {
     return { anchor, rest };
 }
 
+/**
+ * How many files a mirror run would remove from the drive. A dry run: rsync
+ * walks both sides and writes nothing. Any failure counts as "too many", so
+ * a check that cannot be made never turns into deletions.
+ */
+async function deletionsPending(src, name, target, cfg) {
+    try {
+        const { stdout } = await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror: true, dryRun: true })), {
+            timeoutMs: 60 * 60_000,
+        });
+        const m = /^Number of deleted files:\s*([\d,]+)/m.exec(stdout);
+        return m ? Number(m[1].replace(/,/g, '')) : Infinity;
+    } catch {
+        return Infinity;
+    }
+}
+
 /* The rsync options for the copy. */
-function rsyncFlags(cfg) {
+function rsyncFlags(cfg, { mirror = false, dryRun = false } = {}) {
     const flags = [
         '-aH',
         '--exclude=.nextcloudsync.log',
@@ -380,7 +460,16 @@ function rsyncFlags(cfg) {
         '--exclude=.~lock.*#',
         '--exclude=~$*',
     ];
-    if (cfg.mirrorDeletes) flags.push('--delete');
+    /*
+     * Mirroring removes from the drive what is no longer in Nextcloud -- after
+     * the copy, so a run that stops part way has added and not yet taken away.
+     * Whether it may is decided per run, in run(): see deletionsPending.
+     */
+    if (mirror) flags.push('--delete-after');
+    if (dryRun) {
+        flags.push('-n', '--stats');
+        return flags;
+    }
     /*
      * Progress that actually arrives.
      *
@@ -438,7 +527,10 @@ const COPY_SCRIPT = [
 function copyArgs(src, name, target, flags) {
     if (!target.anchor || target.anchor === '/') throw new Error('Refusing to write to the root of this machine.');
     return [
-        'run', '--rm',
+        // --init: without it the script is PID 1, which ignores the TERM that
+        // Cancel sends, and the copy carried on after the panel said it had
+        // stopped. tini passes it on, and the container ends with its script.
+        'run', '--rm', '--init',
         '-v', `${src}:/src/${name}:ro`,
         // Mount the drive, not the target folder: the folder may not exist
         // yet, and a bind mount source that is missing is created by Docker

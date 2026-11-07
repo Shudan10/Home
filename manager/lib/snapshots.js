@@ -1,8 +1,9 @@
 import { loadManagerConfig, saveManagerConfig } from './store.js';
 import { docker, pipeDocker, containerState, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER, MINECRAFT_CONTAINER, NEXTCLOUD_CONTAINER } from './dockerctl.js';
-import { IMAGE, DRIVE_GUARD, DRIVE_GONE, checkDestination, loadBackupConfig, saveBackupConfig, backupSources, resolveDataVolume, run as copyNextcloudFiles } from './backup.js';
+import { IMAGE, DRIVE_GUARD, DRIVE_GONE, MAX_DELETES, briefError, checkDestination, loadBackupConfig, saveBackupConfig, backupSources, resolveDataVolume, run as copyNextcloudFiles } from './backup.js';
 import { STACK_HOST } from './paths.js';
 import { rcon } from './minecraft.js';
+import { cancelRequested } from './jobs.js';
 
 /**
  * Dated copies of each app's own data, kept on the backup drive, and putting
@@ -209,7 +210,8 @@ const ID_RE = /^([a-z]+)\/(\d{4}-\d{2}-\d{2}_\d{6})(_before-restore)?$/;
  */
 function onDrive(target, script, args = [], { mounts = [], readOnly = false, interactive = false } = {}) {
     return [
-        'run', '--rm',
+        // --init so that Cancel's TERM reaches the script: see copyArgs in backup.js.
+        'run', '--rm', '--init',
         ...(interactive ? ['-i'] : []),
         ...mounts.flatMap((m) => ['-v', m]),
         '-v', `${target.anchor}:/dest-root${readOnly ? ':ro' : ''}`,
@@ -429,15 +431,16 @@ async function prune(s, target, keep, onLine) {
  * kept by backup.js; a failure here fails Nextcloud's row too, because a
  * database without the files it describes is half a backup.
  */
-async function copyFiles(onLine) {
+async function copyFiles(onLine, { allowDeletes = false } = {}) {
     if (!backupSources().length) await resolveDataVolume();
     if (!backupSources().length) return;
     onLine('Nextcloud: copying your files (only what changed since last time)...');
     try {
-        await copyNextcloudFiles(onLine);
+        await copyNextcloudFiles(onLine, { allowDeletes });
     } catch (err) {
-        saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: err.message });
-        throw new Error(`The database was copied, but your files were not: ${err.message}`);
+        const said = briefError(err);
+        saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: said });
+        throw new Error(`The database was copied, but your files were not: ${said}`);
     }
 }
 
@@ -445,7 +448,7 @@ async function copyFiles(onLine) {
  * Copies every service that is switched on and installed (or just `only`).
  * One failing does not stop the rest; the job fails at the end, naming them.
  */
-export async function backUp({ kind = 'manual', only = null, onLine = () => {} } = {}) {
+export async function backUp({ kind = 'manual', only = null, allowDeletes = false, onLine = () => {} } = {}) {
     const target = await driveTarget();
     const cfg = loadSnapshotConfig();
     const volumes = await existingVolumes();
@@ -454,6 +457,8 @@ export async function backUp({ kind = 'manual', only = null, onLine = () => {} }
     let copied = 0;
 
     for (const s of chosen) {
+        // Cancel ends the step that is running; this is what stops the rest.
+        if (cancelRequested()) break;
         if (!isPresent(s, volumes)) {
             if (only) throw new Error(`${s.label} is not installed, so there is nothing to back up.`);
             continue;
@@ -462,13 +467,22 @@ export async function backUp({ kind = 'manual', only = null, onLine = () => {} }
         try {
             const { id, bytes } = await copyService(s, target, { kind, onLine });
             await prune(s, target, cfg.keep, onLine).catch((err) => onLine(`Could not remove older copies: ${err.message}`));
-            if (s.key === 'nextcloud') await copyFiles(onLine);
+            if (s.key === 'nextcloud' && !cancelRequested()) await copyFiles(onLine, { allowDeletes });
             recordLast(s.key, { at: new Date().toISOString(), ok: true, id, bytes, result: 'Backed up.' });
             onLine(`${s.label}: done.`);
             copied += 1;
         } catch (err) {
-            recordLast(s.key, { at: new Date().toISOString(), ok: false, result: err.message });
-            onLine(`${s.label}: failed. ${err.message}`);
+            if (cancelRequested()) {
+                // Its earlier copies are untouched -- older ones are only
+                // removed after a new one is whole -- so there is nothing to
+                // warn about beyond tonight's not being there.
+                recordLast(s.key, { at: new Date().toISOString(), ok: false, result: 'Cancelled before it finished. Its earlier copies are still on the drive.' });
+                onLine(`${s.label}: cancelled. Nothing it already had on the drive was touched.`);
+                break;
+            }
+            const said = err.message.startsWith('The database was copied') ? err.message : briefError(err);
+            recordLast(s.key, { at: new Date().toISOString(), ok: false, result: said });
+            onLine(`${s.label}: failed. ${said}`);
             failed.push(s.label);
             // Nothing else will get further on a drive that has gone.
             if (/drive went away|not on a drive of its own/.test(err.message)) break;
@@ -532,7 +546,7 @@ async function putBackFiles(onLine) {
             'rsync -a --ignore-existing --info=stats1 --chown="$(stat -c %u:%g /dst)" --exclude=lost+found "$from/" /dst/',
         ].join('\n');
         await docker(
-            ['run', '--rm', '-v', `${src}:/dst`, '-v', `${files.anchor}:/dest-root:ro`, '-v', '/:/host:ro', IMAGE, 'sh', '-c', `set -eu\n${script}`, 'sh', files.rest, name],
+            ['run', '--rm', '--init', '-v', `${src}:/dst`, '-v', `${files.anchor}:/dest-root:ro`, '-v', '/:/host:ro', IMAGE, 'sh', '-c', `set -eu\n${script}`, 'sh', files.rest, name],
             { onLine, timeoutMs: 12 * 60 * 60_000 },
         );
     }
@@ -684,6 +698,13 @@ function filesStatus() {
         lastOk: b.lastOk,
         lastSkipped: b.lastSkipped ?? 0,
         lastError: b.lastOk === false ? b.lastResult : null,
+        heldDeletes: b.heldDeletes ?? 0,
+        maxDeletes: MAX_DELETES,
+        // Where on the drive the copy goes: the folder a mirror is in charge
+        // of, named on the page so nobody has to guess what it would remove.
+        folders: b.destination
+            ? backupSources().map((src) => `${b.destination}/${src.split('/').filter(Boolean).pop() || 'root'}`)
+            : [],
     };
 }
 

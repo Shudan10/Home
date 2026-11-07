@@ -867,7 +867,10 @@ route('POST', /^\/api\/snapshots\/run$/, async (req, res) => {
     const body = (await readBody(req)) ?? {};
     const only = body.service ? String(body.service) : null;
     if (only && !snapshots.serviceFor(only)) return fail(res, 404, 'There is no such app to back up.');
-    const job = enqueueSnapshots({ kind: 'manual', only });
+    // Lets a mirror remove more than MAX_DELETES files this once: the button
+    // the page shows after a run held them back. Nextcloud only.
+    const allowDeletes = body.allowDeletes === true && only === 'nextcloud';
+    const job = enqueueSnapshots({ kind: 'manual', only, allowDeletes });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
@@ -885,15 +888,16 @@ route('POST', /^\/api\/snapshots\/restore$/, async (req, res) => {
             restartPanel: () => selfservice.restartManager(),
         }),
     // Keeps Nextcloud's cron and the other timers off the app while it is
-    // stopped and being put back.
-    { app: service.key });
+    // stopped and being put back. Not cancellable: stopped half way, an app
+    // would be left with part of its data replaced and part not.
+    { app: service.key, noCancel: true });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
 // Keyed, so the nightly run asked for while a manual one waits is the same run.
-function enqueueSnapshots({ kind, only = null }) {
+function enqueueSnapshots({ kind, only = null, allowDeletes = false }) {
     const name = only ? `Back up ${snapshots.serviceFor(only).label}` : 'Back up app data';
-    return jobs.start(name, (onLine) => snapshots.backUp({ kind, only, onLine }), {
+    return jobs.start(name, (onLine) => snapshots.backUp({ kind, only, allowDeletes, onLine }), {
         key: `snapshots:${only ?? 'all'}`,
     });
 }
