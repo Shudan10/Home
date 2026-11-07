@@ -2287,3 +2287,6 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
     .restore-list { grid-template-columns: 1fr; }
 }
 #tab-backups button.mini { padding: 5px 12px; font-size: 13px; }
+.snap-row > .snap-more { grid-column: 1 / -1; margin: 6px 0 0 26px; font-size: 13px; }
+.snap-more summary { cursor: pointer; color: var(--muted); }
+.snap-more label.check { margin: 8px 0 0; font-size: 13px; }

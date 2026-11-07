@@ -1,6 +1,6 @@
 import { loadManagerConfig, saveManagerConfig } from './store.js';
 import { docker, pipeDocker, containerState, JELLYFIN_CONTAINER, MEALPLAN_CONTAINER, MINECRAFT_CONTAINER, NEXTCLOUD_CONTAINER } from './dockerctl.js';
-import { IMAGE, DRIVE_GUARD, DRIVE_GONE, checkDestination, loadBackupConfig, backupSources, resolveDataVolume } from './backup.js';
+import { IMAGE, DRIVE_GUARD, DRIVE_GONE, checkDestination, loadBackupConfig, saveBackupConfig, backupSources, resolveDataVolume, run as copyNextcloudFiles } from './backup.js';
 import { STACK_HOST } from './paths.js';
 import { rcon } from './minecraft.js';
 
@@ -8,8 +8,10 @@ import { rcon } from './minecraft.js';
  * Dated copies of each app's own data, kept on the backup drive, and putting
  * one of them back.
  *
- * The other half of backing up. backup.js copies Nextcloud's files, which are
- * big, change all day, and are worth copying the moment they do. What makes an
+ * Nextcloud's files are the exception: 83 GB as an archive every night would
+ * fill the drive in a week. They are copied by backup.js instead, as a plain
+ * folder that only takes what changed, straight after Nextcloud's database in
+ * the same run -- so at 3 AM everything Nextcloud is copied together. What makes an
  * app the app -- Nextcloud's database, Jellyfin's users and watch history, the
  * Minecraft world, the panel's own settings -- is small by comparison and only
  * useful whole and from one moment: a database copied while it was being
@@ -43,7 +45,7 @@ export const SERVICES = [
     {
         key: 'nextcloud',
         label: 'Nextcloud',
-        what: 'Database, settings and installed apps: users, shares, calendars and contacts. Your files are copied separately, under Nextcloud files.',
+        what: 'Your files, plus the database and settings behind them: users, shares, calendars and contacts.',
         volume: 'quickstart-home-nextcloud-data',
         items: ['config', 'custom_apps', 'themes'],
         exclude: [],
@@ -423,6 +425,23 @@ async function prune(s, target, keep, onLine) {
 }
 
 /**
+ * Nextcloud's files, after its database. Its own record of how it went is
+ * kept by backup.js; a failure here fails Nextcloud's row too, because a
+ * database without the files it describes is half a backup.
+ */
+async function copyFiles(onLine) {
+    if (!backupSources().length) await resolveDataVolume();
+    if (!backupSources().length) return;
+    onLine('Nextcloud: copying your files (only what changed since last time)...');
+    try {
+        await copyNextcloudFiles(onLine);
+    } catch (err) {
+        saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: err.message });
+        throw new Error(`The database was copied, but your files were not: ${err.message}`);
+    }
+}
+
+/**
  * Copies every service that is switched on and installed (or just `only`).
  * One failing does not stop the rest; the job fails at the end, naming them.
  */
@@ -443,6 +462,7 @@ export async function backUp({ kind = 'manual', only = null, onLine = () => {} }
         try {
             const { id, bytes } = await copyService(s, target, { kind, onLine });
             await prune(s, target, cfg.keep, onLine).catch((err) => onLine(`Could not remove older copies: ${err.message}`));
+            if (s.key === 'nextcloud') await copyFiles(onLine);
             recordLast(s.key, { at: new Date().toISOString(), ok: true, id, bytes, result: 'Backed up.' });
             onLine(`${s.label}: done.`);
             copied += 1;
@@ -650,7 +670,20 @@ export async function status() {
             present: isPresent(s, volumes),
             included: isIncluded(cfg, s.key),
             last: cfg.last[s.key] ?? null,
+            ...(s.key === 'nextcloud' ? { files: filesStatus() } : {}),
         })),
+    };
+}
+
+function filesStatus() {
+    const b = loadBackupConfig();
+    return {
+        hasFiles: backupSources().length > 0,
+        mirrorDeletes: Boolean(b.mirrorDeletes),
+        lastRunAt: b.lastRunAt,
+        lastOk: b.lastOk,
+        lastSkipped: b.lastSkipped ?? 0,
+        lastError: b.lastOk === false ? b.lastResult : null,
     };
 }
 

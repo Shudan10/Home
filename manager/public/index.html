@@ -1805,12 +1805,15 @@
           </article>
 
           <article class="card span2">
-            <h3>App data</h3>
+            <h3>What is backed up</h3>
             <p class="muted">
-              A dated copy of each app's own data: databases, settings, users,
-              worlds. Each one is made from a still moment, so it can be put
-              back whole from the Restore tab. They go in a folder named
-              <code>Home Server backups</code> on the drive.
+              Everything happens once a night at 3 AM, while nobody is using
+              anything, rather than all day. Each app's data &mdash; databases,
+              settings, users, worlds &mdash; is saved as a dated copy that the
+              Restore tab can put back whole, in a folder named
+              <code>Home Server backups</code> on the drive. Nextcloud's files
+              go beside it as an ordinary folder you can open on any computer,
+              and only what changed since the night before is copied.
             </p>
             <label class="check">
               <input type="checkbox" id="snap-enabled"> Back up every night at 3 AM
@@ -1824,42 +1827,6 @@
             <div class="snap-list" id="snap-services"></div>
             <div class="row">
               <button type="button" id="snap-run-all" class="ghost">Back up all now</button>
-            </div>
-          </article>
-
-          <article class="card span2">
-            <h3>Nextcloud files</h3>
-            <p class="muted">
-              Your files themselves, copied as an ordinary folder you can open on
-              any computer. New and changed files are copied as soon as the
-              check below finds them.
-            </p>
-            <div id="backup-sources-note" class="verdict"></div>
-            <div id="backup-last" class="verdict" hidden></div>
-            <label class="check">
-              <input type="checkbox" id="backup-enabled"> Copy new and changed files automatically
-            </label>
-            <label class="inline">
-              Check every
-              <input type="number" id="backup-interval" min="5" max="43200" step="5" style="max-width:6rem">
-              minutes
-            </label>
-            <p class="hint">
-              Checking is cheap &mdash; about a second, even across thousands of
-              files &mdash; and a check that finds nothing to copy does nothing
-              and says nothing. A drive that is unplugged is noted and tried again
-              next time.
-            </p>
-            <label class="check">
-              <input type="checkbox" id="backup-mirror"> Remove files from the drive when they are deleted here
-            </label>
-            <p class="hint">
-              Off by default, and worth leaving off. With this on the drive is a
-              mirror, and a mirror of a folder you have just deleted something
-              from is a folder with that thing deleted from it.
-            </p>
-            <div class="row">
-              <button type="button" id="backup-run" class="ghost">Copy files now</button>
             </div>
           </article>
 

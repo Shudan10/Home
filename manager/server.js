@@ -829,34 +829,10 @@ route('PUT', /^\/api\/backup$/, async (req, res) => {
         lastRunAt: prev.lastRunAt,
         lastResult: prev.lastResult,
         lastOk: prev.lastOk,
+        lastSkipped: prev.lastSkipped,
     });
-    backup.scheduleFromConfig(log, enqueueBackup);
     sendJson(res, 200, { ok: true, config: saved });
 });
-
-/** Runs one copy now, through the job queue so it gets the usual live log. */
-route('POST', /^\/api\/backup\/run$/, async (req, res) => {
-    const job = enqueueBackup();
-    sendJson(res, 202, { ok: true, jobId: job.id });
-});
-
-// Keyed: a backup asked for while one is already waiting is the same backup.
-// The schedule asks every few minutes, and a long copy would otherwise line
-// up one more behind it each time.
-function enqueueBackup() {
-    return jobs.start('Back up', async (onLine) => {
-        try {
-            await backup.run(onLine);
-        } catch (err) {
-            backup.saveBackupConfig({
-                lastRunAt: new Date().toISOString(),
-                lastOk: false,
-                lastResult: err.message,
-            });
-            throw err;
-        }
-    }, { key: 'backup' });
-}
 
 // ----------------------------------------------------------- app backups --
 
@@ -2503,14 +2479,14 @@ async function bootstrap() {
     // The KaChat Nextcloud's background jobs: expired shares, Talk clean-up.
     setInterval(() => !jobs.busy && kachat.runCron().catch(() => {}), 5 * 60_000).unref?.();
 
-    // Queued rather than run directly, so a scheduled copy shares the one-at-a-
-    // time queue with everything else and cannot start while an image is
-    // building or a container is being recreated underneath it.
-    // Resolved before the schedule is armed: without it a Nextcloud that keeps
-    // its own files has no backup source and every tick does nothing.
+    // Queued rather than run directly, so the nightly copy shares the one-at-
+    // a-time queue with everything else and cannot start while an image is
+    // building or a container is being recreated underneath it. Nextcloud's
+    // files are copied in the same run, straight after its database.
+    // Resolved first: without it a Nextcloud that keeps its own files has no
+    // files to copy.
     await backup.resolveDataVolume();
-    backup.scheduleFromConfig(log, enqueueBackup);
-    // The nightly copies run at 3 in the morning here, not in UTC.
+    // 3 in the morning here, not in UTC.
     await snapshots.adoptHostTimezone(log);
     snapshots.schedule(() => enqueueSnapshots({ kind: 'nightly' }), log);
 

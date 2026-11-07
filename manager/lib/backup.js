@@ -14,6 +14,11 @@ import { isSafeHostPath, loadAppsConfig } from './apps.js';
  * once.
  *
  * So: rsync, one pass, no daemon, nothing to misread when the drive is pulled.
+ *
+ * It runs once a night, as part of the 3 AM app backups in snapshots.js, right
+ * after Nextcloud's database is copied -- not on a timer of its own. It used to
+ * check every fifteen minutes, which kept a disk busy all day to save copying
+ * a few minutes earlier something that is copied tonight anyway.
  */
 
 export const IMAGE = 'quickstart-home/manager:1';
@@ -22,9 +27,7 @@ export const IMAGE = 'quickstart-home/manager:1';
 const SEARCH_ROOTS = ['/media', '/run/media', '/mnt'];
 
 export const DEFAULT_BACKUP_CONFIG = {
-    enabled: false,
     destination: '',
-    intervalMinutes: 15,
     // Off, and it stays off unless somebody deliberately asks. With this on the
     // copy becomes a mirror, and a mirror of a folder you just deleted
     // something from is a folder with that thing deleted from it.
@@ -32,6 +35,9 @@ export const DEFAULT_BACKUP_CONFIG = {
     lastRunAt: null,
     lastResult: null,
     lastOk: null,
+    // How many files the last copy could not write, so the page can say so in
+    // a few words rather than reciting their names.
+    lastSkipped: 0,
 };
 
 /**
@@ -80,29 +86,16 @@ export async function resolveDataVolume() {
 export function loadBackupConfig() {
     const cfg = loadManagerConfig();
     const saved = { ...(cfg.backup ?? {}) };
-    // This used to be measured in hours, back when a run was assumed to be
-    // expensive. Anything saved then is carried over rather than silently
-    // reset to the new default.
-    if (saved.intervalMinutes == null && saved.intervalHours != null) {
-        saved.intervalMinutes = Math.max(MIN_INTERVAL, Number(saved.intervalHours) * 60);
-    }
+    // From when this ran on a timer of its own. Nothing reads them now.
     delete saved.intervalHours;
+    delete saved.intervalMinutes;
+    delete saved.enabled;
     return { ...DEFAULT_BACKUP_CONFIG, ...saved };
 }
 
-/*
- * Five minutes is the floor.
- *
- * Not because a check is expensive -- it is one second against 8,000 files --
- * but because the copy it may start is not, and a new run beginning while a
- * 40GB rip is still being written would spend its time copying a file that is
- * changing underneath it.
- */
-export const MIN_INTERVAL = 5;
-
 export function saveBackupConfig(next) {
     const cfg = loadManagerConfig();
-    cfg.backup = { ...DEFAULT_BACKUP_CONFIG, ...(cfg.backup ?? {}), ...next };
+    cfg.backup = { ...loadBackupConfig(), ...next };
     saveManagerConfig(cfg);
     return cfg.backup;
 }
@@ -172,7 +165,6 @@ export function validateBackupConfig(input) {
     const errors = [];
     const out = { ...DEFAULT_BACKUP_CONFIG };
 
-    out.enabled = Boolean(input.enabled);
     out.mirrorDeletes = Boolean(input.mirrorDeletes);
     const sources = backupSources();
 
@@ -185,18 +177,6 @@ export function validateBackupConfig(input) {
     else if (dest && !isSafeHostPath(dest)) {
         errors.push('The destination contains a character that cannot be used in a folder path here (quotes, colons, $, ` or backslashes, or a line break).');
     } else out.destination = dest;
-
-    const mins = Number(input.intervalMinutes ?? DEFAULT_BACKUP_CONFIG.intervalMinutes);
-    if (!Number.isFinite(mins) || mins < MIN_INTERVAL || mins > 43200) {
-        errors.push(`The interval has to be between ${MIN_INTERVAL} minutes and 30 days.`);
-    } else {
-        out.intervalMinutes = Math.round(mins);
-    }
-
-    if (out.enabled && !out.destination) errors.push('Pick a drive to back up to first.');
-    if (out.enabled && !sources.length) {
-        errors.push('Nextcloud has no shared folders yet, so there is nothing to back up. Add one under Settings.');
-    }
 
     // Copying a folder into itself, or into something inside itself, is a loop
     // that fills the disk. Cheap to check and miserable to discover.
@@ -257,7 +237,7 @@ export async function run(onLine = () => {}) {
         // A non-zero exit rejects, so there is no code to test here -- the
         // throw is the failure path, and the job it runs under reports it.
         try {
-            await docker(copyArgs(src, name, target, rsyncFlags(cfg, { dryRun: false })), {
+            await docker(copyArgs(src, name, target, rsyncFlags(cfg)), {
                 onLine,
                 timeoutMs: 12 * 60 * 60_000,
             });
@@ -279,11 +259,11 @@ export async function run(onLine = () => {}) {
             `Copied to ${cfg.destination}, but ${skipped.length} file(s) could not be written: ` +
             `${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? '…' : ''}. ` +
             'Usually their names contain characters the drive\'s filesystem cannot store, such as : or ?.';
-        saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: note });
+        saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: note, lastSkipped: skipped.length });
         onLine(`\n${note}`);
         return { ok: true, skipped };
     }
-    saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: `Copied ${sources.length} folder(s) to ${cfg.destination}.` });
+    saveBackupConfig({ lastRunAt: stamp, lastOk: true, lastResult: `Copied ${sources.length} folder(s) to ${cfg.destination}.`, lastSkipped: 0 });
     onLine(`\nBacked up to ${cfg.destination}.`);
     return { ok: true, skipped: [] };
 }
@@ -367,14 +347,8 @@ export async function checkDestination(destination) {
     return { anchor, rest };
 }
 
-/*
- * The rsync options, the same for the real copy and for the dry run that
- * decides whether a copy is needed. They used to be written out twice and
- * drifted: the dry run did not exclude the thumbnail cache, so the cache
- * Nextcloud rewrites on every browse was "a change" every five minutes, and it
- * did not pass --delete, so with mirroring on a deleted file was never one.
- */
-function rsyncFlags(cfg, { dryRun }) {
+/* The rsync options for the copy. */
+function rsyncFlags(cfg) {
     const flags = [
         '-aH',
         '--exclude=.nextcloudsync.log',
@@ -394,27 +368,34 @@ function rsyncFlags(cfg, { dryRun }) {
          * of browsing would not.
          */
         '--exclude=appdata_*/preview/',
+        /*
+         * Lock files an office suite keeps beside a document while it is open
+         * -- "~lock.Report.docx#" from LibreOffice and Collabora, "~$Report.docx"
+         * from Word. They say who has the file open, and go away when it is
+         * closed. Worse than useless on the drive: their names end in # or
+         * start with ~$, so NTFS rejects some of them, and every copy then
+         * reported files it could not write that were never anyone's work.
+         */
+        '--exclude=~lock.*#',
+        '--exclude=.~lock.*#',
+        '--exclude=~$*',
     ];
     if (cfg.mirrorDeletes) flags.push('--delete');
-    if (dryRun) {
-        flags.push('-n', '--stats');
-    } else {
-        /*
-         * Progress that actually arrives.
-         *
-         * rsync draws progress by rewriting one line with carriage returns and
-         * no newline, and the line splitter feeding the overlay only emits on
-         * \n -- so the whole thing arrives as a single line when the copy ends.
-         * The script pipes it through `tr`, which turns each redraw into its
-         * own line, which streams.
-         *
-         * --no-inc-recursive costs an upfront scan of the tree, and buys a
-         * total that is the real total. Without it rsync counts as it goes, so
-         * the percentage walks backwards as more files are found, which is
-         * worse than no percentage at all.
-         */
-        flags.push('--info=progress2', '--no-inc-recursive', '--stats');
-    }
+    /*
+     * Progress that actually arrives.
+     *
+     * rsync draws progress by rewriting one line with carriage returns and
+     * no newline, and the line splitter feeding the overlay only emits on
+     * \n -- so the whole thing arrives as a single line when the copy ends.
+     * The script pipes it through `tr`, which turns each redraw into its
+     * own line, which streams.
+     *
+     * --no-inc-recursive costs an upfront scan of the tree, and buys a
+     * total that is the real total. Without it rsync counts as it goes, so
+     * the percentage walks backwards as more files are found, which is
+     * worse than no percentage at all.
+     */
+    flags.push('--info=progress2', '--no-inc-recursive', '--stats');
     return flags;
 }
 
@@ -448,17 +429,13 @@ export const DRIVE_GUARD = [
 
 const COPY_SCRIPT = [
     'set -o pipefail',
-    'rest=$1; name=$2; dry=$3; shift 3',
+    'rest=$1; name=$2; shift 2',
     DRIVE_GUARD,
     'out="/dest-root/${rest:+$rest/}$name"',
-    'if [ "$dry" = 1 ]; then',
-    '  rsync "$@" "/src/$name/" "$out/" 2>/dev/null',
-    'else',
-    '  mkdir -p "$out" && rsync "$@" "/src/$name/" "$out/" | tr \'\\r\' \'\\n\'',
-    'fi',
+    'mkdir -p "$out" && rsync "$@" "/src/$name/" "$out/" | tr \'\\r\' \'\\n\'',
 ].join('\n');
 
-function copyArgs(src, name, target, flags, { dryRun = false } = {}) {
+function copyArgs(src, name, target, flags) {
     if (!target.anchor || target.anchor === '/') throw new Error('Refusing to write to the root of this machine.');
     return [
         'run', '--rm',
@@ -469,93 +446,6 @@ function copyArgs(src, name, target, flags, { dryRun = false } = {}) {
         '-v', `${target.anchor}:/dest-root`,
         '-v', '/:/host:ro',
         IMAGE, 'sh', '-c', COPY_SCRIPT,
-        'sh', target.rest, name, dryRun ? '1' : '0', ...flags,
+        'sh', target.rest, name, ...flags,
     ];
-}
-
-/**
- * Would a copy actually move anything?
- *
- * Asked with --dry-run, which walks the same trees and writes nothing. It costs
- * about a second against 8,000 files, so it is cheap enough to ask every few
- * minutes -- and asking is what keeps a frequent schedule quiet. Without it a
- * check every five minutes is 288 jobs a day in the log and 288 notifications,
- * for a backup that had nothing to do 287 of those times.
- *
- * With the same options as the real run, so the two agree, and counting
- * deletions as well as transfers when mirroring is on.
- *
- * Any failure answers "no". A drive that is unplugged, or busy, is not a reason
- * to start a real run that would only fail more loudly.
- */
-export async function hasChanges() {
-    const cfg = loadBackupConfig();
-    if (!dataVolumePath) await resolveDataVolume();
-    const sources = backupSources();
-    if (!cfg.destination || !sources.length) return false;
-
-    let target;
-    try {
-        target = await checkDestination(cfg.destination);
-    } catch {
-        return false;
-    }
-
-    for (const src of sources) {
-        const name = src.split('/').filter(Boolean).pop() || 'root';
-        try {
-            const { stdout } = await docker(copyArgs(src, name, target, rsyncFlags(cfg, { dryRun: true }), { dryRun: true }), {
-                timeoutMs: 10 * 60_000,
-            });
-            if (dryRunMoves(stdout)) return true;
-        } catch {
-            return false;
-        }
-    }
-    return false;
-}
-
-/** Whether rsync's --stats for a dry run say anything would be copied or deleted. */
-export function dryRunMoves(stats) {
-    const count = (label) => {
-        const m = new RegExp(`^${label}:\\s*([\\d,]+)`, 'm').exec(String(stats));
-        return m ? Number(m[1].replace(/,/g, '')) : 0;
-    };
-    return count('Number of regular files transferred') > 0 || count('Number of deleted files') > 0;
-}
-
-// ------------------------------------------------------------------ schedule
-
-let timer = null;
-
-/**
- * (Re)arms the periodic copy. Safe to call whenever the config changes.
- *
- * A missing drive is not an error worth shouting about here -- the whole point
- * of a removable drive is that it is sometimes removed -- so a scheduled run
- * that finds nothing plugged in records why and waits for the next one.
- */
-export function scheduleFromConfig(log = () => {}, enqueue = null) {
-    if (timer) clearInterval(timer);
-    timer = null;
-
-    const cfg = loadBackupConfig();
-    if (!cfg.enabled || !cfg.destination || !backupSources().length) return;
-
-    const tick = async () => {
-        try {
-            if (!dataVolumePath) await resolveDataVolume();
-            // Nothing to copy means nothing to announce. This is the whole
-            // reason a five-minute schedule is reasonable.
-            if (!(await hasChanges())) return;
-            if (enqueue) enqueue();
-            else await run((line) => log(`backup: ${line}`));
-        } catch (err) {
-            saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: err.message });
-            log(`backup: ${err.message}`);
-        }
-    };
-
-    timer = setInterval(tick, Math.max(MIN_INTERVAL, cfg.intervalMinutes) * 60_000);
-    timer.unref?.();
 }

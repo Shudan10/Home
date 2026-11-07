@@ -519,35 +519,27 @@ function progressFromLine(line) {
     }
 
     /*
-     * rsync's own percentage, which is the only job here that can report a real
-     * one -- everything else is a sequence of named steps the bar guesses at.
+     * Backups are one step after another, each starting with a "> " line --
+     * an app, then Nextcloud's file folders -- and the bar moves a step's
+     * share at a time.
      *
-     * Scoped to the backup action. The shape is generic enough ("123,456  45%")
-     * that letting it run against every job would let some other tool's output
-     * drive the bar backwards.
+     * Inside the file copy, rsync's own percentage fills in that step's share:
+     * the only job here that can report a real one. Scoped to the backup
+     * action, because the shape is generic enough ("123,456  45%") that letting
+     * it run against every job would let some other tool's output drive the
+     * bar backwards.
      */
-    if (pendingAction.key === 'backup') {
+    if (pendingAction.key === 'snapshots') {
+        const total = pendingAction.snapTotal || 1;
+        if (/^> /.test(line)) {
+            pendingAction.snapIndex = (pendingAction.snapIndex ?? -1) + 1;
+            return setProgress(Math.min(0.95, pendingAction.snapIndex / total));
+        }
         const pct = /^\s*[\d,]+\s+(\d{1,3})%/.exec(line);
         if (pct) {
             const done = Math.min(100, Number(pct[1])) / 100;
-            // Folders are copied one after another, so each one's percentage is
-            // a slice of the whole rather than the whole thing.
-            const total = pendingAction.backupTotal || 1;
-            const index = pendingAction.backupIndex || 0;
-            return setProgress((index + done) / total);
+            return setProgress(Math.min(0.98, ((pendingAction.snapIndex ?? 0) + done) / total));
         }
-        const start = /^> (\/.*)$/.exec(line);
-        if (start) {
-            pendingAction.backupIndex = (pendingAction.backupIndex ?? -1) + 1;
-            return;
-        }
-    }
-
-    // App backups are one app after another, each a "> Name" line; the bar
-    // moves an app's share at a time.
-    if (pendingAction.key === 'snapshots' && /^> /.test(line)) {
-        pendingAction.snapIndex = (pendingAction.snapIndex ?? -1) + 1;
-        return setProgress(Math.min(0.95, pendingAction.snapIndex / (pendingAction.snapTotal || 1)));
     }
 
     for (const [re, fraction] of ACTION_MARKS) {
@@ -1387,7 +1379,7 @@ const formFields = (name) =>
         mealplan: ['mealplan-pub-web', 'mealplan-port', 'mealplan-ref'],
         minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
         backup: [
-            'backup-enabled', 'backup-mirror', 'backup-interval', 'backup-destination', 'snap-enabled', 'snap-keep',
+            'backup-mirror', 'backup-destination', 'snap-enabled', 'snap-keep',
             ...['nextcloud', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'panel'].map((k) => `snap-svc-${k}`),
         ],
     })[name] ?? [];
@@ -5727,21 +5719,8 @@ if ('serviceWorker' in navigator) {
  * mistyped path here does not fail: Docker creates a bind mount source that is
  * missing, so the copy would run onto the internal disk and report success.
  */
-let backupSources = [];
 let backupDrives = [];
 let snapState = null;
-
-function renderBackupSources() {
-    const note = $('backup-sources-note');
-    if (!note) return;
-    if (!backupSources.length) {
-        note.className = 'verdict bad';
-        note.textContent = 'Nextcloud is not installed, or keeps no files yet, so there is nothing here to copy.';
-        return;
-    }
-    note.className = 'verdict';
-    note.textContent = `Copies what Nextcloud is serving: ${backupSources.join(', ')}.`;
-}
 
 function renderBackupDrives(selected) {
     const sel = $('backup-destination');
@@ -5780,13 +5759,26 @@ function whenAgo(iso) {
     return t.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+/** Nextcloud's files, which are copied in the same run as its database. */
+function snapFilesLine(f) {
+    if (!f?.hasFiles) return '';
+    if (!f.lastRunAt) return '<div class="muted">Files: not copied yet</div>';
+    if (f.lastOk === false) return `<div class="bad-text">Files: failed ${escapeHtml(whenAgo(f.lastRunAt))}: ${escapeHtml(f.lastError ?? '')}</div>`;
+    const skipped = f.lastSkipped
+        ? ` · <span class="bad-text" title="Usually their names have characters the drive cannot store, such as : or ?. The full list is in the log of that run.">${f.lastSkipped} file${f.lastSkipped === 1 ? '' : 's'} could not be written</span>`
+        : '';
+    return `<div><span class="ok-text">Files: copied ${escapeHtml(whenAgo(f.lastRunAt))}</span>${skipped}</div>`;
+}
+
 function snapLastLine(s) {
     if (!s.present) return '<span class="muted">Not installed</span>';
     const last = s.last;
-    if (!last) return '<span class="muted">Not backed up yet</span>';
-    if (last.ok === false) return `<span class="bad-text">Failed ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}</span>`;
+    if (!last) return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not' : 'Not'} backed up yet</div>`;
+    // Nextcloud's row has two lines, so each says which half it is about.
+    const what = s.key === 'nextcloud' ? 'Database and settings: ' : '';
+    if (last.ok === false) return `<div class="bad-text">${what}${what ? 'failed' : 'Failed'} ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}</div>`;
     const size = last.bytes ? ` · ${humanBytes(last.bytes)}` : '';
-    return `<span class="ok-text">Backed up ${escapeHtml(whenAgo(last.at))}${size}</span>`;
+    return `<div class="ok-text">${what || 'Backed up '}${what ? 'backed up ' : ''}${escapeHtml(whenAgo(last.at))}${size}</div>`;
 }
 
 function renderSnapshots(keepEdits) {
@@ -5798,6 +5790,17 @@ function renderSnapshots(keepEdits) {
         $('snap-keep').value = c.keep ?? 3;
     }
     const checked = (s) => (keepEdits && $(`snap-svc-${s.key}`) ? $(`snap-svc-${s.key}`).checked : s.included);
+    const mirror = keepEdits && $('backup-mirror') ? $('backup-mirror').checked : Boolean(snapState.services.find((s) => s.key === 'nextcloud')?.files?.mirrorDeletes);
+    // Tucked under Nextcloud's row: the one setting its files have, and one
+    // that is better left alone.
+    const nextcloudExtra = (s) =>
+        s.key === 'nextcloud' && s.files?.hasFiles
+            ? `<details class="snap-more">
+                 <summary>Deleted files</summary>
+                 <label class="check"><input type="checkbox" id="backup-mirror"${mirror ? ' checked' : ''}> Remove files from the drive when they are deleted from Nextcloud</label>
+                 <p class="hint">Off by default, and worth leaving off. With this on the drive is a mirror, and a mirror of a folder you have just deleted something from is a folder with that thing deleted from it.</p>
+               </details>`
+            : '';
     box.innerHTML = snapState.services
         .map(
             (s) => `
@@ -5807,7 +5810,8 @@ function renderSnapshots(keepEdits) {
             <strong>${escapeHtml(s.label)}</strong>
           </label>
           <p class="hint">${escapeHtml(s.what)}</p>
-          <div class="snap-status">${snapLastLine(s)}</div>
+          <div class="snap-status">${snapLastLine(s)}${s.key === 'nextcloud' ? snapFilesLine(s.files) : ''}</div>
+          ${nextcloudExtra(s)}
           <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present ? '' : ' disabled'}>Back up now</button>
         </div>`,
         )
@@ -5831,9 +5835,7 @@ async function loadBackup() {
     }
     const c = r.config ?? {};
     backupDrives = r.drives ?? [];
-    backupSources = r.sources ?? [];
     snapState = snaps;
-    renderBackupSources();
     // The drive list is always redrawn -- a drive may have been plugged in --
     // but while the form has unsaved edits it keeps the drive picked in it,
     // and the boxes keep what was typed. See dirtyForms.
@@ -5842,21 +5844,8 @@ async function loadBackup() {
         renderBackupDrives($('backup-destination').value || c.destination);
     } else {
         renderBackupDrives(c.destination);
-        $('backup-enabled').checked = Boolean(c.enabled);
-        $('backup-mirror').checked = Boolean(c.mirrorDeletes);
-        $('backup-interval').value = c.intervalMinutes ?? 15;
     }
     renderSnapshots(editing);
-
-    const last = $('backup-last');
-    last.hidden = false;
-    if (c.lastRunAt) {
-        last.className = c.lastOk === false ? 'verdict bad' : 'verdict ok';
-        last.textContent = `${c.lastOk === false ? 'Last attempt failed' : 'Last copy'}: ${c.lastResult ?? ''} (${new Date(c.lastRunAt).toLocaleString()})`;
-    } else {
-        last.className = 'verdict';
-        last.textContent = 'Nextcloud\'s files have not been copied yet.';
-    }
 }
 
 $('backup-rescan').addEventListener('click', async () => {
@@ -5883,10 +5872,8 @@ $('backup-save').addEventListener('click', async () => {
         await api('/api/backup', {
             method: 'PUT',
             body: {
-                enabled: $('backup-enabled').checked,
                 destination: $('backup-destination').value,
-                intervalMinutes: Number($('backup-interval').value),
-                mirrorDeletes: $('backup-mirror').checked,
+                mirrorDeletes: Boolean($('backup-mirror')?.checked),
             },
         });
         await api('/api/snapshots', {
@@ -5900,26 +5887,6 @@ $('backup-save').addEventListener('click', async () => {
         err.hidden = false;
         err.textContent = e.message;
     }
-});
-
-$('backup-run').addEventListener('click', async () => {
-    const pending = runAction({
-        key: 'backup',
-        title: 'Copying Nextcloud files',
-        note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
-        request: () => api('/api/backup/run', { method: 'POST' }),
-    });
-    // runAction opens the overlay synchronously before it awaits anything, so
-    // pendingAction exists by the time this line runs. The bar needs to know
-    // how many folders there are to turn one folder's percentage into a share
-    // of the whole; the index starts below zero because the first "> /path"
-    // line advances it to zero.
-    if (pendingAction) {
-        pendingAction.backupTotal = backupSources.length || 1;
-        pendingAction.backupIndex = -1;
-    }
-    const job = await pending;
-    if (job) loadBackup().catch(() => {});
 });
 
 /** Backs up one app, or every one that is ticked when `service` is null. */
@@ -5936,7 +5903,10 @@ async function runSnapshots(service) {
         request: () => api('/api/snapshots/run', { method: 'POST', body: service ? { service } : {} }),
     });
     if (pendingAction) {
-        pendingAction.snapTotal = service ? 1 : (snapState?.services ?? []).filter((s) => s.present && s.included).length || 1;
+        // Nextcloud's files are a step of their own, after its database.
+        const chosen = (snapState?.services ?? []).filter((s) => s.present && (service ? s.key === service : s.included));
+        const withFiles = chosen.some((s) => s.key === 'nextcloud' && s.files?.hasFiles) ? 1 : 0;
+        pendingAction.snapTotal = chosen.length + withFiles || 1;
         pendingAction.snapIndex = -1;
     }
     const job = await pending;
