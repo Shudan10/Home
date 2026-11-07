@@ -55,7 +55,7 @@ while [ $# -gt 0 ]; do
 Usage: uninstall.sh [options]
 
   --dir <path>          Install directory (default: ~/.quickstart-home)
-  --keep-data           Keep the app data volumes (Nextcloud files, Jellyfin's library, Meal Plan's meals,
+  --keep-data           Keep the app data volumes (Nextcloud files, Jellyfin's library, Family Hub's calendar, chores and meals,
                         the Minecraft world), plus .env and conf/ with the passwords they need
   --keep-base-images    Keep node / alpine / cloudflared and the other pulled base images
   --yes, -y             Do not ask for confirmation

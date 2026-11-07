@@ -79,11 +79,19 @@ export const SERVICES = [
     {
         key: 'mealplan',
         label: 'Family Hub',
-        what: 'Every event, chore, week, recipe and shopping list.',
+        what: 'The family, every event, chore, week, recipe and shopping list, and its settings. Family Hub stops for a few seconds while it is copied.',
         volume: 'quickstart-home-mealplan-data',
         items: ['.'],
-        exclude: [],
+        // A file part way through being saved: written as <name>.<pid>.tmp and
+        // then renamed over the real one. Caught mid-save it is half a file,
+        // and a restore would put it back beside the whole one.
+        exclude: ['./*.tmp'],
         app: MEALPLAN_CONTAINER,
+        // Each file is replaced whole, but they are separate files: a copy
+        // taken while it runs can have a chore marked done in tasks.json from
+        // one moment and the calendar in events.json from the next. Stopped,
+        // they are one moment, for the cost of a few seconds at 3 AM.
+        stopWhileCopying: true,
     },
     {
         key: 'minecraft',

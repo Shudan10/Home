@@ -3088,7 +3088,7 @@ let serviceState = {};
 const UNINSTALL_COPY = {
     nextcloud: 'every file, photo and calendar stored in it',
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
-    mealplan: 'the meal library and every week that has been planned',
+    mealplan: 'the family, its calendar and chores, the meal library and every week that has been planned',
     minecraft: 'the world and everything built in it, and the allow list, operators and bans',
     kachat: 'every photo, video and voice message sent from it, and the contacts backups in it. Every link sent from it stops working',
 };
@@ -5950,7 +5950,9 @@ const RESTORE_WARNINGS = {
         'Your files stay as they are now, and Nextcloud checks every one of them afterwards.',
     kachat: 'KaChat Nextcloud is unavailable for a few minutes. Its accounts, links and every file in it go back to how they were then.',
     jellyfin: 'Jellyfin stops for a minute. Users, watch history and libraries go back to how they were then.',
-    mealplan: 'Family Hub stops for a moment. Every event, chore, week, recipe and list goes back to how it was then.',
+    mealplan:
+        'Family Hub stops for a moment. The family, every event, chore, week, recipe and list, and its settings go back to how they were then. ' +
+        'That includes the calendar link phones subscribe to: if you made a new link since this copy, the old one works again and the new one stops.',
     minecraft: 'The Minecraft server stops, and everyone playing is disconnected. The worlds go back to how they were then.',
     panel:
         'The panel restarts. Every setting and password it keeps goes back to how it was then, including the password you sign in to this panel with. ' +
