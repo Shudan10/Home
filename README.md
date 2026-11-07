@@ -10,7 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/Shudan10/Home/main/install.sh | bas
 It installs Docker if it is missing, sets up the control panel, prints a
 password, and stops. Nothing else is installed until you ask for it.
 
-Today it carries **Nextcloud**, **Jellyfin**, **Meal Plan** and a **Minecraft**
+Today it carries **Nextcloud**, **Jellyfin**, **Family Hub** (the family board that grew out of Meal Plan) and a **Minecraft**
 server, and puts the web apps on your own domain through a **Cloudflare Tunnel**.
 More apps will be added.
 

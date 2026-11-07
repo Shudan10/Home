@@ -77,8 +77,8 @@ export const SERVICES = [
     },
     {
         key: 'mealplan',
-        label: 'Meal Plan',
-        what: 'Every week, recipe and shopping list.',
+        label: 'Family Hub',
+        what: 'Every event, chore, week, recipe and shopping list.',
         volume: 'quickstart-home-mealplan-data',
         items: ['.'],
         exclude: [],

@@ -63,7 +63,7 @@ export const UNITS = {
         data: 'its library database, artwork and settings. Your media files are untouched: they live on your disk and are only ever mounted read-only',
     },
     mealplan: {
-        label: 'Meal Plan',
+        label: 'Family Hub',
         profile: 'mealplan',
         services: ['mealplan'],
         containers: ['quickstart-home-mealplan'],
@@ -71,7 +71,7 @@ export const UNITS = {
         volumes: ['quickstart-home-mealplan-data'],
         images: ['quickstart-home/mealplan'],
         buildable: ['mealplan'],
-        data: 'the meal library and every week that has been planned',
+        data: 'the family, the calendar, the chores, the meal library and every week that has been planned',
     },
     minecraft: {
         label: 'Minecraft',

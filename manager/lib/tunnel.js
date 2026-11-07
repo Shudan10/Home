@@ -56,11 +56,11 @@ export const SERVICES = [
     },
     {
         key: 'mealplan',
-        label: 'Meal Plan',
-        detail: 'What the family is eating this week.',
+        label: 'Family Hub',
+        detail: "The family's calendar, chores and meals.",
         origin: appOrigin('mealplan'),
         app: 'mealplan',
-        note: 'Meal Plan has its own family password. On a phone, open the address and use Add to Home Screen.',
+        note: "Family Hub has its own family password. On a phone, open the address and use Add to Home Screen. Make the iPhone calendar link from this address, under Family Hub's Settings, and it updates away from home too.",
     },
     {
         key: 'kachat',
@@ -147,7 +147,7 @@ export function blockedReason(key, origin = null) {
         return 'KaChat Nextcloud is not installed yet. Install it from its page under Apps, then publish it.';
     }
     if (key === 'mealplan' && !(readEnvFile().MEALPLAN_PASSWORD_HASH || '').trim()) {
-        return 'Meal Plan has no family password yet, so on the internet anyone who found the address could read and change your plan. Set one under Meal Plan, Settings, then publish it.';
+        return 'Family Hub has no family password yet, so on the internet anyone who found the address could read and change your calendar and plans. Set one under Family Hub, Settings, then publish it.';
     }
     return null;
 }

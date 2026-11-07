@@ -55,7 +55,7 @@ export const STACK_CONTAINERS = [
     { key: 'nextcloud-redis', label: 'nextcloud redis', name: 'quickstart-home-nextcloud-redis' },
     { key: 'nextcloud-imaginary', label: 'nextcloud previews', name: 'quickstart-home-nextcloud-imaginary' },
     { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
-    { key: 'mealplan', label: 'meal plan', name: MEALPLAN_CONTAINER },
+    { key: 'mealplan', label: 'family hub', name: MEALPLAN_CONTAINER },
     { key: 'minecraft', label: 'minecraft', name: MINECRAFT_CONTAINER },
     { key: 'kachat', label: 'kachat nextcloud', name: 'quickstart-home-kachat-nextcloud' },
     { key: 'kachat-db', label: 'kachat mariadb', name: 'quickstart-home-kachat-db' },

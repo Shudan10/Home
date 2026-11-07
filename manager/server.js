@@ -1237,7 +1237,7 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
     const state = await dockerctl.containerState(apps.APPS.mealplan.container);
     if (!state.running) return sendJson(res, 200, { ok: true, restarting: false });
 
-    const job = jobs.start('Applying the Meal Plan password', async (onLine) => {
+    const job = jobs.start('Applying the Family Hub password', async (onLine) => {
         await lifecycle.setRunning('mealplan', true, onLine);
     }, { key: 'mealplan-password', app: 'mealplan' });
     sendJson(res, 202, { ok: true, jobId: job.id, restarting: true });

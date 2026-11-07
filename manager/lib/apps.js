@@ -66,7 +66,7 @@ export const APPS = {
     },
 
     mealplan: {
-        label: 'Meal Plan',
+        label: 'Family Hub',
         // Built from its own repository, so the branch pickers and upstream
         // checks in this file apply to it -- the only app here that they do.
         tracksRepo: true,
@@ -79,7 +79,7 @@ export const APPS = {
         // or not the port is also published on the machine.
         publish: { hostname: 'mealplan', port: 8080 },
         ports: {
-            web: { port: 8080, label: 'Meal Plan web', hostPort: 8083 },
+            web: { port: 8080, label: 'Family Hub web', hostPort: 8083 },
         },
     },
 
@@ -525,12 +525,12 @@ export function validateAppsConfig(input, { lockedAdminUser = null } = {}) {
     ].find(Boolean);
 
     if (!Number.isInteger(mport) || mport < 1024 || mport > 65535) {
-        errors.push('Meal Plan port must be between 1024 and 65535.');
+        errors.push('Family Hub port must be between 1024 and 65535.');
     } else if (clash && cfg.mealplan.publish.web) {
-        errors.push(`Port ${mport} is where ${clash} is published, so Meal Plan cannot take it too.`);
+        errors.push(`Port ${mport} is where ${clash} is published, so Family Hub cannot take it too.`);
     } else if (mtaken && cfg.mealplan.publish.web) {
         errors.push(
-            `Port ${mport} is already used by ${mtaken}, so Meal Plan cannot start on it. Pick another one, ` +
+            `Port ${mport} is already used by ${mtaken}, so Family Hub cannot start on it. Pick another one, ` +
                 `for example ${mport + 1}.`,
         );
     } else {
@@ -609,7 +609,7 @@ function validateMinecraft(m, cfg, errors) {
     const webPorts = [
         ['Nextcloud', cfg.nextcloud.publish.web && cfg.nextcloud.hostPort],
         ['Jellyfin', cfg.jellyfin.publish.web && cfg.jellyfin.hostPort],
-        ['Meal Plan', cfg.mealplan.publish.web && cfg.mealplan.hostPort],
+        ['Family Hub', cfg.mealplan.publish.web && cfg.mealplan.hostPort],
     ];
     const jport = Number(m.javaPort ?? d.javaPort);
     const jtaken = reservedHostPorts().get(jport);

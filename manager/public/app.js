@@ -1016,7 +1016,7 @@ const setRunning = (key, on, headers) =>
 const SERVICE_NAMES = {
     nextcloud: 'Nextcloud',
     jellyfin: 'Jellyfin',
-    mealplan: 'Meal Plan',
+    mealplan: 'Family Hub',
     minecraft: 'Minecraft',
 };
 
@@ -2191,7 +2191,7 @@ async function loadMealPlanPassword() {
         note.className = set ? 'verdict ok' : 'verdict bad';
         note.textContent = set
             ? 'A family password is set.'
-            : 'No password is set, so anyone who can reach Meal Plan can change the week. Set one.';
+            : 'No password is set, so anyone who can reach Family Hub can change the calendar and the week. Set one.';
     } catch {
         note.hidden = true;
     }
@@ -2209,7 +2209,7 @@ $('mealplan-password-save').addEventListener('click', async () => {
             body: { password: field.value },
         });
         field.value = '';
-        toast(r.restarting ? 'Password set. Meal Plan is restarting.' : 'Password set.');
+        toast(r.restarting ? 'Password set. Family Hub is restarting.' : 'Password set.');
         loadMealPlanPassword();
         // Publishing it was waiting on this, so the tunnel form should know now
         // rather than on the next reload.
@@ -5929,7 +5929,7 @@ const RESTORE_WARNINGS = {
         'Your files stay as they are now, and Nextcloud checks every one of them afterwards.',
     kachat: 'KaChat Nextcloud is unavailable for a few minutes. Its accounts, links and every file in it go back to how they were then.',
     jellyfin: 'Jellyfin stops for a minute. Users, watch history and libraries go back to how they were then.',
-    mealplan: 'Meal Plan stops for a moment. Every week, recipe and list goes back to how it was then.',
+    mealplan: 'Family Hub stops for a moment. Every event, chore, week, recipe and list goes back to how it was then.',
     minecraft: 'The Minecraft server stops, and everyone playing is disconnected. The worlds go back to how they were then.',
     panel:
         'The panel restarts. Every setting and password it keeps goes back to how it was then, including the password you sign in to this panel with. ' +

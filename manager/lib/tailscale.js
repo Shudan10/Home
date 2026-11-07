@@ -43,7 +43,7 @@ const IMAGE = 'quickstart-home/manager:1';
 export const SERVE_APPS = [
     { key: 'nextcloud', label: 'Nextcloud', port: 443 },
     { key: 'jellyfin', label: 'Jellyfin', port: 8443 },
-    { key: 'mealplan', label: 'Meal Plan', port: 8444 },
+    { key: 'mealplan', label: 'Family Hub', port: 8444 },
     { key: 'panel', label: 'This panel', port: 8445 },
 ];
 
