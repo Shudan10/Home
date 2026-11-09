@@ -5880,6 +5880,9 @@ const logLink = (name) =>
 
 function snapLastLine(s) {
     if (!s.present) return '<span class="muted">Not installed</span>';
+    if (snapState?.config?.keep === 0) {
+        return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not copied' : 'Not backed up'} (keep the last 0)</div>`;
+    }
     const last = s.last;
     if (!last) return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not' : 'Not'} backed up yet</div>`;
     // Nextcloud's row has two lines, so each says which half it is about.
@@ -5919,7 +5922,7 @@ function renderSnapshots(keepEdits) {
           <p class="hint">${escapeHtml(s.what)}</p>
           <div class="snap-status">${snapLastLine(s)}${s.key === 'nextcloud' ? snapFilesLine(s.files) : ''}</div>
           ${nextcloudExtra(s)}
-          <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present ? '' : ' disabled'}>Back up now</button>
+          <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present && (c.keep !== 0 || s.key === 'nextcloud') ? '' : ' disabled'}>Back up now</button>
         </div>`,
         )
         .join('');
@@ -5976,9 +5979,54 @@ $('backup-rescan').addEventListener('click', async () => {
     }
 });
 
+/**
+ * The copies that keeping only `keep` would remove, read from the drive, as
+ * lines for the confirm: which app, how many, how big. Null when none would go.
+ */
+async function copiesBeyond(keep) {
+    const r = await api('/api/snapshots/copies');
+    if (r.error) throw new Error(`Could not read the drive to see which copies would be removed: ${r.error}`);
+    const lines = [];
+    let count = 0;
+    let bytes = 0;
+    for (const s of snapState?.services ?? []) {
+        const list = r.copies?.[s.key] ?? [];
+        // Copies made before a restore are counted on their own, as the drive keeps them.
+        const going = [false, true].flatMap((before) => list.filter((c) => (c.kind === 'before-restore') === before).slice(keep));
+        if (!going.length) continue;
+        const size = going.reduce((n, c) => n + (c.bytes || 0), 0);
+        count += going.length;
+        bytes += size;
+        lines.push(`${s.label}: ${going.length} cop${going.length === 1 ? 'y' : 'ies'} (${humanBytes(size)})`);
+    }
+    return count ? { lines, count, bytes } : null;
+}
+
 $('backup-save').addEventListener('click', async () => {
     const err = $('backup-error');
     err.hidden = true;
+    const keep = Number($('snap-keep').value);
+    let removing = null;
+    if (Number.isInteger(keep) && keep < (snapState?.config?.keep ?? 3)) {
+        try {
+            removing = await copiesBeyond(keep);
+        } catch (e) {
+            err.hidden = false;
+            err.textContent = e.message;
+            return;
+        }
+        if (removing) {
+            const ok = await askConfirm({
+                title: `Remove ${removing.count} backup cop${removing.count === 1 ? 'y' : 'ies'} (${humanBytes(removing.bytes)}) from the drive?`,
+                body:
+                    `${keep === 0 ? 'Keeping none removes every copy on the drive' : `Keeping the last ${keep} removes the older ones`}:\n\n${removing.lines.join('\n')}\n\n` +
+                    'They cannot be restored from afterwards. Nextcloud\'s files on the drive (the data folder) are not touched.',
+                confirmLabel: 'Remove and save',
+                danger: true,
+            });
+            if (!ok) return;
+        }
+    }
     const services = {};
     for (const s of snapState?.services ?? []) {
         const box = $(`snap-svc-${s.key}`);
@@ -5992,11 +6040,20 @@ $('backup-save').addEventListener('click', async () => {
         });
         await api('/api/snapshots', {
             method: 'PUT',
-            body: { enabled: $('snap-enabled').checked, keep: Number($('snap-keep').value), services },
+            body: { enabled: $('snap-enabled').checked, keep, services },
         });
         setFormDirty('backup', false);
         kResult('backup-result', 'Saved.', false);
         await loadBackup();
+        if (removing) {
+            const job = await runAction({
+                key: 'snapshots-remove',
+                title: 'Removing older backup copies',
+                note: 'Deleting the copies listed from the drive.',
+                request: () => api('/api/snapshots/remove-extra', { method: 'POST' }),
+            });
+            if (job) loadBackup().catch(() => {});
+        }
     } catch (e) {
         err.hidden = false;
         err.textContent = e.message;
@@ -6018,7 +6075,10 @@ async function runSnapshots(service, { allowDeletes = false } = {}) {
     });
     if (pendingAction) {
         // Nextcloud's files are a step of their own, after its database.
-        const chosen = (snapState?.services ?? []).filter((s) => s.present && (service ? s.key === service : s.included));
+        const keepsNone = snapState?.config?.keep === 0;
+        const chosen = (snapState?.services ?? []).filter(
+            (s) => s.present && (service ? s.key === service : s.included) && (!keepsNone || s.key === 'nextcloud'),
+        );
         const withFiles = chosen.some((s) => s.key === 'nextcloud' && s.files?.hasFiles) ? 1 : 0;
         pendingAction.snapTotal = chosen.length + withFiles || 1;
         pendingAction.snapIndex = -1;

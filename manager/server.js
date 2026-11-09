@@ -886,6 +886,14 @@ route('POST', /^\/api\/snapshots\/run$/, async (req, res) => {
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
+// After the kept number is lowered: the page has already listed what goes.
+route('POST', /^\/api\/snapshots\/remove-extra$/, async (req, res) => {
+    const job = jobs.start('Remove older backup copies', (onLine) => snapshots.removeExtraCopies({ onLine }), {
+        key: 'snapshots:remove-extra',
+    });
+    sendJson(res, 202, { ok: true, jobId: job.id });
+});
+
 route('POST', /^\/api\/snapshots\/restore$/, async (req, res) => {
     const body = (await readBody(req)) ?? {};
     const id = String(body.id ?? '');

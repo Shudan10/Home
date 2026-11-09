@@ -162,7 +162,7 @@ export function validateSnapshotConfig(input = {}) {
     if ('enabled' in input) out.enabled = Boolean(input.enabled);
     if ('keep' in input) {
         const keep = Number(input.keep);
-        if (!Number.isInteger(keep) || keep < 1 || keep > 30) errors.push('Keep between 1 and 30 copies of each app.');
+        if (!Number.isInteger(keep) || keep < 0 || keep > 30) errors.push('Keep between 0 and 30 copies of each app.');
         else out.keep = keep;
     }
     if (input.services && typeof input.services === 'object') {
@@ -536,6 +536,21 @@ async function prune(s, target, keep, onLine) {
 }
 
 /**
+ * Removes, for every app, the copies beyond what is kept now. Run when the
+ * number is lowered, after the page has listed what will go and been told
+ * yes, rather than leaving it for the next night to do unseen.
+ */
+export async function removeExtraCopies({ onLine = () => {} } = {}) {
+    const target = await driveTarget();
+    const { keep } = loadSnapshotConfig();
+    for (const s of SERVICES) {
+        if (cancelRequested()) break;
+        await prune(s, target, keep, onLine);
+    }
+    onLine(keep ? `Done. Each app keeps at most ${keep} cop${keep === 1 ? 'y' : 'ies'}.` : 'Done. No dated copies are left on the drive.');
+}
+
+/**
  * Nextcloud's files, after its database. Its own record of how it went is
  * kept by backup.js; a failure here fails Nextcloud's row too, because a
  * database without the files it describes is half a backup.
@@ -574,7 +589,15 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
     const target = await driveTarget();
     const cfg = loadSnapshotConfig();
     const volumes = await existingVolumes();
-    const chosen = only ? [serviceFor(only)].filter(Boolean) : SERVICES.filter((s) => isIncluded(cfg, s.key));
+    // Keeping none means no dated copies at all; Nextcloud's files are still
+    // mirrored, since that folder is not a copy that piles up.
+    const noCopies = cfg.keep === 0;
+    let chosen = only ? [serviceFor(only)].filter(Boolean) : SERVICES.filter((s) => isIncluded(cfg, s.key));
+    if (noCopies) {
+        if (only && only !== 'nextcloud') throw new Error('Dated copies are switched off (keep the last 0), so there is nothing to back up for this app.');
+        chosen = chosen.filter((s) => s.key === 'nextcloud');
+        onLine('Dated copies are switched off (keep the last 0), so only Nextcloud\'s files are mirrored.');
+    }
     const failed = [];
     let copied = 0;
 
@@ -587,6 +610,12 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
         }
         onLine(`\n> ${s.label}`);
         try {
+            if (noCopies) {
+                await copyFiles(onLine, { allowDeletes });
+                onLine(`${s.label}: done.`);
+                copied += 1;
+                continue;
+            }
             const { id, bytes } = await copyService(s, target, { kind, onLine });
             await prune(s, target, cfg.keep, onLine).catch((err) => onLine(`Could not remove older copies: ${err.message}`));
             if (s.key === 'nextcloud' && !cancelRequested()) await copyFiles(onLine, { allowDeletes });
@@ -611,6 +640,10 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
         }
     }
     if (failed.length) throw new Error(`Could not back up ${failed.join(', ')}. The log says why.`);
+    if (noCopies) {
+        onLine(copied ? '\nNextcloud\'s files are mirrored to the drive.' : '\nNothing to do: Nextcloud is not backed up and no dated copies are kept.');
+        return { copied };
+    }
     onLine(`\nBacked up ${copied} app${copied === 1 ? '' : 's'} to ${loadBackupConfig().destination}/${ROOT}.`);
     return { copied };
 }
@@ -735,7 +768,8 @@ async function restoreOne({ id, putBack = false, saveFirst = true, onLine = () =
         onLine(`\n> Saving ${s.label} as it is now, so this can be undone`);
         try {
             const saved = await copyService(s, target, { kind: 'before-restore', onLine });
-            await prune(s, target, loadSnapshotConfig().keep, onLine).catch(() => {});
+            // At least the one just made: it is what undoes this restore.
+            await prune(s, target, Math.max(1, loadSnapshotConfig().keep), onLine).catch(() => {});
             onLine(`Saved as ${saved.id}.`);
         } catch (err) {
             throw new Error(

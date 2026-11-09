@@ -1821,9 +1821,10 @@
             </label>
             <label class="inline">
               Keep the last
-              <input type="number" id="snap-keep" min="1" max="30" step="1" style="max-width:5rem">
+              <input type="number" id="snap-keep" min="0" max="30" step="1" style="max-width:5rem">
               copies of each app
             </label>
+            <p class="hint">0 keeps no dated copies: only Nextcloud's files are mirrored, and there is nothing to restore from.</p>
             <p class="hint" id="snap-next"></p>
             <div class="snap-list" id="snap-services"></div>
             <div class="row">
