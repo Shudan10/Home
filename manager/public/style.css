@@ -2252,7 +2252,7 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
 .snap-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "name action" "what what" "status status";
+    grid-template-areas: "name action" "what what" "mirror mirror" "status status";
     gap: 2px 12px;
     align-items: center;
     padding: 12px 0;
@@ -2287,7 +2287,8 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
     .restore-list { grid-template-columns: 1fr; }
 }
 #tab-backups button.mini { padding: 5px 12px; font-size: 13px; }
-.snap-row > .snap-mirror { grid-column: 1 / -1; margin: 6px 0 0 26px; }
+/* Its own row: it is also a .hint, which would otherwise put it on top of the description. */
+.snap-row > .snap-mirror { grid-area: mirror; margin: 6px 0 4px 26px; }
 .snap-logs ul { margin: 6px 0 0; padding-left: 18px; }
 
 /* Global settings, Update the apps: one row per app. */
