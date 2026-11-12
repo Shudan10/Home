@@ -40,6 +40,11 @@ export const DEFAULT_BACKUP_CONFIG = {
     // How many files the last copy did not remove from the drive because there
     // were more than MAX_DELETES of them. See rsyncFlags.
     heldDeletes: 0,
+    // What the last copy did, from rsync's --stats, and the log it is in: the
+    // Backups page says it in so many words rather than only "copied".
+    lastStartedAt: null,
+    lastStats: null,
+    lastLog: null,
 };
 
 /*
@@ -198,7 +203,10 @@ export async function listDestinations() {
 
 export function validateBackupConfig(input) {
     const errors = [];
-    const out = { ...DEFAULT_BACKUP_CONFIG };
+    // Only what can be asked for. Starting from the defaults would have a save
+    // reset what the last run recorded -- the files a mirror held back among
+    // them, which then vanished from the page while still on the drive.
+    const out = { destination: '' };
 
     const sources = backupSources();
 
@@ -235,7 +243,23 @@ export function validateBackupConfig(input) {
  * directory -- so without this check an unplugged drive would produce a
  * cheerful backup onto the internal disk.
  */
-export async function run(onLine = () => {}, { allowDeletes = false } = {}) {
+/** Reads rsync's --stats summary, one line at a time, into `into`. */
+const STAT_LINES = [
+    [/^Number of files: ([\d,]+)/, 'files'],
+    [/^Number of created files: ([\d,]+)/, 'created'],
+    [/^Number of deleted files: ([\d,]+)/, 'removed'],
+    [/^Number of regular files transferred: ([\d,]+)/, 'copied'],
+    [/^Total file size: ([\d,]+)/, 'bytes'],
+    [/^Total transferred file size: ([\d,]+)/, 'copiedBytes'],
+];
+function readStat(line, into) {
+    for (const [re, key] of STAT_LINES) {
+        const m = re.exec(line);
+        if (m) into[key] = (into[key] ?? 0) + Number(m[1].replace(/,/g, ''));
+    }
+}
+
+export async function run(onLine = () => {}, { allowDeletes = false, logName = null } = {}) {
     const cfg = loadBackupConfig();
     // Lazy rather than boot-order dependent: whatever calls this first gets it
     // resolved, so a reordering at startup cannot quietly leave it empty.
@@ -263,6 +287,12 @@ export async function run(onLine = () => {}, { allowDeletes = false } = {}) {
     const PARTIAL = new Set([23, 24]);
     const skipped = [];
     let held = 0;
+    const startedAt = new Date().toISOString();
+    const stats = {};
+    const tally = (line) => {
+        readStat(line, stats);
+        onLine(line);
+    };
 
     for (const src of sources) {
         const name = src.split('/').filter(Boolean).pop() || 'root';
@@ -288,7 +318,7 @@ export async function run(onLine = () => {}, { allowDeletes = false } = {}) {
         // throw is the failure path, and the job it runs under reports it.
         try {
             await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror })), {
-                onLine,
+                onLine: tally,
                 timeoutMs: 12 * 60 * 60_000,
             });
         } catch (err) {
@@ -310,7 +340,7 @@ export async function run(onLine = () => {}, { allowDeletes = false } = {}) {
     const stamp = new Date().toISOString();
     // Said every time, so a held deletion is never mistaken for a clean night.
     // Infinity, from a count that could not be made, is stored as -1.
-    saveBackupConfig({ heldDeletes: Number.isFinite(held) ? held : -1 });
+    saveBackupConfig({ heldDeletes: Number.isFinite(held) ? held : -1, lastStartedAt: startedAt, lastStats: stats.files === undefined ? null : stats, lastLog: logName });
     if (held) {
         onLine(
             `\nFiles that are no longer in Nextcloud were all kept on the drive: more than the ${MAX_DELETES} a mirror removes on its own. ` +

@@ -555,15 +555,15 @@ export async function removeExtraCopies({ onLine = () => {} } = {}) {
  * kept by backup.js; a failure here fails Nextcloud's row too, because a
  * database without the files it describes is half a backup.
  */
-async function copyFiles(onLine, { allowDeletes = false } = {}) {
+async function copyFiles(onLine, { allowDeletes = false, logName = null } = {}) {
     if (!backupSources().length) await resolveDataVolume();
     if (!backupSources().length) return;
     onLine('Nextcloud: copying your files (only what changed since last time)...');
     try {
-        await copyNextcloudFiles(onLine, { allowDeletes });
+        await copyNextcloudFiles(onLine, { allowDeletes, logName });
     } catch (err) {
         const said = briefError(err);
-        saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: said });
+        saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: said, lastStats: null, lastLog: logName });
         throw new Error(`The database was copied, but your files were not: ${said}`);
     }
 }
@@ -611,14 +611,14 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
         onLine(`\n> ${s.label}`);
         try {
             if (noCopies) {
-                await copyFiles(onLine, { allowDeletes });
+                await copyFiles(onLine, { allowDeletes, logName });
                 onLine(`${s.label}: done.`);
                 copied += 1;
                 continue;
             }
             const { id, bytes } = await copyService(s, target, { kind, onLine });
             await prune(s, target, cfg.keep, onLine).catch((err) => onLine(`Could not remove older copies: ${err.message}`));
-            if (s.key === 'nextcloud' && !cancelRequested()) await copyFiles(onLine, { allowDeletes });
+            if (s.key === 'nextcloud' && !cancelRequested()) await copyFiles(onLine, { allowDeletes, logName });
             recordLast(s.key, { at: new Date().toISOString(), ok: true, id, bytes, result: 'Backed up.', log: logName });
             onLine(`${s.label}: done.`);
             copied += 1;
@@ -866,6 +866,9 @@ function filesStatus() {
     return {
         hasFiles: backupSources().length > 0,
         lastRunAt: b.lastRunAt,
+        lastStartedAt: b.lastStartedAt ?? null,
+        lastStats: b.lastStats ?? null,
+        lastLog: b.lastLog ?? null,
         lastOk: b.lastOk,
         lastSkipped: b.lastSkipped ?? 0,
         lastError: b.lastOk === false ? tidy(b.lastResult) : null,

@@ -5859,19 +5859,47 @@ function whenAgo(iso) {
     return t.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-/** Nextcloud's files, which are copied in the same run as its database. */
+/** "last night at 3:01 AM", "today at 2:15 PM", or a date for anything older. */
+function whenFinished(iso) {
+    const t = new Date(iso);
+    const time = t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((day(new Date()) - day(t)) / 86_400_000);
+    if (days === 0) return t.getHours() < 6 ? `last night at ${time}` : `today at ${time}`;
+    if (days === 1) return t.getHours() < 6 ? `the night before last at ${time}` : `yesterday at ${time}`;
+    return t.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+const plural = (n, one, many = `${one}s`) => `${Number(n).toLocaleString()} ${n === 1 ? one : many}`;
+
+/**
+ * Nextcloud's files, which are mirrored in the same run as its database: said
+ * as a finished thing -- when it ended, what the drive now holds, what that
+ * night changed -- so a quiet "copied" is not left to be read as "running".
+ */
 function snapFilesLine(f) {
     if (!f?.hasFiles) return '';
-    if (!f.lastRunAt) return '<div class="muted">Files: not copied yet</div>';
-    if (f.lastOk === false) return `<div class="bad-text">Files: failed ${escapeHtml(whenAgo(f.lastRunAt))}: ${escapeHtml(f.lastError ?? '')}</div>`;
-    const skipped = f.lastSkipped
-        ? ` · <span class="bad-text" title="Usually their names have characters the drive cannot store, such as : or ?. The full list is in the log of that run.">${f.lastSkipped} file${f.lastSkipped === 1 ? '' : 's'} could not be written</span>`
+    if (!f.lastRunAt) return '<div class="muted">Files mirror: has not run yet. It runs tonight at 3 AM, or press Back up now.</div>';
+    const log = logLink(f.lastLog);
+    if (f.lastOk === false) {
+        return `<div class="bad-text"><strong>✗ Files mirror failed</strong> ${escapeHtml(whenFinished(f.lastRunAt))}: ${escapeHtml(f.lastError ?? '')}${log}</div>`;
+    }
+    const took = f.lastStartedAt ? Math.max(1, Math.round((new Date(f.lastRunAt) - new Date(f.lastStartedAt)) / 60_000)) : null;
+    const st = f.lastStats;
+    const held = f.heldDeletes;
+    const what = st
+        ? `<div class="hint">Everything in Nextcloud &mdash; ${plural(st.files, 'item')}, ${humanBytes(st.bytes ?? 0)} &mdash; is on the drive.
+             That run copied ${plural(st.copied ?? 0, 'new or changed file')}${st.copiedBytes ? ` (${humanBytes(st.copiedBytes)})` : ''}
+             and removed ${plural(held ? 0 : st.removed ?? 0, 'item')} no longer in Nextcloud.</div>`
         : '';
-    const held = f.heldDeletes
-        ? `<div class="bad-text">${f.heldDeletes > 0 ? f.heldDeletes : 'Some'} files are no longer in Nextcloud and were all kept on the drive: more than the ${f.maxDeletes} a mirror removes by itself in one night.
+    const skipped = f.lastSkipped
+        ? `<div class="bad-text" title="Usually their names have characters the drive cannot store, such as : or ?. The full list is in the log of that run.">${plural(f.lastSkipped, 'file')} could not be written to the drive.</div>`
+        : '';
+    const heldLine = held
+        ? `<div class="bad-text">${held > 0 ? plural(held, 'file') : 'Some files'} no longer in Nextcloud were all kept on the drive: more than the ${f.maxDeletes} a mirror removes by itself in one night.
              <button type="button" class="ghost mini" data-snap-allow-deletes>Remove them from the drive</button></div>`
         : '';
-    return `<div><span class="ok-text">Files: copied ${escapeHtml(whenAgo(f.lastRunAt))}</span>${skipped}</div>${held}`;
+    return `<div class="ok-text"><strong>✓ Files mirror finished</strong> ${escapeHtml(whenFinished(f.lastRunAt))}${took ? ` · took ${took} min` : ''}${log}</div>${what}${skipped}${heldLine}`;
 }
 
 /** A link to a run's whole log, which lives in the install's logs/backups folder. */
@@ -5881,7 +5909,7 @@ const logLink = (name) =>
 function snapLastLine(s) {
     if (!s.present) return '<span class="muted">Not installed</span>';
     if (snapState?.config?.keep === 0) {
-        return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not copied' : 'Not backed up'} (keep the last 0)</div>`;
+        return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: no dated copies are kept' : 'Not backed up: no dated copies are kept'} (keep the last 0).</div>`;
     }
     const last = s.last;
     if (!last) return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not' : 'Not'} backed up yet</div>`;
@@ -5920,7 +5948,7 @@ function renderSnapshots(keepEdits) {
             <strong>${escapeHtml(s.label)}</strong>
           </label>
           <p class="hint">${escapeHtml(s.what)}</p>
-          <div class="snap-status">${snapLastLine(s)}${s.key === 'nextcloud' ? snapFilesLine(s.files) : ''}</div>
+          <div class="snap-status">${s.key === 'nextcloud' ? snapFilesLine(s.files) : ''}${snapLastLine(s)}</div>
           ${nextcloudExtra(s)}
           <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present && (c.keep !== 0 || s.key === 'nextcloud') ? '' : ' disabled'}>Back up now</button>
         </div>`,
