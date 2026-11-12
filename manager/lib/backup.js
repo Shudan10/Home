@@ -45,6 +45,12 @@ export const DEFAULT_BACKUP_CONFIG = {
     lastStartedAt: null,
     lastStats: null,
     lastLog: null,
+    // Folders left out of the mirror, as "<source folder>/<path inside it>".
+    // What is listed is skipped both ways: not updated, and -- rsync protects
+    // excluded paths from --delete -- not removed from the drive either.
+    // Listed rather than chosen, so a folder made later is mirrored from the
+    // start rather than waiting for somebody to tick it.
+    excluded: [],
 };
 
 /*
@@ -209,6 +215,21 @@ export function validateBackupConfig(input) {
     const out = { destination: '' };
 
     const sources = backupSources();
+    if ('excluded' in input) {
+        const names = new Set(sources.map(sourceName));
+        const list = Array.isArray(input.excluded) ? input.excluded : [];
+        out.excluded = [];
+        for (const raw of list.slice(0, 5000)) {
+            const p = String(raw ?? '').replace(/^\/+|\/+$/g, '');
+            const parts = p.split('/');
+            if (!p || p.length > 1000 || /[\n\r\0]/.test(p) || parts.some((x) => x === '' || x === '.' || x === '..')) {
+                errors.push(`"${p.slice(0, 80)}" is not a folder that can be left out.`);
+                break;
+            }
+            if (parts.length < 2 || !names.has(parts[0])) continue; // from a source that is gone: dropped
+            if (!out.excluded.includes(p)) out.excluded.push(p);
+        }
+    }
 
     // Held to the same rule as a shared folder: it becomes a bind mount, where
     // a colon splits it into source and target, and it is handed to scripts
@@ -295,7 +316,7 @@ export async function run(onLine = () => {}, { allowDeletes = false, logName = n
     };
 
     for (const src of sources) {
-        const name = src.split('/').filter(Boolean).pop() || 'root';
+        const name = sourceName(src);
         onLine(`\n> ${src}`);
         /*
          * All or nothing. rsync's own --max-delete removes the first N and
@@ -317,7 +338,7 @@ export async function run(onLine = () => {}, { allowDeletes = false, logName = n
         // A non-zero exit rejects, so there is no code to test here -- the
         // throw is the failure path, and the job it runs under reports it.
         try {
-            await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror })), {
+            await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror, name })), {
                 onLine: tally,
                 timeoutMs: 12 * 60 * 60_000,
             });
@@ -447,7 +468,7 @@ export async function checkDestination(destination) {
  */
 async function deletionsPending(src, name, target, cfg) {
     try {
-        const { stdout } = await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror: true, dryRun: true })), {
+        const { stdout } = await docker(copyArgs(src, name, target, rsyncFlags(cfg, { mirror: true, dryRun: true, name })), {
             timeoutMs: 60 * 60_000,
         });
         const m = /^Number of deleted files:\s*([\d,]+)/m.exec(stdout);
@@ -458,7 +479,104 @@ async function deletionsPending(src, name, target, cfg) {
 }
 
 /* The rsync options for the copy. */
-function rsyncFlags(cfg, { mirror = false, dryRun = false } = {}) {
+/*
+ * What a mirror can be told to leave out, listed from the machine: for
+ * Nextcloud's own data folder, each user's files folder by folder, their old
+ * versions and trash, and Nextcloud's own working files beside them; for
+ * shared folders, what is at the top of each. Sizes in KB, from du.
+ */
+const FOLDERS_SCRIPT = [
+    'cd "/src/$1" || exit 0',
+    'size() { du -sk "$1" 2>/dev/null | cut -f1; }',
+    'kind() { [ -d "$1" ] && echo d || echo f; }',
+    'for e in * .[!.]*; do',
+    '  [ -e "$e" ] || continue',
+    '  if [ -d "$e/files" ]; then',
+    '    printf "U\\t%s\\n" "$e"',
+    '    for f in "$e"/files/* "$e"/files/.[!.]*; do',
+    '      [ -e "$f" ] || continue',
+    '      printf "F\\t%s\\t%s\\t%s\\n" "$f" "$(size "$f")" "$(kind "$f")"',
+    '    done',
+    '    for x in files_versions files_trashbin; do',
+    '      [ -e "$e/$x" ] && printf "X\\t%s\\t%s\\td\\n" "$e/$x" "$(size "$e/$x")"',
+    '    done',
+    '  else',
+    // Thumbnails are never copied, so they are not counted either.
+    '    n=$(size "$e"); case "$e" in appdata_*) [ -d "$e/preview" ] && n=$((n - $(size "$e/preview")));; esac',
+    '    printf "O\\t%s\\t%s\\t%s\\n" "$e" "$n" "$(kind "$e")"',
+    '  fi',
+    'done',
+].join('\n');
+
+const OWN_LABELS = [
+    [/^appdata_/, "Nextcloud's app data (avatars, themes, app settings)"],
+    [/\.log(\.\d+)?$/, "Nextcloud's log"],
+    [/^(index\.html|\.ocdata|\.ncdata|\.htaccess)$/, "Nextcloud's marker file"],
+];
+// Never copied whatever is ticked (see rsyncFlags), so not offered.
+const NEVER_COPIED = /(^|\/)(\.nextcloudsync\.log|lost\+found|\.?~lock\.[^/]*#|~\$[^/]*)$/;
+
+export async function listFolders() {
+    if (!dataVolumePath) await resolveDataVolume();
+    const cfg = loadBackupConfig();
+    const excluded = new Set(cfg.excluded ?? []);
+    const out = [];
+    for (const src of backupSources()) {
+        const name = sourceName(src);
+        const { stdout } = await docker(
+            ['run', '--rm', '-v', `${src}:/src/${name}:ro`, IMAGE, 'sh', '-c', FOLDERS_SCRIPT, 'sh', name],
+            { timeoutMs: 10 * 60_000 },
+        );
+        const users = new Map();
+        const other = [];
+        const item = (rel, kb, kind, label) => ({
+            path: `${name}/${rel}`,
+            label,
+            bytes: Number(kb) * 1024 || 0,
+            folder: kind === 'd',
+            included: !excluded.has(`${name}/${rel}`),
+        });
+        for (const line of stdout.split('\n')) {
+            const [t, rel, kb, kind] = line.split('\t');
+            if (!rel || NEVER_COPIED.test(rel)) continue;
+            const user = rel.split('/')[0];
+            if (t === 'U') users.set(user, { name: user, items: [], extras: [] });
+            else if (t === 'F') users.get(user)?.items.push(item(rel, kb, kind, rel.slice(`${user}/files/`.length)));
+            else if (t === 'X') {
+                const label = rel.endsWith('files_trashbin') ? "Deleted files in Nextcloud's trash" : 'Older versions of files';
+                users.get(user)?.extras.push(item(rel, kb, kind, label));
+            } else if (t === 'O') {
+                const own = OWN_LABELS.find(([re]) => re.test(rel));
+                other.push(item(rel, kb, kind, own ? `${own[1]} (${rel})` : rel));
+            }
+        }
+        const byName = (a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+        out.push({
+            name,
+            path: src,
+            nextcloud: users.size > 0,
+            users: [...users.values()].map((u) => ({ ...u, items: u.items.sort(byName) })),
+            other: other.sort(byName),
+        });
+    }
+    return out;
+}
+
+/** The folder name a source is copied into on the drive, and the first part of its excluded paths. */
+export const sourceName = (src) => src.split('/').filter(Boolean).pop() || 'root';
+
+/*
+ * An rsync pattern that matches exactly this one path, anchored at the top
+ * of the copy. Wildcards in a real name are escaped -- but backslash is only
+ * an escape in a pattern that has a wildcard in it, so a name with none is
+ * left exactly as it is.
+ */
+function literalPattern(rel) {
+    const p = `/${rel}`;
+    return /[*?[]/.test(p) ? p.replace(/[*?[\\]/g, '\\$&') : p;
+}
+
+function rsyncFlags(cfg, { mirror = false, dryRun = false, name = null } = {}) {
     const flags = [
         '-aH',
         '--exclude=.nextcloudsync.log',
@@ -489,6 +607,9 @@ function rsyncFlags(cfg, { mirror = false, dryRun = false } = {}) {
         '--exclude=~lock.*#',
         '--exclude=.~lock.*#',
         '--exclude=~$*',
+        ...(cfg.excluded ?? [])
+            .filter((p) => name && p.startsWith(`${name}/`))
+            .map((p) => `--exclude=${literalPattern(p.slice(name.length + 1))}`),
     ];
     /*
      * Mirroring removes from the drive what is no longer in Nextcloud -- after

@@ -1386,7 +1386,7 @@ const formFields = (name) =>
         minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
         backup: [
             'backup-destination', 'snap-enabled', 'snap-keep',
-            ...['nextcloud', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'panel'].map((k) => `snap-svc-${k}`),
+            ...['nextcloud', 'nextcloud-files', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'panel'].map((k) => `snap-svc-${k}`),
         ],
     })[name] ?? [];
 
@@ -1422,7 +1422,7 @@ for (const name of FORM_NAMES) {
         setFormDirty(name, false);
         // Read back fresh rather than restored from a copy, so it is what the
         // server has now, not what it had when the editing started.
-        Promise.resolve(name === 'backup' ? loadBackup() : loadApps()).catch(() => {});
+        Promise.resolve(name === 'backup' ? loadBackup().then(renderMirrorFolders) : loadApps()).catch(() => {});
     });
 }
 
@@ -5820,6 +5820,7 @@ $('apps-update-all').addEventListener('click', async () => {
  * missing, so the copy would run onto the internal disk and report success.
  */
 let backupDrives = [];
+let backupConfig = null;
 let snapState = null;
 
 function renderBackupDrives(selected) {
@@ -5879,6 +5880,7 @@ const plural = (n, one, many = `${one}s`) => `${Number(n).toLocaleString()} ${n 
  */
 function snapFilesLine(f) {
     if (!f?.hasFiles) return '';
+    if (f.included === false) return '<div class="muted">Switched off: your files are not mirrored. What is already on the drive is left as it is.</div>';
     if (!f.lastRunAt) return '<div class="muted">Files mirror: has not run yet. It runs tonight at 3 AM, or press Back up now.</div>';
     const log = logLink(f.lastLog);
     if (f.lastOk === false) {
@@ -5888,7 +5890,7 @@ function snapFilesLine(f) {
     const st = f.lastStats;
     const held = f.heldDeletes;
     const what = st
-        ? `<div class="hint">Everything in Nextcloud &mdash; ${plural(st.files, 'item')}, ${humanBytes(st.bytes ?? 0)} &mdash; is on the drive.
+        ? `<div class="hint">Everything ${mirrorExcluded().length ? 'chosen ' : ''}in Nextcloud &mdash; ${plural(st.files, 'item')}, ${humanBytes(st.bytes ?? 0)} &mdash; is on the drive.
              That run copied ${plural(st.copied ?? 0, 'new or changed file')}${st.copiedBytes ? ` (${humanBytes(st.copiedBytes)})` : ''}
              and removed ${plural(held ? 0 : st.removed ?? 0, 'item')} no longer in Nextcloud.</div>`
         : '';
@@ -5908,16 +5910,114 @@ const logLink = (name) =>
 
 function snapLastLine(s) {
     if (!s.present) return '<span class="muted">Not installed</span>';
-    if (snapState?.config?.keep === 0) {
-        return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: no dated copies are kept' : 'Not backed up: no dated copies are kept'} (keep the last 0).</div>`;
-    }
+    if (snapState?.config?.keep === 0) return '<div class="muted">Not backed up: no dated copies are kept (keep the last 0).</div>';
     const last = s.last;
-    if (!last) return `<div class="muted">${s.key === 'nextcloud' ? 'Database and settings: not' : 'Not'} backed up yet</div>`;
-    // Nextcloud's row has two lines, so each says which half it is about.
-    const what = s.key === 'nextcloud' ? 'Database and settings: ' : '';
-    if (last.ok === false) return `<div class="bad-text">${what}${what ? 'failed' : 'Failed'} ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}${logLink(last.log)}</div>`;
+    if (!last) return '<div class="muted">Not backed up yet</div>';
+    if (last.ok === false) return `<div class="bad-text"><strong>✗ Failed</strong> ${escapeHtml(whenAgo(last.at))}: ${escapeHtml(last.result ?? '')}${logLink(last.log)}</div>`;
     const size = last.bytes ? ` · ${humanBytes(last.bytes)}` : '';
-    return `<div class="ok-text">${what || 'Backed up '}${what ? 'backed up ' : ''}${escapeHtml(whenAgo(last.at))}${size}${logLink(last.log)}</div>`;
+    return `<div class="ok-text"><strong>✓ Backed up</strong> ${escapeHtml(whenAgo(last.at))}${size}${logLink(last.log)}</div>`;
+}
+
+// ---------------------------------------------------------- mirror picker --
+// What the files mirror leaves out. The listing is read from the machine when
+// the picker is first opened (it runs du over every file); what is left out
+// is the setting, so a folder made later is mirrored from the start.
+
+let mirrorFolders = null;
+let mirrorFoldersError = '';
+
+/** Paths left out: from the ticks while editing, otherwise as saved. */
+function mirrorExcluded() {
+    const boxes = document.querySelectorAll('#mirror-folders input[data-mirror-path]');
+    if (boxes.length && isDirty('backup')) return [...boxes].filter((b) => !b.checked).map((b) => b.dataset.mirrorPath);
+    return backupConfig?.excluded ?? [];
+}
+
+function buildMirrorPick() {
+    const d = document.createElement('details');
+    d.id = 'mirror-pick';
+    d.className = 'mirror-pick';
+    d.innerHTML = '<summary></summary><div id="mirror-folders" class="mirror-folders"><p class="hint">Reading the folders…</p></div>';
+    d.addEventListener('toggle', () => {
+        if (d.open && !mirrorFolders) loadMirrorFolders();
+    });
+    d.addEventListener('change', (e) => {
+        if (e.target.matches('[data-mirror-all]')) {
+            const group = e.target.closest('.mirror-group');
+            group.querySelectorAll('input[data-mirror-path]').forEach((b) => { b.checked = e.target.checked; });
+        }
+        syncMirrorHeads();
+        setFormDirty('backup', true);
+        mirrorSummary();
+    });
+    setTimeout(mirrorSummary);
+    return d;
+}
+
+/** Each group's own box: ticked when all of it is, half when some is. */
+function syncMirrorHeads() {
+    for (const group of document.querySelectorAll('#mirror-folders .mirror-group')) {
+        const boxes = [...group.querySelectorAll('input[data-mirror-path]')];
+        const head = group.querySelector('[data-mirror-all]');
+        const on = boxes.filter((b) => b.checked).length;
+        head.checked = on === boxes.length;
+        head.indeterminate = on > 0 && on < boxes.length;
+    }
+}
+
+function mirrorSummary() {
+    const sum = document.querySelector('#mirror-pick > summary');
+    if (!sum) return;
+    const n = mirrorExcluded().length;
+    sum.textContent = n ? `Choose what is mirrored (${n} left out)` : 'Choose what is mirrored (everything)';
+}
+
+async function loadMirrorFolders() {
+    try {
+        const r = await api('/api/backup/folders');
+        mirrorFolders = r.sources ?? [];
+        mirrorFoldersError = r.error ?? '';
+    } catch (e) {
+        mirrorFoldersError = e.message;
+    }
+    renderMirrorFolders();
+}
+
+function renderMirrorFolders() {
+    mirrorSummary();
+    const box = $('mirror-folders');
+    if (!box || !mirrorFolders) return;
+    if (mirrorFoldersError) {
+        box.innerHTML = `<p class="bad-text">Could not read the folders: ${escapeHtml(mirrorFoldersError)}</p>`;
+        return;
+    }
+    const out = new Set(backupConfig?.excluded ?? []);
+    const item = (i) => `
+        <label class="check mirror-item">
+          <input type="checkbox" data-mirror-path="${escapeHtml(i.path)}"${out.has(i.path) ? '' : ' checked'}>
+          <span>${i.folder ? '📁 ' : ''}${escapeHtml(i.label)}</span>
+          <span class="muted">${humanBytes(i.bytes)}</span>
+        </label>`;
+    const group = (title, items) =>
+        items.length
+            ? `<div class="mirror-group">
+                 <label class="check mirror-head"><input type="checkbox" data-mirror-all${items.every((i) => !out.has(i.path)) ? ' checked' : ''}> <strong>${escapeHtml(title)}</strong></label>
+                 ${items.map(item).join('')}
+               </div>`
+            : '';
+    box.innerHTML =
+        `<p class="hint">Untick anything you do not want mirrored. What is unticked is left on the drive exactly as it is now:
+           no longer updated, and <strong>not removed</strong>. Tick it again and it catches up on the next run.
+           Changes take effect when you save.</p>` +
+        mirrorFolders
+            .map((src) =>
+                src.nextcloud
+                    ? src.users.map((u) => group(`${u.name}'s files`, u.items) + group(`${u.name}: older versions and trash`, u.extras)).join('') +
+                      group("Nextcloud's own files", src.other)
+                    : group(src.path, src.other),
+            )
+            .join('');
+    syncMirrorHeads();
 }
 
 function renderSnapshots(keepEdits) {
@@ -5929,31 +6029,52 @@ function renderSnapshots(keepEdits) {
         $('snap-keep').value = c.keep ?? 3;
     }
     const checked = (s) => (keepEdits && $(`snap-svc-${s.key}`) ? $(`snap-svc-${s.key}`).checked : s.included);
-    // What the mirror is in charge of, said plainly: it is not a choice any
-    // more, so the one thing worth knowing is which folder it keeps in step.
-    const nextcloudExtra = (s) =>
-        s.key === 'nextcloud' && s.files?.hasFiles
-            ? `<p class="hint snap-mirror">
-                 Your files are mirrored to <strong>${escapeHtml((s.files.folders ?? []).join(', ') || 'the drive')}</strong>:
-                 each night that folder is made to match Nextcloud, so anything in it that is not in Nextcloud is removed.
-                 More than ${s.files.maxDeletes ?? 250} removals in one night are held here for you to confirm.
-               </p>`
-            : '';
-    box.innerHTML = snapState.services
-        .map(
-            (s) => `
+    // Nextcloud is two things to back up, each a row of its own: the dated
+    // copies of its database and settings, and the mirror of the files.
+    const label = (s) => (s.key === 'nextcloud' ? 'Nextcloud: database and settings' : s.label);
+    const row = (s) => `
         <div class="snap-row${s.present ? '' : ' absent'}">
           <label class="check">
             <input type="checkbox" id="snap-svc-${s.key}"${checked(s) ? ' checked' : ''}${s.present ? '' : ' disabled'}>
-            <strong>${escapeHtml(s.label)}</strong>
+            <strong>${escapeHtml(label(s))}</strong>
           </label>
           <p class="hint">${escapeHtml(s.what)}</p>
-          <div class="snap-status">${s.key === 'nextcloud' ? snapFilesLine(s.files) : ''}${snapLastLine(s)}</div>
-          ${nextcloudExtra(s)}
-          <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present && (c.keep !== 0 || s.key === 'nextcloud') ? '' : ' disabled'}>Back up now</button>
-        </div>`,
-        )
-        .join('');
+          <div class="snap-status">${snapLastLine(s)}</div>
+          <button type="button" class="ghost mini" data-snap-run="${s.key}"${s.present && c.keep !== 0 ? '' : ' disabled'}>Back up now</button>
+        </div>`;
+    const f = snapState.files;
+    const filesRow = () => {
+        if (!f?.hasFiles) return '';
+        const on = keepEdits && $('snap-svc-nextcloud-files') ? $('snap-svc-nextcloud-files').checked : f.included !== false;
+        const out = mirrorExcluded().length;
+        return `
+        <div class="snap-row" id="snap-files-row">
+          <label class="check">
+            <input type="checkbox" id="snap-svc-nextcloud-files"${on ? ' checked' : ''}>
+            <strong>Nextcloud: your files</strong>
+          </label>
+          <p class="hint">
+            Your photos, documents and every other file, mirrored to
+            <strong>${escapeHtml((f.folders ?? []).join(', ') || 'the drive')}</strong> as ordinary files you can open on any computer.
+            Each night that folder is made to match Nextcloud, so anything in it that is no longer in Nextcloud is removed.
+            More than ${f.maxDeletes ?? 250} removals in one night are held here for you to confirm.
+            It reads the files straight from this machine, so it runs even while Nextcloud is switched off.
+          </p>
+          <div class="snap-status">${snapFilesLine(f)}</div>
+          <div class="mirror-pick-slot"></div>
+          <button type="button" class="ghost mini" data-snap-run="nextcloud-files">Back up now</button>
+        </div>`;
+    };
+    // The picker is kept across redraws rather than rebuilt, so ticks being
+    // made in it are not thrown away when the page refreshes its status.
+    const pick = $('mirror-pick');
+    pick?.remove();
+    box.innerHTML = snapState.services.map((s) => row(s) + (s.key === 'nextcloud' ? filesRow() : '')).join('');
+    const slot = box.querySelector('.mirror-pick-slot');
+    if (slot) {
+        slot.replaceWith(pick ?? buildMirrorPick());
+        if (!keepEdits) renderMirrorFolders();
+    }
     // Every run's whole log, in a folder of its own on this machine.
     const logs = $('snap-logs');
     if (logs) {
@@ -5982,6 +6103,7 @@ async function loadBackup() {
         return;
     }
     const c = r.config ?? {};
+    backupConfig = c;
     backupDrives = r.drives ?? [];
     snapState = snaps;
     // The drive list is always redrawn -- a drive may have been plugged in --
@@ -6060,11 +6182,16 @@ $('backup-save').addEventListener('click', async () => {
         const box = $(`snap-svc-${s.key}`);
         if (box && s.present) services[s.key] = box.checked;
     }
+    if ($('snap-svc-nextcloud-files')) services['nextcloud-files'] = $('snap-svc-nextcloud-files').checked;
     try {
         // The drive first: the nightly copies need one to be switched on.
         await api('/api/backup', {
             method: 'PUT',
-            body: { destination: $('backup-destination').value },
+            body: {
+                destination: $('backup-destination').value,
+                // Only once the picker has been read: before that its ticks are not there to go by.
+                ...(document.querySelector('#mirror-folders input[data-mirror-path]') ? { excluded: mirrorExcluded() } : {}),
+            },
         });
         await api('/api/snapshots', {
             method: 'PUT',
@@ -6094,20 +6221,22 @@ async function runSnapshots(service, { allowDeletes = false } = {}) {
         toast('Save or discard your changes first.', 'bad');
         return;
     }
-    const label = service ? snapState?.services.find((s) => s.key === service)?.label : null;
+    const files = service === 'nextcloud-files';
+    const label = files ? null : service ? snapState?.services.find((s) => s.key === service)?.label : null;
     const pending = runAction({
         key: 'snapshots',
-        title: label ? `Backing up ${label}` : 'Backing up app data',
+        title: files ? "Mirroring Nextcloud's files" : label ? `Backing up ${label}` : 'Backing up app data',
         note: 'Copying to the drive. This runs in the manager, so closing this page does not stop it.',
         request: () => api('/api/snapshots/run', { method: 'POST', body: service ? { service, allowDeletes } : {} }),
     });
     if (pendingAction) {
-        // Nextcloud's files are a step of their own, after its database.
+        // One "> " line per app, and for the files mirror one more per folder it copies.
         const keepsNone = snapState?.config?.keep === 0;
-        const chosen = (snapState?.services ?? []).filter(
-            (s) => s.present && (service ? s.key === service : s.included) && (!keepsNone || s.key === 'nextcloud'),
-        );
-        const withFiles = chosen.some((s) => s.key === 'nextcloud' && s.files?.hasFiles) ? 1 : 0;
+        const chosen = keepsNone
+            ? []
+            : (snapState?.services ?? []).filter((s) => s.present && (service ? s.key === service : s.included));
+        const f = snapState?.files;
+        const withFiles = f?.hasFiles && (service ? files : f.included !== false) ? 1 + (f.folders?.length || 1) : 0;
         pendingAction.snapTotal = chosen.length + withFiles || 1;
         pendingAction.snapIndex = -1;
     }
@@ -6120,7 +6249,7 @@ $('snap-services').addEventListener('click', async (event) => {
     const button = event.target.closest('[data-snap-run]');
     if (button) runSnapshots(button.dataset.snapRun);
     if (event.target.closest('[data-snap-allow-deletes]')) {
-        const n = snapState?.services.find((s) => s.key === 'nextcloud')?.files?.heldDeletes ?? 0;
+        const n = snapState?.files?.heldDeletes ?? 0;
         const ok = await askConfirm({
             title: `Remove ${n > 0 ? n : 'those'} files from the backup drive?`,
             body:
@@ -6129,7 +6258,7 @@ $('snap-services').addEventListener('click', async (event) => {
             confirmLabel: 'Remove them',
             danger: true,
         });
-        if (ok) runSnapshots('nextcloud', { allowDeletes: true });
+        if (ok) runSnapshots('nextcloud-files', { allowDeletes: true });
     }
 });
 

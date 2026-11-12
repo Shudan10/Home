@@ -48,7 +48,7 @@ export const SERVICES = [
     {
         key: 'nextcloud',
         label: 'Nextcloud',
-        what: 'Your files, plus the database and settings behind them: users, shares, calendars and contacts.',
+        what: 'The database and settings behind your files: users, shares, calendars, contacts and installed apps. Saved as dated copies the Restore tab can put back. Your files themselves are mirrored separately, below.',
         volume: 'quickstart-home-nextcloud-data',
         items: ['config', 'custom_apps', 'themes'],
         exclude: [],
@@ -120,6 +120,9 @@ export const SERVICES = [
 const byKey = new Map(SERVICES.map((s) => [s.key, s]));
 export const serviceFor = (key) => byKey.get(key) ?? null;
 
+/** Nextcloud's files: not a service with dated copies, but a mirror of its own. See copyFiles. */
+export const FILES_KEY = 'nextcloud-files';
+
 // ------------------------------------------------------------------ config ---
 
 export const NIGHTLY_HOUR = 3;
@@ -167,8 +170,8 @@ export function validateSnapshotConfig(input = {}) {
     }
     if (input.services && typeof input.services === 'object') {
         out.services = {};
-        for (const s of SERVICES) {
-            if (s.key in input.services) out.services[s.key] = Boolean(input.services[s.key]);
+        for (const key of [...SERVICES.map((s) => s.key), FILES_KEY]) {
+            if (key in input.services) out.services[key] = Boolean(input.services[key]);
         }
     }
     return { cfg: out, errors };
@@ -551,26 +554,34 @@ export async function removeExtraCopies({ onLine = () => {} } = {}) {
 }
 
 /**
- * Nextcloud's files, after its database. Its own record of how it went is
- * kept by backup.js; a failure here fails Nextcloud's row too, because a
- * database without the files it describes is half a backup.
+ * Nextcloud's files: the mirror, a step of its own beside the database copy.
+ * Its record of how it went is kept by backup.js, and the page shows it on a
+ * row of its own. It reads the files straight from where Nextcloud keeps them,
+ * so it runs whether or not Nextcloud is.
  */
-async function copyFiles(onLine, { allowDeletes = false, logName = null } = {}) {
+const FILES_LABEL = 'Nextcloud files';
+
+async function filesPresent() {
     if (!backupSources().length) await resolveDataVolume();
-    if (!backupSources().length) return;
-    onLine('Nextcloud: copying your files (only what changed since last time)...');
+    return backupSources().length > 0;
+}
+
+async function copyFiles(onLine, { allowDeletes = false, logName = null } = {}) {
+    onLine(`${FILES_LABEL}: mirroring them (only what changed since last time)...`);
     try {
         await copyNextcloudFiles(onLine, { allowDeletes, logName });
     } catch (err) {
         const said = briefError(err);
         saveBackupConfig({ lastRunAt: new Date().toISOString(), lastOk: false, lastResult: said, lastStats: null, lastLog: logName });
-        throw new Error(`The database was copied, but your files were not: ${said}`);
+        throw new Error(said);
     }
 }
 
 /**
- * Copies every service that is switched on and installed (or just `only`).
- * One failing does not stop the rest; the job fails at the end, naming them.
+ * Copies every service that is switched on and installed (or just `only`),
+ * and mirrors Nextcloud's files when that is switched on (or `only` is
+ * FILES_KEY). One failing does not stop the rest; the job fails at the end,
+ * naming them.
  */
 export async function backUp(opts = {}) {
     const log = openLog(opts.kind === 'nightly' ? 'nightly backup' : opts.only ? `backup ${opts.only}` : 'backup');
@@ -592,33 +603,58 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
     // Keeping none means no dated copies at all; Nextcloud's files are still
     // mirrored, since that folder is not a copy that piles up.
     const noCopies = cfg.keep === 0;
-    let chosen = only ? [serviceFor(only)].filter(Boolean) : SERVICES.filter((s) => isIncluded(cfg, s.key));
-    if (noCopies) {
-        if (only && only !== 'nextcloud') throw new Error('Dated copies are switched off (keep the last 0), so there is nothing to back up for this app.');
-        chosen = chosen.filter((s) => s.key === 'nextcloud');
-        onLine('Dated copies are switched off (keep the last 0), so only Nextcloud\'s files are mirrored.');
+    if (noCopies && only && only !== FILES_KEY) {
+        throw new Error('Dated copies are switched off (keep the last 0), so there is nothing to back up for this app.');
     }
+    let chosen = only ? [serviceFor(only)].filter(Boolean) : SERVICES.filter((s) => isIncluded(cfg, s.key));
+    const wantFiles = only ? only === FILES_KEY : isIncluded(cfg, FILES_KEY);
+    if (noCopies) {
+        chosen = [];
+        if (wantFiles) onLine('Dated copies are switched off (keep the last 0), so only Nextcloud\'s files are mirrored.');
+    }
+    if (only === FILES_KEY && !(await filesPresent())) throw new Error('Nextcloud is not installed, so there are no files to mirror.');
+
+    // The mirror goes straight after Nextcloud's database, as it always has,
+    // or first when the database is not being copied.
+    const steps = chosen.map((s) => ({ s }));
+    if (wantFiles && (await filesPresent())) {
+        const at = steps.findIndex((step) => step.s.key === 'nextcloud');
+        steps.splice(at + 1, 0, { files: true });
+    }
+
     const failed = [];
     let copied = 0;
+    let mirrored = false;
 
-    for (const s of chosen) {
+    for (const step of steps) {
         // Cancel ends the step that is running; this is what stops the rest.
         if (cancelRequested()) break;
+        if (step.files) {
+            onLine(`\n> ${FILES_LABEL}`);
+            try {
+                await copyFiles(onLine, { allowDeletes, logName });
+                onLine(`${FILES_LABEL}: done.`);
+                mirrored = true;
+            } catch (err) {
+                if (cancelRequested()) {
+                    onLine(`${FILES_LABEL}: cancelled. What was already copied stays; nothing was removed.`);
+                    break;
+                }
+                onLine(`${FILES_LABEL}: failed. ${err.message}`);
+                failed.push(FILES_LABEL);
+                if (/drive went away|not on a drive of its own/.test(err.message)) break;
+            }
+            continue;
+        }
+        const { s } = step;
         if (!isPresent(s, volumes)) {
             if (only) throw new Error(`${s.label} is not installed, so there is nothing to back up.`);
             continue;
         }
         onLine(`\n> ${s.label}`);
         try {
-            if (noCopies) {
-                await copyFiles(onLine, { allowDeletes, logName });
-                onLine(`${s.label}: done.`);
-                copied += 1;
-                continue;
-            }
             const { id, bytes } = await copyService(s, target, { kind, onLine });
             await prune(s, target, cfg.keep, onLine).catch((err) => onLine(`Could not remove older copies: ${err.message}`));
-            if (s.key === 'nextcloud' && !cancelRequested()) await copyFiles(onLine, { allowDeletes, logName });
             recordLast(s.key, { at: new Date().toISOString(), ok: true, id, bytes, result: 'Backed up.', log: logName });
             onLine(`${s.label}: done.`);
             copied += 1;
@@ -631,7 +667,7 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
                 onLine(`${s.label}: cancelled. Nothing it already had on the drive was touched.`);
                 break;
             }
-            const said = err.message.startsWith('The database was copied') ? err.message : briefError(err);
+            const said = briefError(err);
             recordLast(s.key, { at: new Date().toISOString(), ok: false, result: said, log: logName });
             onLine(`${s.label}: failed. ${said}`);
             failed.push(s.label);
@@ -640,12 +676,12 @@ async function backUpEach({ kind = 'manual', only = null, allowDeletes = false, 
         }
     }
     if (failed.length) throw new Error(`Could not back up ${failed.join(', ')}. The log says why.`);
-    if (noCopies) {
-        onLine(copied ? '\nNextcloud\'s files are mirrored to the drive.' : '\nNothing to do: Nextcloud is not backed up and no dated copies are kept.');
-        return { copied };
-    }
-    onLine(`\nBacked up ${copied} app${copied === 1 ? '' : 's'} to ${loadBackupConfig().destination}/${ROOT}.`);
-    return { copied };
+    const said = [
+        copied ? `Backed up ${copied} app${copied === 1 ? '' : 's'} to ${loadBackupConfig().destination}/${ROOT}.` : '',
+        mirrored ? 'Nextcloud\'s files are mirrored to the drive.' : '',
+    ].filter(Boolean);
+    onLine(`\n${said.join(' ') || 'Nothing to do: nothing is switched on to back up.'}`);
+    return { copied, mirrored };
 }
 
 // ---------------------------------------------------------------- restore ---
@@ -856,8 +892,8 @@ export async function status() {
             present: isPresent(s, volumes),
             included: isIncluded(cfg, s.key),
             last: cfg.last[s.key] ? { ...cfg.last[s.key], result: tidy(cfg.last[s.key].result) } : null,
-            ...(s.key === 'nextcloud' ? { files: filesStatus() } : {}),
         })),
+        files: { ...filesStatus(), included: isIncluded(cfg, FILES_KEY), present: backupSources().length > 0 },
     };
 }
 

@@ -2252,7 +2252,7 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
 .snap-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "name action" "what what" "mirror mirror" "status status";
+    grid-template-areas: "name action" "what what" "mirror mirror" "status status" "pick pick";
     gap: 2px 12px;
     align-items: center;
     padding: 12px 0;
@@ -2290,6 +2290,14 @@ button.copy-btn { padding: 2px 9px; font-size: 12px; flex: none; margin-left: 6p
 /* Its own row: it is also a .hint, which would otherwise put it on top of the description. */
 .snap-row > .snap-mirror { grid-area: mirror; margin: 6px 0 4px 26px; }
 .snap-logs ul { margin: 6px 0 0; padding-left: 18px; }
+/* The files mirror's folder picker. */
+.snap-row > .mirror-pick { grid-area: pick; margin: 8px 0 0 26px; }
+.mirror-pick > summary { cursor: pointer; color: var(--accent, inherit); font-size: 13px; }
+.mirror-folders { margin-top: 8px; display: grid; gap: 12px; }
+.mirror-group { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.mirror-head { margin-bottom: 4px; }
+.mirror-folders label.mirror-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding-left: 22px; font-size: 13px; }
+.mirror-folders label.mirror-item > span:nth-of-type(1) { overflow-wrap: anywhere; }
 
 /* Global settings, Update the apps: one row per app. */
 .app-updates { display: grid; margin-top: 14px; border-top: 1px solid var(--line); }

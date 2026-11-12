@@ -121,6 +121,11 @@ dated archive every night at 3 AM, in the machine's timezone, and the last few
 are kept (three unless changed) in `Home Server backups/` on the drive.
 Lowering that number lists the copies it would remove and asks first; at 0 no
 dated copies are made or kept, and only Nextcloud's files are mirrored.
+Nextcloud has two rows, each switched on or off by itself: its database and
+settings (dated copies, like the other apps), and its files (the mirror). The
+files row's "Choose what is mirrored" lists each user's folders, their old
+versions and trash, and Nextcloud's own working files, with sizes; anything
+unticked is left on the drive as it is, neither updated nor removed.
 Nextcloud's files are mirrored in the same run, straight after its database,
 as an ordinary folder kept exactly in step with what Nextcloud has on the
 machine: only what changed is copied, and what is no longer in Nextcloud is

@@ -816,6 +816,15 @@ route('GET', /^\/api\/backup$/, async (req, res, match, url) => {
     sendJson(res, 200, { config: backup.loadBackupConfig(), drives, sources: backup.backupSources() });
 });
 
+/** What the files mirror can leave out, read from the machine. A container, and du over every file. */
+route('GET', /^\/api\/backup\/folders$/, async (req, res) => {
+    try {
+        sendJson(res, 200, { sources: await backup.listFolders(), excluded: backup.loadBackupConfig().excluded ?? [] });
+    } catch (err) {
+        sendJson(res, 200, { sources: [], error: err.message });
+    }
+});
+
 route('PUT', /^\/api\/backup$/, async (req, res) => {
     const body = await readBody(req);
     const { cfg, errors } = backup.validateBackupConfig(body ?? {});
@@ -878,10 +887,10 @@ route('PUT', /^\/api\/snapshots$/, async (req, res) => {
 route('POST', /^\/api\/snapshots\/run$/, async (req, res) => {
     const body = (await readBody(req)) ?? {};
     const only = body.service ? String(body.service) : null;
-    if (only && !snapshots.serviceFor(only)) return fail(res, 404, 'There is no such app to back up.');
+    if (only && only !== snapshots.FILES_KEY && !snapshots.serviceFor(only)) return fail(res, 404, 'There is no such app to back up.');
     // Lets a mirror remove more than MAX_DELETES files this once: the button
-    // the page shows after a run held them back. Nextcloud only.
-    const allowDeletes = body.allowDeletes === true && only === 'nextcloud';
+    // the page shows after a run held them back. Nextcloud's files only.
+    const allowDeletes = body.allowDeletes === true && only === snapshots.FILES_KEY;
     const job = enqueueSnapshots({ kind: 'manual', only, allowDeletes });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -916,7 +925,7 @@ route('POST', /^\/api\/snapshots\/restore$/, async (req, res) => {
 
 // Keyed, so the nightly run asked for while a manual one waits is the same run.
 function enqueueSnapshots({ kind, only = null, allowDeletes = false }) {
-    const name = only ? `Back up ${snapshots.serviceFor(only).label}` : 'Back up app data';
+    const name = only === snapshots.FILES_KEY ? "Mirror Nextcloud's files" : only ? `Back up ${snapshots.serviceFor(only).label}` : 'Back up app data';
     return jobs.start(name, (onLine) => snapshots.backUp({ kind, only, allowDeletes, onLine }), {
         key: `snapshots:${only ?? 'all'}`,
     });
