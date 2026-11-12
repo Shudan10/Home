@@ -102,7 +102,9 @@ the host's kernel (see the comment on the service in `docker-compose.yml`).
 the KaChat and KaPay apps: the photo, video and voice messages KaChat sends as
 links, the contacts backup both apps share (encrypted on the phone), and
 KaPay's portfolio files. It has no Nextcloud Talk, so KaChat calls do not go
-through it. It installs, switches on and off, and
+through it. KaChat's web app at https://desktop.kachat.app connects to it
+straight from the browser: Apache in its container sends CORS headers for that
+one site, on only what KaChat calls, and answers the preflight itself. It installs, switches on and off, and
 uninstalls like every other app; the first time its switch starts it, it sets
 itself up and makes the account the apps sign in to. Its page has the rest:
 accounts, app passwords to paste into the apps, the links that have been

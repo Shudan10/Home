@@ -207,6 +207,7 @@ async function configure(onLine = () => {}) {
     for (const app of UNWANTED_APPS) await occ(['app:disable', app]).catch(() => {});
 
     await dropTalk(onLine);
+    await applyCors(onLine);
 
     // New accounts start empty, not with Nextcloud's sample files: the
     // folder page should show only what KaChat and KaPay put there.
@@ -235,10 +236,69 @@ async function dropTalk(onLine = () => {}) {
     }
 }
 
+/*
+ * KaChat Desktop's live site, https://desktop.kachat.app, talks to this
+ * Nextcloud straight from the browser, so the app password never passes
+ * through a server KaChat runs. A browser allows that only with CORS headers
+ * for that site, which Nextcloud does not send on WebDAV. Apache in the
+ * container adds them, for that one origin and only on what KaChat calls:
+ * a preflight is answered there with 204 and never reaches Nextcloud or asks
+ * for a login; every other origin is answered exactly as before. No
+ * Allow-Credentials: KaChat sends no cookies, only the Basic header.
+ *
+ * Written into the running container rather than built into the image,
+ * because the image is shared with the personal Nextcloud's Dockerfile and
+ * a running KaChat one is never rebuilt; configure() writes it again after
+ * every start, so a recreated container gets it back. Apache's own check
+ * runs before the reload, and a file it refuses is taken back out.
+ */
+const CORS_ORIGIN = 'https://desktop.kachat.app';
+const CORS_CONF = `# KaChat's live site talks to this Nextcloud from the browser.
+# Written by the Quick Start Home panel (manager/lib/kachat.js); edits here are replaced.
+Define KC_ORIGIN "${CORS_ORIGIN}"
+Define KC_PATHS "^[A-Z]+ /(remote\\.php/dav/files/|ocs/v2\\.php/(cloud/user|core/apppassword)[? ]|ocs/v2\\.php/apps/files_sharing/api/v1/shares[/? ]|(index\\.php/)?core/preview(\\.png)?[? ])"
+
+# THE_REQUEST, the request line as sent: Nextcloud's own rewrites (core/preview.png
+# goes to index.php) would otherwise change the path these are matched on.
+<If "%{HTTP:Origin} == '\${KC_ORIGIN}' && %{THE_REQUEST} =~ m#\${KC_PATHS}#">
+    Header unset Access-Control-Allow-Origin
+    Header always set Access-Control-Allow-Origin "\${KC_ORIGIN}"
+    Header always merge Vary "Origin"
+    <If "%{REQUEST_METHOD} == 'OPTIONS'">
+        Header always set Access-Control-Allow-Methods "GET, PUT, POST, DELETE, MKCOL, MOVE, PROPFIND, OPTIONS"
+        Header always set Access-Control-Allow-Headers "Authorization, Content-Type, Depth, Destination, Overwrite, OCS-APIRequest, Accept"
+        Header always set Access-Control-Max-Age "600"
+        Redirect 204
+    </If>
+    <Else>
+        Header always set Access-Control-Expose-Headers "ETag, OC-ETag, OC-FileId, Content-Type, Content-Length"
+    </Else>
+</If>
+`;
+const CORS_APPLY = `f=/etc/apache2/conf-enabled/zz-kachat-cors.conf
+printf %s "$1" | base64 -d > /tmp/kachat-cors.new || exit 1
+if cmp -s /tmp/kachat-cors.new "$f"; then rm -f /tmp/kachat-cors.new; exit 0; fi
+[ -f "$f" ] && cp "$f" /tmp/kachat-cors.old
+mv /tmp/kachat-cors.new "$f"
+if apache2ctl -t >/dev/null 2>&1; then apache2ctl graceful >/dev/null 2>&1; echo applied; exit 0; fi
+apache2ctl -t 2>&1 | tail -2 >&2
+if [ -f /tmp/kachat-cors.old ]; then mv /tmp/kachat-cors.old "$f"; else rm -f "$f"; fi
+exit 1`;
+
+async function applyCors(onLine = () => {}) {
+    try {
+        const { stdout } = await deps.docker(['exec', CONTAINER, 'sh', '-c', CORS_APPLY, 'sh', Buffer.from(CORS_CONF).toString('base64')], { timeoutMs: 60_000 });
+        if (stdout.includes('applied')) onLine(`KaChat's live site (${CORS_ORIGIN}) can now connect to it directly.`);
+    } catch (err) {
+        onLine(`Could not let KaChat's live site connect directly (${err.message}). It is tried again on the next start.`);
+    }
+}
+
 /** For one already running when the panel starts: no restart needed. */
-export async function removeTalk() {
+export async function reapply() {
     if (!isInstalled() || !(await deps.containerState(CONTAINER)).running) return;
     await dropTalk();
+    await applyCors();
 }
 
 /** The public name, if one is published for KaChat. */
