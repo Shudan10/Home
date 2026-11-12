@@ -2509,8 +2509,10 @@ async function bootstrap() {
     // Nextcloud's background jobs: a minute after start, then every five.
     setTimeout(() => runNextcloudCron().catch(() => {}), 60_000).unref?.();
     setInterval(() => runNextcloudCron().catch(() => {}), 5 * 60_000).unref?.();
-    // The KaChat Nextcloud's background jobs: expired shares, Talk clean-up.
+    // The KaChat Nextcloud's background jobs: expired shares, previews.
     setInterval(() => !jobs.busy && kachat.runCron().catch(() => {}), 5 * 60_000).unref?.();
+    // Talk comes off one set up with it without waiting for its next start.
+    setTimeout(() => !jobs.busy && kachat.removeTalk().catch(() => {}), 60_000).unref?.();
 
     // Queued rather than run directly, so the nightly copy shares the one-at-
     // a-time queue with everything else and cannot start while an image is

@@ -123,8 +123,8 @@ services:
   # ---- KaChat Nextcloud -----------------------------------------------------
   #
   # A second Nextcloud, only for the KaChat and KaPay apps: their photo, video
-  # and voice links, their encrypted contacts backup, and Nextcloud Talk for
-  # KaChat calls. Separate from the personal Nextcloud above in every way --
+  # and voice links, their encrypted contacts backup and KaPay's portfolio
+  # files. Separate from the personal Nextcloud above in every way --
   # its own database, cache, volumes and image tag -- so publishing it on a
   # domain exposes nothing of that one, and rebuilding one never touches the
   # other. lib/kachat.js runs it.

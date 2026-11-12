@@ -3926,7 +3926,7 @@ $('mv-remove').addEventListener('click', async () => {
 /*
  * KaChat Nextcloud: a separate Nextcloud for the KaChat and KaPay apps, run
  * entirely from here -- install, accounts, app passwords, the links that
- * have been shared, and calls.
+ * have been shared, and its files.
  */
 let kcState = null;
 let kcAccount = null;
@@ -3952,15 +3952,15 @@ function renderKachat() {
     // Not installed, the cards stay as a preview under the install screen,
     // the way every other app's page does.
     if (!k.installed) {
-        for (const id of ['kc-live', 'kc-connect-card', 'kc-calls-card']) $(id).hidden = false;
+        for (const id of ['kc-live', 'kc-connect-card']) $(id).hidden = false;
         $('kc-setup').hidden = true;
         return;
     }
     $('kc-setup').hidden = k.setUp;
     $('kc-live').hidden = !k.setUp;
-    // Accounts and calls are read from Nextcloud itself, which a switched-off
-    // one cannot answer; the status card says it is off instead.
-    for (const id of ['kc-connect-card', 'kc-calls-card']) $(id).hidden = !k.setUp || !k.running;
+    // Accounts are read from Nextcloud itself, which a switched-off one
+    // cannot answer; the status card says it is off instead.
+    $('kc-connect-card').hidden = !k.setUp || !k.running;
     if (!k.setUp) return;
 
     const accounts = kcAccounts();
@@ -4018,25 +4018,6 @@ function renderKachat() {
             </div>`,
         )
         .join('');
-
-    // Calls.
-    const t = k.talk;
-    $('kc-calls').innerHTML = !k.running
-        ? '<p class="muted">Start it to see the call settings.</p>'
-        : !t?.enabled
-          ? '<p class="verdict bad">Nextcloud Talk is not installed here, so KaChat calls are off. Restarting it tries again.</p>'
-          : `<ul class="ts-checks">
-                <li><span class="svc-dot ok"></span><span>Nextcloud Talk ${escapeHtml(t.version ?? '')} is on, so KaChat can make voice and video calls.</span></li>
-                <li><span class="svc-dot ${t.stun?.length ? 'ok' : 'bad'}"></span><span>${
-                    t.stun?.length ? `Phones find each other with ${escapeHtml(t.stun.join(', '))}.` : 'No STUN server, so most calls between different networks fail.'
-                }</span></li>
-            </ul>
-            <p class="hint">
-                The sound and picture go straight between the two phones, not through this machine,
-                and nothing needs a port opened. A call can still fail to connect when both phones
-                are on strict networks, such as two phones on mobile data with some carriers: that
-                needs a relay (TURN), which is not set up.
-            </p>`;
 
     // Accounts.
     $('kc-accounts').innerHTML = accounts.length

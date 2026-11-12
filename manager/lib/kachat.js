@@ -8,11 +8,11 @@ import { loadManagerConfig, readEnvFile, readJson, saveManagerConfig, updateEnvF
  * KaChat Nextcloud: a second, separate Nextcloud for the KaChat and KaPay apps.
  *
  * KaChat signs in to a Nextcloud with a server address, a username and an app
- * password, and uses it for three things: photo, video and voice messages
- * (uploaded to KaChat/Media and sent as public share links), an encrypted
- * contacts backup it shares with KaPay (KaChat/kachat-contacts.json), and
- * Nextcloud Talk for calls. KaPay uses the same account for contacts and its
- * portfolio files.
+ * password, and uses it for photo, video and voice messages (uploaded to
+ * KaChat/Media and sent as public share links) and an encrypted contacts
+ * backup it shares with KaPay (KaChat/kachat-contacts.json). KaPay uses the
+ * same account for contacts and its portfolio files. KaChat can also use
+ * Nextcloud Talk for calls; this one has no Talk, by choice.
  *
  * It is its own Nextcloud rather than an account in the personal one so that
  * putting it on a domain exposes nothing of that one: different containers,
@@ -39,12 +39,11 @@ const INTERNAL = process.env.KACHAT_INTERNAL_URL || ORIGIN;
  * do not exist on the internet at all.
  *
  * From KaChat's and KaPay's own code (KaspaSilver/KaChat-iPhone and
- * KaPay-iPhone, NextcloudService.swift and NextcloudTalkClient.swift):
+ * KaPay-iPhone, NextcloudService.swift):
  *   remote.php/dav/files/<user>/...       uploads, contacts, portfolio files
- *   ocs .../cloud/user, cloud/capabilities  sign-in check, Talk check
+ *   ocs .../cloud/user, cloud/capabilities  sign-in check
  *   ocs .../files_sharing/api/v1/shares   making the public link
  *   ocs .../core/apppassword              revoking on disconnect
- *   ocs .../apps/spreed/...               Talk calls, host and guest
  *   index.php/core/preview.png            thumbnails
  * and what a public share link needs to show a photo or play a video for
  * someone with no account: the share page, its downloads and previews, and
@@ -60,7 +59,7 @@ export const ALLOWED_PATHS =
     '^/(' +
     [
         'remote\\.php/dav/(files|uploads)/[^/]+(/|$)',
-        'ocs/v[12]\\.php/(cloud/(user|capabilities)$|apps/files_sharing/api/v1/|core/apppassword$|apps/spreed/)',
+        'ocs/v[12]\\.php/(cloud/(user|capabilities)$|apps/files_sharing/api/v1/|core/apppassword$)',
         'index\\.php/core/preview',
         '(index\\.php/)?s/',
         'public\\.php/',
@@ -77,14 +76,6 @@ export const ALLOWED_PATHS =
         'robots\\.txt$',
     ].join('|') +
     ')';
-
-/*
- * Ice servers for KaChat calls. KaChat takes these from Talk and has none of
- * its own, and with none at all two phones on different networks rarely find
- * each other. STUN needs no open port anywhere: each phone asks it what its
- * own public address is, and nothing is relayed.
- */
-const STUN_SERVERS = ['stun.cloudflare.com:3478', 'stun.nextcloud.com:443'];
 
 // Apps a messenger's storage has no use for. Disabled, not removed.
 const UNWANTED_APPS = ['firstrunwizard', 'dashboard', 'weather_status', 'recommendations', 'survey_client', 'nextcloud_announcements'];
@@ -215,16 +206,7 @@ async function configure(onLine = () => {}) {
 
     for (const app of UNWANTED_APPS) await occ(['app:disable', app]).catch(() => {});
 
-    // Talk, for KaChat calls. From the app store the first time.
-    try {
-        await occ(['app:install', 'spreed'], { timeoutMs: 5 * 60_000 }).catch(() => {});
-        await occ(['app:enable', 'spreed'], { timeoutMs: 2 * 60_000 });
-        const have = (await occJson(['talk:stun:list']).catch(() => [])) ?? [];
-        const listed = new Set((Array.isArray(have) ? have : Object.values(have)).map(String));
-        for (const s of STUN_SERVERS) if (!listed.has(s)) await occ(['talk:stun:add', s]).catch(() => {});
-    } catch (err) {
-        onLine(`Could not set up Talk, so KaChat calls are off for now (${err.message}). It is tried again on the next start.`);
-    }
+    await dropTalk(onLine);
 
     // New accounts start empty, not with Nextcloud's sample files: the
     // folder page should show only what KaChat and KaPay put there.
@@ -235,6 +217,28 @@ async function configure(onLine = () => {}) {
     await occ(['config:app:set', 'core', 'shareapi_allow_links', '--value', 'yes']).catch(() => {});
     await occ(['config:app:set', 'core', 'shareapi_allow_public_upload', '--value', 'no']).catch(() => {});
     await occ(['config:app:set', 'core', 'shareapi_allow_resharing', '--value', 'no']).catch(() => {});
+}
+
+/*
+ * No Nextcloud Talk here. One set up before that had it installed for KaChat
+ * calls; it comes off on the next start, keeping its tables (--keep-data), so
+ * nothing of it is deleted.
+ */
+async function dropTalk(onLine = () => {}) {
+    const apps = (await occJson(['app:list']).catch(() => null)) ?? {};
+    if (!apps.enabled?.spreed && !apps.disabled?.spreed) return;
+    try {
+        await occ(['app:remove', '--keep-data', 'spreed'], { timeoutMs: 2 * 60_000 });
+        onLine('Nextcloud Talk removed.');
+    } catch (err) {
+        onLine(`Could not remove Nextcloud Talk (${err.message}). It is tried again on the next start.`);
+    }
+}
+
+/** For one already running when the panel starts: no restart needed. */
+export async function removeTalk() {
+    if (!isInstalled() || !(await deps.containerState(CONTAINER)).running) return;
+    await dropTalk();
 }
 
 /** The public name, if one is published for KaChat. */
@@ -275,7 +279,7 @@ export async function afterStart(onLine = () => {}) {
         return;
     }
     const first = !isInstalled();
-    if (first) onLine('Setting it up for KaChat: Talk for calls, previews for photos and videos, public links...');
+    if (first) onLine('Setting it up for KaChat: previews for photos and videos, public links...');
     await configure(onLine);
     if (first) {
         const existing = (await occJson(['user:list']).catch(() => ({}))) ?? {};
@@ -591,16 +595,6 @@ export async function status() {
         );
     } catch (err) {
         out.error = `Could not read the accounts: ${err.message}`;
-    }
-    try {
-        const talk = await occJson(['app:list']);
-        out.talk = { enabled: Boolean(talk?.enabled?.spreed), version: talk?.enabled?.spreed ?? null };
-        const stun = (await occJson(['talk:stun:list']).catch(() => [])) ?? [];
-        out.talk.stun = Array.isArray(stun) ? stun : Object.values(stun);
-        const turn = (await occJson(['talk:turn:list']).catch(() => [])) ?? [];
-        out.talk.turn = (Array.isArray(turn) ? turn : Object.values(turn)).length;
-    } catch {
-        out.talk = null;
     }
     return out;
 }

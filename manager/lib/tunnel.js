@@ -65,11 +65,11 @@ export const SERVICES = [
     {
         key: 'kachat',
         label: 'KaChat Nextcloud',
-        detail: 'For the KaChat and KaPay apps: photo, video and voice links, contacts backup and calls.',
+        detail: 'For the KaChat and KaPay apps: photo, video and voice links, contacts and portfolio backup.',
         origin: kachat.ORIGIN,
         // Only what the two apps use gets through; see kachat.ALLOWED_PATHS.
         path: kachat.ALLOWED_PATHS,
-        note: 'Only what KaChat and KaPay use is reachable on this name: their files, share links and calls. Nextcloud\'s web login and pages are not on the internet. A name like "share" or "kachat" reads well in a chat.',
+        note: 'Only what KaChat and KaPay use is reachable on this name: their files and share links. Nextcloud\'s web login and pages are not on the internet. A name like "share" or "kachat" reads well in a chat.',
     },
     {
         key: 'panel',
