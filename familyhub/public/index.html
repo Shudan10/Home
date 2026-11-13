@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover lets the page reach under the notch and the home
+     indicator; the safe-area insets in the stylesheet put the content back
+     where it can actually be read. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Family Hub</title>
+<meta name="description" content="The family's week: plans, dinners and the weather.">
+
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192">
+
+<!-- iOS still reads these rather than the manifest for standalone mode. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Family Hub">
+<meta name="theme-color" content="#0b1b3a">
+
+<!-- Last in the head, and not deferred: it puts the saved theme on the page
+     before anything is drawn, and it needs the theme-color tag above to exist
+     so the status bar can follow. -->
+<script src="themes.js"></script>
+</head>
+<body>
+
+<!-- ------------------------------------------------------------- sign in -->
+<!-- Shown in place of everything else until there is a session. Not a dialog:
+     a modal over an empty app is a modal over nothing, and on iOS a <dialog>
+     that opens before the first paint sometimes opens without its backdrop. -->
+<div id="gate" class="gate" hidden>
+  <form id="gate-form" class="gate-card">
+    <img class="gate-mark" src="icons/icon-192.png" alt="" width="54" height="54">
+    <h1>Family Hub</h1>
+    <p class="muted">Ask whoever set this up for the family password.</p>
+    <label class="sr-only" for="gate-password">Password</label>
+    <input id="gate-password" type="password" autocomplete="current-password" placeholder="Password" enterkeyhint="go">
+    <p class="error" id="gate-error" hidden></p>
+    <button class="primary big" id="gate-submit" type="submit">Sign in</button>
+  </form>
+</div>
+
+<!-- ----------------------------------------------------------------- app -->
+<div id="app" hidden>
+
+  <!-- Everything except the navigation. On a landscape iPad the nav becomes a
+       rail down the left and this is the column beside it; on a phone the nav
+       is the dock at the bottom and this is simply the whole screen. -->
+  <div class="content">
+
+  <header class="topbar">
+    <div class="topbar-row">
+      <h1 id="view-title">This week</h1>
+      <button class="icon-btn" id="btn-today" title="Jump to this week" hidden>Today</button>
+    </div>
+
+    <!-- Stepper, for the views that show a particular week, month or day. -->
+    <div class="weeknav" id="weeknav" hidden>
+      <button class="icon-btn" id="week-prev" aria-label="Previous week">&#8249;</button>
+      <span id="week-label">&nbsp;</span>
+      <button class="icon-btn" id="week-next" aria-label="Next week">&#8250;</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- --------------------------------------------------- overview view -->
+    <!-- What a family board is for: the time, the weather and what is
+         happening today, readable from across the kitchen -- and under it the
+         rest of the week, so Thursday's dentist is not a surprise on Thursday. -->
+    <section id="view-today" class="view">
+      <!-- Three rows, on one screen on a landscape iPad: the time, the week's
+           weather, and the week itself. The weather and the week are the same
+           seven days from today, so each day's forecast sits above its day. -->
+      <!-- The time with the date under it, and beside them everything on
+           today: its events, dinner and reminders. -->
+      <article class="panel-card ov-clock">
+        <div class="ov-time">
+          <div class="clock" id="today-time">--:--</div>
+          <div class="clock-date" id="today-date"></div>
+        </div>
+        <div class="ov-today" id="ov-today"></div>
+      </article>
+
+      <article class="panel-card ov-weather" id="ov-weather"></article>
+
+      <article class="panel-card week-overview">
+        <div class="panel-head">
+          <h2 class="panel-label">This week <span class="panel-count" id="week-overview-range"></span></h2>
+        </div>
+        <div class="wk-days" id="week-overview"></div>
+      </article>
+    </section>
+
+    <!-- -------------------------------------------------- reminders view -->
+    <!-- A column for each person and one for anybody, for the day the stepper
+         is on. Tapping a reminder ticks it; the pencil edits. -->
+    <section id="view-tasks" class="view" hidden>
+      <div class="actions tasks-actions">
+        <button class="primary" type="button" id="btn-add-task">Add a reminder</button>
+      </div>
+      <div class="chore-board" id="chore-board"></div>
+    </section>
+
+    <!-- The Meals tab holds two things, switched here rather than given a
+         tab each: five tabs is all a phone's dock takes, and the plan and the
+         meals are one job. -->
+    <div class="segmented" id="food-tabs" role="tablist" hidden>
+      <button type="button" role="tab" data-sub="plan">This week</button>
+      <button type="button" role="tab" data-sub="meals">Meals</button>
+    </div>
+
+    <!-- ------------------------------------------------------- plan view -->
+    <section id="view-plan" class="view" hidden>
+      <div class="actions">
+        <button class="primary" id="btn-random">
+          <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+          Random week
+        </button>
+        <button class="ghost" id="btn-clear">Clear week</button>
+      </div>
+      <div id="days"></div>
+    </section>
+
+    <!-- --------------------------------------------------- calendar view -->
+    <section id="view-cal" class="view" hidden>
+      <div class="cal-weekdays" id="cal-weekdays" aria-hidden="true"></div>
+      <div class="cal-grid" id="cal-grid" role="grid" aria-label="Month of meals"></div>
+    </section>
+
+    <!-- ------------------------------------------------------ meals view -->
+    <section id="view-meals" class="view" hidden>
+      <!-- One box, two jobs: type a name and Add puts it in the library at
+           once (the rest can be filled in later by tapping it); Search turns
+           the same box into a filter, and Done turns it back. -->
+      <form class="actions meal-bar" id="meal-bar">
+        <input id="meal-input" placeholder="New meal" aria-label="New meal" maxlength="120" enterkeyhint="done" autocomplete="off">
+        <button type="submit" class="primary" id="btn-add-meal">Add</button>
+        <button type="button" class="ghost" id="btn-search-meals" aria-pressed="false">Search</button>
+      </form>
+      <p class="hint" id="meals-count"></p>
+      <div id="meal-list"></div>
+    </section>
+
+    <!-- --------------------------------------------------- settings view -->
+    <section id="view-settings" class="view" hidden>
+      <div class="settings-grid">
+        <article class="panel-card">
+          <div class="panel-head">
+            <h2>Family</h2>
+            <button type="button" class="ghost" id="btn-add-member">Add someone</button>
+          </div>
+          <p class="hint">Everyone gets a colour, so the calendar and the reminders show whose is whose.</p>
+          <div id="member-list"></div>
+        </article>
+
+        <article class="panel-card">
+          <div class="panel-head"><h2>Weather</h2></div>
+          <p class="hint" id="weather-place"></p>
+          <form class="actions" id="place-form">
+            <input id="place-search" type="search" placeholder="Search for your town" enterkeyhint="search" autocomplete="off">
+            <button type="submit" class="ghost">Search</button>
+          </form>
+          <div id="place-results"></div>
+          <div class="segmented compact" id="units" role="radiogroup" aria-label="Temperature">
+            <button type="button" role="radio" data-units="fahrenheit">&deg;F</button>
+            <button type="button" role="radio" data-units="celsius">&deg;C</button>
+          </div>
+        </article>
+
+        <!-- The family calendar and reminders on a phone, as an account of
+             its own that goes both ways. See lib/caldav.js. -->
+        <article class="panel-card" id="account-card">
+          <div class="panel-head"><h2>On your iPhone</h2></div>
+          <p class="hint">
+            Adds Family Hub to an iPhone as a calendar account, the way iCloud
+            or Google is added. Events and reminders added, changed or ticked in
+            the phone's own Calendar and Reminders apps come here, and the other
+            way round. Each person's reminders are a list of their own there.
+          </p>
+          <ol class="feed-steps">
+            <li>On the iPhone: Settings &rarr; Apps &rarr; Calendar &rarr; Calendar
+              Accounts &rarr; Add Account &rarr; Other &rarr; <b>Add CalDAV Account</b>.</li>
+            <li>Server: this address, exactly.</li>
+            <li>User name: <b>family</b>. Password: <span id="account-password">the family password</span>.</li>
+            <li id="account-ssl">Tap <b>Next</b>. If it says it cannot connect using SSL, tap <b>Continue</b>.</li>
+          </ol>
+          <div class="actions feed-link">
+            <input id="account-url" readonly aria-label="Server address">
+            <button type="button" class="ghost" id="btn-account-copy">Copy</button>
+          </div>
+          <p class="hint feed-local" id="account-local" hidden></p>
+          <p class="hint">
+            To say whose an event is on the phone, put their name in brackets
+            after it: <b>Swim (Emma)</b>.
+          </p>
+          <p class="hint">
+            A phone that subscribed to the old Family Hub calendar link should
+            delete that subscription (Calendar Accounts &rarr; Subscribed
+            Calendars), or every event shows twice.
+          </p>
+        </article>
+      </div>
+
+      <article class="panel-card">
+        <div class="panel-head"><h2>Themes</h2></div>
+        <p class="hint">
+          Changes the whole app straight away. Saved on this device, so each
+          phone or iPad in the house can have its own.
+        </p>
+        <h2 class="theme-group-title">Colours</h2>
+        <div class="theme-grid" id="theme-grid-colour"></div>
+        <h2 class="theme-group-title">Holidays</h2>
+        <div class="theme-grid" id="theme-grid-holiday"></div>
+      </article>
+    </section>
+  </main>
+
+  </div><!-- /.content -->
+
+  <!-- Bottom bar rather than top tabs: this is a phone app, and the bottom of
+       a 6.1" screen is the part a thumb reaches without re-gripping. -->
+  <nav class="tabbar">
+    <button class="tab is-active" data-view="today">
+      <svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/><path d="M10 20v-6h4v6"/></svg><span>Overview</span>
+    </button>
+    <button class="tab" data-view="cal">
+      <svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M8 2.5v4M16 2.5v4M3 9.5h18M7.5 13h2M11 13h2M14.5 13h2M7.5 16.5h2M11 16.5h2"/></svg><span>Calendar</span>
+    </button>
+    <button class="tab" data-view="tasks">
+      <svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="m8 12.5 2.8 2.8L16.5 9"/></svg><span>Reminders</span>
+    </button>
+    <button class="tab" data-view="food">
+      <svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v8a2 2 0 0 0 2 2v8M9 3v6M5 3v6M18 3c-1.7 0-3 2.2-3 5v4h3v9"/></svg><span>Meals</span>
+    </button>
+    <button class="tab" data-view="settings">
+      <svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span>
+    </button>
+  </nav>
+</div>
+
+<!-- ----------------------------------------------------------- day sheet -->
+<!-- Tapping a date in the calendar. A month cell can only hint at what is on a
+     day; this is where the full names live, and where a slot can be changed
+     without leaving the calendar for the week view. -->
+<dialog id="day" aria-labelledby="day-title">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3 id="day-title">Day</h3>
+      <button class="dialog-close" id="day-close" aria-label="Close">&times;</button>
+    </div>
+    <div id="day-events"></div>
+    <button type="button" class="ghost add-row" id="day-add-event">+ Add an event</button>
+    <h4 class="sheet-label">Dinner</h4>
+    <div id="day-slots"></div>
+  </div>
+</dialog>
+
+<!-- ------------------------------------------------------- meal picker -->
+<dialog id="picker" aria-labelledby="picker-title">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3 id="picker-title">Choose a meal</h3>
+      <button class="dialog-close" id="picker-close" aria-label="Close">&times;</button>
+    </div>
+    <input id="picker-search" type="search" placeholder="Search" autocomplete="off">
+    <div id="picker-list" class="picker-list"></div>
+    <div class="sheet-actions">
+      <button class="ghost danger" id="picker-clear">Leave empty</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- --------------------------------------------------------- meal editor -->
+<dialog id="editor" aria-labelledby="editor-title">
+  <form class="sheet" id="editor-form" method="dialog">
+    <div class="sheet-head">
+      <h3 id="editor-title">New meal</h3>
+      <button class="dialog-close" id="editor-close" type="button" aria-label="Close">&times;</button>
+    </div>
+
+    <label>Name
+      <input id="ed-name" required maxlength="120" enterkeyhint="next">
+    </label>
+
+    <div class="row">
+      <label>Serves <input id="ed-serves" type="number" min="1" max="99" inputmode="numeric"></label>
+      <label>Tags <input id="ed-tags" autocomplete="off"></label>
+    </div>
+
+    <label>Ingredients <span class="muted">one per line</span>
+      <textarea id="ed-ingredients" rows="5"></textarea>
+    </label>
+
+    <label>Method <span class="muted">one step per line</span>
+      <textarea id="ed-method" rows="5"></textarea>
+    </label>
+
+    <label>Notes
+      <textarea id="ed-notes" rows="2"></textarea>
+    </label>
+
+    <p class="error" id="editor-error" hidden></p>
+
+    <div class="sheet-actions">
+      <button class="ghost danger" id="ed-delete" type="button" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button class="primary" id="ed-save" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- --------------------------------------------------------- random sheet -->
+<dialog id="randomer" aria-labelledby="randomer-title">
+  <form class="sheet" id="randomer-form" method="dialog">
+    <div class="sheet-head">
+      <h3 id="randomer-title">Random week</h3>
+      <button class="dialog-close" id="randomer-close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <p class="muted" id="randomer-range"></p>
+
+    <label class="check"><input type="checkbox" id="rn-weekends" checked> Include Saturday and Sunday</label>
+    <label class="check"><input type="checkbox" id="rn-overwrite"> Replace meals already planned</label>
+    <label class="check"><input type="checkbox" id="rn-norepeat" checked> Avoid repeats in the same week</label>
+
+    <p class="error" id="randomer-error" hidden></p>
+    <div class="sheet-actions">
+      <span class="spacer"></span>
+      <button class="primary" type="submit">Fill it in</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- -------------------------------------------------------- event sheet -->
+<dialog id="event-editor" aria-labelledby="event-heading">
+  <form class="sheet" id="event-form" method="dialog">
+    <div class="sheet-head">
+      <h3 id="event-heading">New event</h3>
+      <button class="dialog-close" id="event-close" type="button" aria-label="Close">&times;</button>
+    </div>
+
+    <label>What
+      <input id="ev-title" maxlength="120" autocomplete="off" enterkeyhint="next">
+    </label>
+
+    <div class="row">
+      <label>Day <input id="ev-date" type="date"></label>
+      <label id="ev-enddate-row">Last day <input id="ev-enddate" type="date"></label>
+    </div>
+
+    <label class="check"><input type="checkbox" id="ev-allday"> All day</label>
+    <div class="row" id="ev-times">
+      <label>Starts <input id="ev-start" type="time"></label>
+      <label>Ends <input id="ev-end" type="time"></label>
+    </div>
+
+    <fieldset class="who" id="ev-members">
+      <legend>Who</legend>
+    </fieldset>
+
+    <div class="row">
+      <label>Repeats
+        <select id="ev-repeat">
+          <option value="none">Never</option>
+          <option value="daily">Every day</option>
+          <option value="weekly">Every week</option>
+          <option value="weekly:2">Every 2 weeks</option>
+          <option value="monthly">Every month</option>
+          <option value="yearly">Every year</option>
+        </select>
+      </label>
+      <label id="ev-until-row">Stops <input id="ev-until" type="date"></label>
+    </div>
+    <p class="hint" id="ev-series-note" hidden>Changes apply to every time it repeats.</p>
+
+    <label>Alert <select id="ev-alert"></select></label>
+    <p class="hint" id="ev-alert-hint" hidden>Goes off on the iPhones that have Family Hub as a calendar account (Settings &rarr; On your iPhone).</p>
+
+    <label>Where <input id="ev-location" maxlength="200" autocomplete="off"></label>
+    <label>Notes <textarea id="ev-notes" rows="2"></textarea></label>
+
+    <p class="error" id="event-error" hidden></p>
+    <div class="sheet-actions">
+      <button class="ghost danger" id="ev-delete-one" type="button" hidden>Delete this day</button>
+      <button class="ghost danger" id="ev-delete" type="button" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ------------------------------------------------------ reminder sheet -->
+<dialog id="task-editor" aria-labelledby="task-heading">
+  <form class="sheet" id="task-form" method="dialog">
+    <div class="sheet-head">
+      <h3 id="task-heading">New reminder</h3>
+      <button class="dialog-close" id="task-close" type="button" aria-label="Close">&times;</button>
+    </div>
+
+    <label>What
+      <input id="tk-title" maxlength="200" autocomplete="off" enterkeyhint="done">
+    </label>
+
+    <!-- One person or anybody: a reminder with two owners is one neither does. -->
+    <fieldset class="who" id="tk-member">
+      <legend>Whose</legend>
+    </fieldset>
+
+    <!-- Buttons rather than a dropdown: whether it repeats is the main
+         thing about a reminder, and a closed dropdown hides that it can. -->
+    <fieldset class="repeat-pick">
+      <legend>Repeats</legend>
+      <div class="segmented" id="tk-repeat" role="radiogroup" aria-label="Repeats">
+        <button type="button" role="radio" data-repeat="none">Once</button>
+        <button type="button" role="radio" data-repeat="daily">Daily</button>
+        <button type="button" role="radio" data-repeat="weekly">Weekly</button>
+        <button type="button" role="radio" data-repeat="monthly">Monthly</button>
+        <button type="button" role="radio" data-repeat="yearly">Yearly</button>
+      </div>
+    </fieldset>
+
+    <label class="every" id="tk-every-row">Every
+      <input id="tk-every" type="number" min="1" max="99" inputmode="numeric" value="1">
+      <span id="tk-every-unit">week</span>
+    </label>
+
+    <div class="row">
+      <label><span id="tk-date-label">Due</span> <input id="tk-date" type="date"></label>
+      <label>At <input id="tk-time" type="time"></label>
+    </div>
+
+    <fieldset class="weekdays" id="tk-days" hidden>
+      <legend>Which days</legend>
+    </fieldset>
+    <p class="hint" id="tk-date-hint"></p>
+
+    <label>Notes <textarea id="tk-notes" rows="2"></textarea></label>
+
+    <p class="error" id="task-error" hidden></p>
+    <div class="sheet-actions">
+      <button class="ghost danger" id="tk-delete" type="button" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- -------------------------------------------------------- person sheet -->
+<dialog id="member-editor" aria-labelledby="member-title">
+  <form class="sheet" id="member-form" method="dialog">
+    <div class="sheet-head">
+      <h3 id="member-title">Add someone</h3>
+      <button class="dialog-close" id="member-close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <label>Name
+      <input id="member-name" maxlength="40" autocomplete="off" enterkeyhint="done">
+    </label>
+    <fieldset class="swatches" id="member-colours">
+      <legend>Colour</legend>
+    </fieldset>
+    <p class="error" id="member-error" hidden></p>
+    <div class="sheet-actions">
+      <button class="ghost danger" id="member-delete" type="button" hidden>Remove</button>
+      <span class="spacer"></span>
+      <button class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Confirmations, asked by the app rather than by the browser's own box. -->
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <form class="sheet" id="confirm-form" method="dialog">
+    <div class="sheet-head">
+      <h3 id="confirm-title">Are you sure?</h3>
+      <button class="dialog-close" id="confirm-x" type="button" aria-label="Close">&times;</button>
+    </div>
+    <p class="muted" id="confirm-body"></p>
+    <div class="sheet-actions">
+      <span class="spacer"></span>
+      <button class="ghost" id="confirm-no" type="button">Cancel</button>
+      <button class="primary" id="confirm-yes" value="ok" type="submit">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

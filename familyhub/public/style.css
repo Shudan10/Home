@@ -1,0 +1,1497 @@
+/*
+ * Meal Plan -- a blue, phone-first theme.
+ *
+ * Built for a 390pt iPhone screen first and allowed to grow on a desktop,
+ * rather than the other way round: the only place this app is really used is
+ * standing in a kitchen holding a phone.
+ */
+
+:root {
+    color-scheme: light dark;
+
+    --blue-600: #1d4ed8;
+    --blue-500: #2563eb;
+    --blue-400: #3b82f6;
+    --blue-300: #60a5fa;
+
+    --bg: #f4f7fd;
+    --bg-grad: radial-gradient(1200px 600px at 50% -200px, #dbe8ff 0%, transparent 70%);
+    --panel: #ffffff;
+    --panel-2: #eef3fc;
+    --line: #d8e2f4;
+    --text: #0d1b35;
+    --muted: #5b6b8c;
+    --accent: var(--blue-500);
+    --accent-dim: var(--blue-300);
+    --on-accent: #ffffff;
+    --danger: #c0372b;
+
+    /* The meal name's colour. Darker than the dot it replaced: the dot blue on
+       white is about 3:1, which is fine for a shape and not for words. */
+    --slot-dinner: var(--blue-600);
+
+    /* Everything a theme can change and the stylesheet used to hard-code: the
+       primary button's gradient and its text, the glow under it, the dot in a
+       phone's month cell, and the tick in a checked box. The defaults are the
+       blue the app has always been, so with no theme chosen nothing moves. */
+    /* blue-500 rather than the 400 this used to be: white on #3b82f6 is
+       3.7:1, under the 4.5 that text this size needs. One shade deeper at the
+       top of the gradient, and nothing else about the button moves. */
+    --btn-top: var(--blue-500);
+    --btn-bottom: var(--blue-600);
+    --on-primary: #ffffff;
+    --glow: rgba(37, 99, 235, 0.3);
+    --dot-dinner: var(--blue-400);
+
+    --shadow: 0 1px 2px rgba(13, 27, 53, 0.06), 0 8px 24px rgba(13, 27, 53, 0.08);
+    --radius: 16px;
+    --radius-sm: 11px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #070e1f;
+        --bg-grad: radial-gradient(1200px 600px at 50% -240px, #12275a 0%, transparent 70%);
+        --panel: #0f1a33;
+        --panel-2: #152445;
+        --line: #22365f;
+        --text: #e8efff;
+        --muted: #91a4c8;
+        --accent: var(--blue-400);
+        --accent-dim: #27406e;
+        --on-accent: #ffffff;
+        --danger: #ff6b62;
+        /* And lighter, on a dark panel, for the same reason. */
+        --slot-dinner: var(--blue-300);
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+}
+
+* { box-sizing: border-box; }
+
+/*
+ * `hidden` has to win.
+ *
+ * The UA stylesheet's [hidden] { display: none } is an attribute selector, so
+ * any class rule here that sets display -- .gate being grid, .weeknav being
+ * flex -- outranks it and the element stays on screen while the code believes
+ * it is hidden. That showed up as the sign-in card sitting on top of the app
+ * after a successful sign-in.
+ */
+[hidden] { display: none !important; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    /* Stops the whole page rubber-banding away from the status bar, which in
+       standalone mode looks like the app coming unstuck from the phone. */
+    overscroll-behavior-y: none;
+}
+
+body {
+    background: var(--bg-grad), var(--bg);
+    background-attachment: fixed;
+    color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100dvh;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.015em; }
+h1 { font-size: 22px; }
+h3 { font-size: 17px; }
+
+.muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+.error { color: var(--danger); font-size: 14px; margin: 4px 0 0; }
+.spacer { flex: 1; }
+.sr-only {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- controls -- */
+
+button {
+    font: inherit;
+    font-weight: 560;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 9px 15px;
+    cursor: pointer;
+    transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+}
+button:active:not(:disabled) { transform: scale(0.97); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+button.primary {
+    background: linear-gradient(180deg, var(--btn-top), var(--btn-bottom));
+    border-color: var(--btn-bottom);
+    color: var(--on-primary);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 6px 16px var(--glow);
+}
+button.ghost { background: transparent; }
+button.danger, button.ghost.danger { color: var(--danger); border-color: transparent; }
+button.big { padding: 13px 20px; font-size: 16px; width: 100%; }
+
+.icon-btn {
+    background: transparent;
+    border-color: transparent;
+    color: var(--accent);
+    padding: 6px 10px;
+    font-size: 17px;
+}
+
+/* Checkboxes are excluded deliberately. The appearance reset below is for
+   text fields; applied to a checkbox it removes the tick along with the
+   chrome, so a checked box renders identically to an unchecked one -- the
+   state is right and invisible, which is the worst of both. */
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    font: inherit;
+    /* 16px is not a style choice: Safari zooms the page when a focused field is
+       smaller than that and does not zoom back out, which leaves the app
+       scrolled sideways and stuck after one tap on a number. */
+    font-size: 16px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 11px 13px;
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+}
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+textarea { resize: vertical; line-height: 1.5; }
+
+/*
+ * Drawn rather than native.
+ *
+ * A native checkbox on a dark background renders as a pale khaki square that
+ * belongs to no part of this theme. Appearance is reset here -- but unlike the
+ * text-field reset above, the tick is then drawn back, which is the whole
+ * difference between styling a control and erasing it.
+ */
+input[type="checkbox"], input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    margin: 0;
+    border: 1.5px solid var(--line);
+    border-radius: 7px;
+    background: var(--panel-2);
+    display: inline-grid;
+    place-content: center;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease;
+}
+input[type="radio"] { border-radius: 50%; }
+
+input[type="checkbox"]::before,
+input[type="radio"]::before {
+    content: "";
+    width: 12px;
+    height: 12px;
+    transform: scale(0);
+    transition: transform 0.14s cubic-bezier(0.3, 1.4, 0.6, 1);
+    /* On the accent, so it follows whatever the accent is: a white tick
+       vanishes into the silver of the Black theme. */
+    background: var(--on-accent);
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 85% 0%, 46% 70%);
+}
+input[type="radio"]::before { clip-path: none; border-radius: 50%; width: 9px; height: 9px; }
+
+input[type="checkbox"]:checked, input[type="radio"]:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+input[type="checkbox"]:checked::before,
+input[type="radio"]:checked::before { transform: scale(1); }
+
+label { display: block; color: var(--muted); font-size: 13px; font-weight: 560; margin-bottom: 12px; }
+label input, label textarea, label select { margin-top: 5px; color: var(--text); }
+label.check { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--text); }
+label.check input { width: auto; margin: 0; }
+
+.row { display: flex; gap: 10px; }
+/* "Every [2] weeks", read as one line. */
+label.every { display: flex; align-items: center; gap: 8px; flex-direction: row; }
+label.every input[type="number"] { width: 72px; flex: 0 0 auto; margin: 0; }
+label.every span { color: var(--text); font-size: 15px; }
+.row > label { flex: 1; }
+
+/* ------------------------------------------------------------- sign in --- */
+
+.gate {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 24px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left));
+}
+.gate-card {
+    width: min(380px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    box-shadow: var(--shadow);
+    padding: 28px 22px;
+    text-align: center;
+}
+.gate-card h1 { margin-bottom: 6px; }
+.gate-card p { margin: 0 0 18px; font-size: 14px; }
+.gate-card input { text-align: center; margin-bottom: 14px; }
+.gate-mark {
+    width: 54px;
+    height: 54px;
+    margin: 0 auto 14px;
+    display: block;
+    border-radius: 16px;
+    box-shadow: 0 8px 20px var(--glow);
+}
+
+/* ------------------------------------------------------------- chrome ---- */
+
+.topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    border-bottom: 1px solid var(--line);
+}
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 34px; }
+
+.weeknav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.weeknav span { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.weeknav .icon-btn { font-size: 22px; line-height: 1; padding: 2px 14px; }
+
+main {
+    padding: 14px max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    /* Clears the fixed tab bar plus the home indicator below it. */
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+.actions { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+.actions input[type="search"] { flex: 1; }
+#meal-bar input { flex: 1; min-width: 0; }
+#btn-search-meals.is-active { background: var(--btn-top); color: var(--on-primary); border-color: transparent; }
+#btn-random { display: inline-flex; align-items: center; }
+
+.tabbar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 30;
+    display: flex;
+    padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    backdrop-filter: saturate(160%) blur(16px);
+    -webkit-backdrop-filter: saturate(160%) blur(16px);
+    border-top: 1px solid var(--line);
+}
+.tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 0;
+    min-height: 48px;
+}
+.tab .tab-icon { width: 21px; height: 21px; display: block; }
+.btn-icon { width: 16px; height: 16px; vertical-align: -3px; margin-right: 5px; }
+.tab.is-active { color: var(--accent); }
+
+/* ---------------------------------------------------------- plan view ---- */
+
+.day {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+.day-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 12px 15px 9px;
+    border-bottom: 1px solid var(--line);
+}
+.day-name { font-weight: 650; font-size: 15px; }
+.day-date { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.day.is-today { border-color: var(--accent); }
+.day.is-today .day-name { color: var(--accent); }
+.day.is-today .day-head { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+.slot-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    padding: 12px 15px;
+    text-align: left;
+    min-height: 52px;
+}
+.slot-row:first-of-type { border-top: 0; }
+.slot-row:active { background: var(--panel-2); transform: none; }.slot-meal { flex: 1; font-weight: 560; }
+.slot-meal.is-empty { color: var(--muted); font-weight: 450; }
+.slot-chevron { color: var(--accent-dim); font-size: 18px; }
+
+/* --------------------------------------------------------- meals view ---- */
+
+.meal-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    padding: 13px 15px;
+    margin-bottom: 9px;
+    min-height: 56px;
+}
+.meal-main { flex: 1; min-width: 0; }
+.meal-name { font-weight: 600; }
+.meal-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }@media (prefers-color-scheme: dark) {
+}
+
+/* ------------------------------------------------------ calendar view ---- */
+
+.cal-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    margin-bottom: 6px;
+}
+.cal-weekdays span {
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+}
+
+.cal-day {
+    /* A square-ish cell at phone width, growing taller on a wider screen where
+       the meal names actually fit. */
+    aspect-ratio: 1 / 1.15;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 5px 4px 4px;
+    text-align: left;
+    overflow: hidden;
+    min-height: 0;
+}
+.cal-day:active { background: var(--panel-2); transform: none; }
+/* Days either side of the month being shown. Kept in the grid so the weeks line
+   up, dimmed so they do not read as part of it. */
+.cal-day.is-outside { opacity: 0.38; }
+.cal-day.is-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+.cal-num { font-size: 12px; font-weight: 650; color: var(--muted); line-height: 1.1; }
+.cal-day.is-today .cal-num { color: var(--accent); }
+
+.cal-meals { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: hidden; }
+.cal-meal { display: flex; align-items: center; gap: 3px; min-width: 0; }
+/* The name carries the colour wherever the name is shown, so the dot beside it
+   would be saying the same thing twice. It comes back on a phone, which is too
+   narrow for names and shows dots alone. */
+.cal-meal .dot { display: none; width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; }
+.cal-meal .name {
+    font-size: 9.5px;
+    line-height: 1.25;
+    font-weight: 560;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cal-meal .name.dinner { color: var(--slot-dinner); }
+
+.dot.dinner { background: var(--dot-dinner); }
+
+/* Phones are too narrow for a name inside a 48px cell: the dots alone say which
+   meals of the day are planned, and tapping the date gives the names. */
+@media (max-width: 430px) {
+    .cal-meal .name { display: none; }
+    .cal-meal .dot { display: block; }
+    .cal-meals { flex-direction: row; gap: 3px; align-items: center; }
+    .cal-meal .dot { width: 6px; height: 6px; }
+}
+
+/* The day sheet's rows, which are the same control as the plan view's. */
+.day-slot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    padding: 13px 2px;
+    text-align: left;
+    min-height: 52px;
+}
+.day-slot:first-child { border-top: 0; }
+.day-slot:active { background: var(--panel-2); transform: none; }
+.day-slot .slot-meal { flex: 1; font-weight: 560; }
+.day-slot .slot-meal.is-empty { color: var(--muted); font-weight: 450; }
+
+/* ------------------------------------------------------------- empties --- */
+
+.empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 44px 20px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--panel) 50%, transparent);
+}
+.empty strong { display: block; color: var(--text); margin-bottom: 5px; font-size: 16px; }
+
+/* ------------------------------------------------------------- dialogs --- */
+
+dialog {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    width: min(460px, 100%);
+    max-width: 100%;
+    max-height: 92dvh;
+    /* Bottom sheet on a phone, which is where a thumb is. */
+    margin: auto auto 0;
+}
+dialog::backdrop { background: rgba(4, 10, 24, 0.55); backdrop-filter: blur(3px); }
+
+.sheet {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 22px 22px 0 0;
+    padding: 18px max(16px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    max-height: 92dvh;
+    overflow-y: auto;
+}
+.sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.sheet-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+.dialog-close {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: 26px;
+    line-height: 1;
+    padding: 0 6px;
+    margin: -4px -4px 0 0;
+}
+
+.picker-list { margin-top: 12px; max-height: 52dvh; overflow-y: auto; }
+.picker-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    padding: 13px 4px;
+    min-height: 50px;
+}
+.picker-row:active { background: var(--panel-2); transform: none; }
+.picker-row.is-current { color: var(--accent); }
+
+@media (min-width: 560px) {
+    dialog { margin: auto; }
+    .sheet { border-radius: 22px; padding-bottom: 18px; }
+}
+
+/* --------------------------------------------------------------- toast --- */
+
+.toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(86px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 60;
+    background: var(--text);
+    color: var(--bg);
+    font-size: 14px;
+    font-weight: 560;
+    padding: 10px 18px;
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    max-width: calc(100% - 32px);
+    text-align: center;
+}
+
+/* Touch screens get bigger targets, and hover effects that would otherwise
+   stick after a tap are turned off. */
+@media (pointer: coarse) {
+    button, .tab, .slot-row, .meal-card { min-height: 44px; }
+    button:hover:not(:disabled) { border-color: var(--line); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+}
+
+/* ===========================================================================
+   Landscape tablets — the way this is actually used.
+   ===========================================================================
+   A phone is tall and narrow, so the dock sits at the bottom and everything
+   is one column. An iPad held sideways is the opposite: about 1180x820 of
+   which the height is the scarce part. So the dock becomes a rail down the
+   left (vertical space back), the 720px cap comes off (horizontal space
+   used), and the lists that were one column become two or three.
+
+   900px rather than 768px: an iPad held upright is 810-834 wide and is still
+   better served by the phone layout. This is the landscape breakpoint. */
+
+@media (min-width: 900px) {
+    #app {
+        display: flex;
+        align-items: stretch;
+        min-height: 100dvh;
+    }
+
+    .content {
+        flex: 1;
+        min-width: 0;
+        /* A column of fixed header and scrolling body, so a view can ask to be
+           exactly the height of the screen rather than guessing at it with a
+           calc full of magic numbers. */
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+    }
+
+    /* --- the dock becomes a rail --- */
+    .tabbar {
+        /* The nav comes after the content in the markup, because on a phone it
+           is a fixed dock where source order does not matter and putting it
+           last keeps the reading order sensible for a screen reader. In this
+           flex row it would land on the right, so it is pulled back. */
+        order: -1;
+        position: sticky;
+        top: 0;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        align-self: flex-start;
+        flex: 0 0 210px;
+        width: 210px;
+        height: 100dvh;
+        flex-direction: column;
+        /* Centred down the column rather than stacked at the top: four items
+           against the ceiling of a 820px rail leaves the eye travelling to a
+           corner, and the thumb reaching past three quarters of the screen. */
+        justify-content: center;
+        gap: 4px;
+        padding: 20px 12px calc(16px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+        border-top: 0;
+        border-right: 1px solid var(--line);
+        overflow-y: auto;
+    }
+    .tab {
+        flex: 0 0 auto;
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: 12px;
+        height: 46px;
+        min-height: 46px;
+        padding: 0 14px;
+        font-size: 14.5px;
+        border-radius: 11px;
+    }
+    .tab .tab-icon { font-size: inherit; }
+    .tab .tab-icon, .tab svg { width: 20px; height: 20px; }
+    .tab.is-active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+    /* --- the content column --- */
+    main {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        max-width: 1180px;
+        margin: 0;
+        padding: 18px 26px 32px;
+    }
+    .topbar { padding-inline: 26px; }
+    .topbar-row { min-height: 40px; }
+
+    /* The week stepper has room to sit beside the title rather than under it. */
+    .topbar { display: flex; align-items: center; gap: 24px; }
+    .topbar-row { flex: 1; }
+    .weeknav { margin-top: 0; min-width: 260px; }
+
+    /* Nothing is behind a dock any more, so the toast comes back down. */
+    .toast { bottom: 26px; }
+
+    /* --- the key moves to the left of the month and stays put ---
+       Asked for so it is readable while scanning the grid, rather than being
+       a footnote underneath that scrolls away. */
+    #view-cal {
+        display: grid;
+        /* One column now the key has gone: the weekday strip takes what it
+           needs and the month takes the rest of the screen, so a five-row
+           month and a six-row one both fill it. */
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 100%;
+    }
+    /* Placed in the second row explicitly, not left to auto-placement: the
+       week view hides the weekday strip, and an auto-placed grid then slides
+       up into the `auto` row and collapses to the height of its contents. */
+    #cal-grid { grid-row: 2; align-self: stretch; }
+
+    /* Wider than tall here: six rows of a square cell do not fit in 820px of
+       landscape, and the cells only need enough height for three meal names. */
+    .cal-grid {
+        gap: 6px;
+        /* Rows share the height instead of each being a fixed shape. The floor
+           keeps a six-row month readable on the shortest landscape screen. */
+        grid-auto-rows: minmax(74px, 1fr);
+        min-height: 0;
+    }
+    .cal-weekdays { gap: 6px; }
+    .cal-day { aspect-ratio: auto; padding: 7px 7px 6px; border-radius: 12px; }
+    .cal-num { font-size: 13px; }
+    .cal-meal .name { font-size: 11px; line-height: 1.3; }
+    .cal-meal .dot { width: 6px; height: 6px; }
+    .cal-meals { gap: 3px; }
+
+    /* --- lists use the width instead of running off the bottom --- */
+    #days {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        align-items: start;
+    }
+    #days .day { margin-bottom: 0; }
+
+    #meal-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+    #meal-list .meal-card { margin-bottom: 0; }
+    #meal-list .empty { grid-column: 1 / -1; }
+
+    /* The day sheet is a side panel's worth of content; on a landscape screen
+       a bottom sheet would cover the month it is describing. */
+    #day { margin: auto; }
+    #day .sheet { border-radius: 22px; }
+}
+
+/* A 12.9" iPad, or any desktop: a third column earns its place. */
+@media (min-width: 1280px) {
+    #days, #meal-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    main { padding-inline: 32px; }
+}
+
+/* ------------------------------------------------- the calendar as a week -- */
+/* The month answers "what is the shape of October"; this answers "what are we
+   eating this week", which wants the name big enough to read across a kitchen
+   rather than squeezed into a seventh of the width. */
+
+.cal-grid.is-week {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: minmax(58px, auto);
+    gap: 8px;
+}
+.cal-grid.is-week .cal-day {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    aspect-ratio: auto;
+    padding: 12px 14px;
+}
+.cal-grid.is-week .cal-num {
+    flex: 0 0 42%;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--text);
+}
+.cal-grid.is-week .cal-day.is-today .cal-num { color: var(--accent); }
+.cal-grid.is-week .cal-meals { flex: 1; min-width: 0; }
+.cal-grid.is-week .cal-meal .name {
+    /* Shown even on a phone. A month cell there is 48px wide and falls back to
+       dots, and that rule was swallowing the week view too -- which exists for
+       no reason other than reading the name. */
+    display: block;
+    font-size: 16px;
+    font-weight: 600;
+    /* Read, not truncated: this is the view whose whole job is the name. */
+    white-space: normal;
+    overflow: visible;
+}
+/* And the dot goes again, since the name is back to carrying the colour. */
+.cal-grid.is-week .cal-meal .dot { display: none; }
+.cal-empty { font-size: 13px; color: var(--muted); }
+
+@media (min-width: 900px) {
+    /* Seven columns down the screen, like a planner pinned to the wall. */
+    .cal-grid.is-week {
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        grid-auto-rows: minmax(0, 1fr);
+        gap: 10px;
+    }
+    .cal-grid.is-week .cal-day {
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
+        gap: 10px;
+        padding: 14px 12px;
+    }
+    .cal-grid.is-week .cal-num { flex: 0 0 auto; font-size: 13.5px; }
+    .cal-grid.is-week .cal-meal .name { font-size: 17px; line-height: 1.35; }
+    .cal-grid.is-week .cal-meal { align-items: flex-start; }
+    /* The date sits at the top of the column; one meal then centres in what is
+       left, rather than hanging under the heading with 400px of nothing below
+       it. */
+    .cal-grid.is-week .cal-meals {
+        flex: 1;
+        justify-content: center;
+        padding-bottom: 8%;
+    }
+}
+
+/* --------------------------------------------------------------- themes -- */
+
+/* A holiday's motif beside the page title, and a large faint mark in the
+   corner. Both come from custom properties a theme sets and every other theme
+   clears, so there is nothing to undo when switching back to plain Blue. */
+#view-title::after {
+    content: var(--theme-motif, none);
+    margin-left: 0.4em;
+    font-size: 0.82em;
+}
+body::after {
+    content: var(--theme-mark, none);
+    position: fixed;
+    right: max(20px, env(safe-area-inset-right));
+    bottom: calc(92px + env(safe-area-inset-bottom));
+    font-size: 150px;
+    line-height: 1;
+    opacity: 0.07;
+    pointer-events: none;
+    /* Behind the cards rather than over them: it shows in the gaps, and never
+       sits on top of a meal name someone is trying to read. */
+    z-index: -1;
+}
+@media (min-width: 900px) {
+    body::after { bottom: 28px; right: 36px; font-size: 230px; }
+}
+
+.theme-group-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 22px 0 10px;
+}
+.theme-group-title:first-of-type { margin-top: 6px; }
+
+.theme-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+@media (min-width: 900px) {
+    .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+}
+@media (min-width: 1280px) {
+    .theme-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.theme-card {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 8px 8px 11px;
+    text-align: left;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    min-height: 0;
+}
+.theme-card.is-active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent), var(--shadow);
+}
+
+/* The miniature: always drawn in the card's own theme, whatever the app is
+   in, which is why its colours are set inline rather than from the tokens. */
+.theme-preview {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    height: 92px;
+    padding: 10px;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    overflow: hidden;
+}
+.tp-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    width: 72%;
+}
+.tp-day { font-size: 9.5px; font-weight: 650; }
+.tp-meal { font-size: 13px; font-weight: 700; }
+.tp-button {
+    align-self: flex-start;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 4px 9px;
+    border-radius: 7px;
+}
+.tp-mark {
+    position: absolute;
+    right: 8px;
+    bottom: 4px;
+    font-size: 30px;
+    line-height: 1;
+}
+
+.theme-label { display: flex; flex-direction: column; gap: 2px; padding: 0 4px; }
+.theme-name { font-weight: 650; font-size: 14.5px; }
+.theme-note { font-size: 12px; color: var(--muted); }
+.theme-card.is-active .theme-name::after {
+    content: '  ✓';
+    color: var(--accent);
+}
+
+/* =============================================================== the hub == */
+
+/* A card for anything that is not a day or a meal: the Today panels and the
+   settings sections. The same surface as the day cards, so the app reads as
+   one thing rather than two designs side by side. */
+.panel-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 16px 18px;
+    margin-bottom: 14px;
+    min-width: 0;
+}
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.panel-head h2 { font-size: 17px; }
+.panel-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+}
+
+/* --- a two- or three-way switch, for the Meals views and the units --- */
+.segmented {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 14px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 13px;
+}
+.segmented button {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    border-radius: 9px;
+    padding: 8px 10px;
+    color: var(--muted);
+    font-weight: 600;
+    min-height: 38px;
+}
+.segmented button.is-active {
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: var(--shadow);
+}
+.segmented.compact { display: inline-flex; margin: 12px 0 0; }
+.segmented.compact button { flex: 0 0 auto; min-width: 58px; }
+
+/* --------------------------------------------------------- overview --- */
+
+#view-today .panel-card { margin-bottom: 14px; }
+
+.ov-clock { display: flex; flex-direction: column; gap: 14px; }
+.clock {
+    font-size: clamp(54px, 15vw, 104px);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.clock-date { margin-top: 6px; font-size: 19px; color: var(--muted); font-weight: 560; }
+
+/* Everything on today, in letters big enough for across the room. */
+.ov-today { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 12px; min-width: 0; }
+.ov-today .panel-label { margin: 0 0 2px; }
+.ov-today-list { display: flex; flex-direction: column; gap: 6px; }
+.ov-today .wk-event, .ov-today .wk-dinner, .ov-today .wk-rem { font-size: 16.5px; }
+.ov-today .wk-title { white-space: normal; }
+.ov-today .wk-box { width: 18px; height: 18px; }
+
+/* A column a day, the same seven as the week beneath. */
+.wx-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.wx-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 2px;
+    border-radius: 10px;
+    text-align: center;
+    min-width: 0;
+}
+.wx-day.is-today { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.wx-dname { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.wx-day.is-today .wx-dname { color: var(--accent); }
+.wx-dicon { font-size: 24px; line-height: 1.1; }
+.wx-now { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.wx-temp { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+.wx-label { font-size: 11.5px; color: var(--muted); font-weight: 560; display: none; }
+.wx-drange { font-size: 12.5px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; line-height: 1.25; }
+.wx-drange span { color: var(--muted); }
+.wx-rain { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* A landscape iPad: everything on one screen. The clock and the weather take
+   what they need and the week has the rest; a day with more in it than fits
+   scrolls inside its own column rather than pushing the page down. */
+@media (min-width: 900px) {
+    #view-today:not([hidden]) { display: flex; flex-direction: column; height: 100%; min-height: 600px; }
+    #view-today .panel-card { margin-bottom: 0; }
+    #view-today > * + * { margin-top: 12px; }
+    /* The time and date on the left; today fills the rest of the row, in two
+       columns when there is a lot of it, scrolling only past that. */
+    .ov-clock { flex-direction: row; align-items: stretch; gap: 28px; padding-top: 16px; padding-bottom: 16px; }
+    .ov-time { flex: 0 0 auto; display: flex; flex-direction: column; justify-content: center; }
+    .clock-date { font-size: 24px; }
+    .ov-today {
+        flex: 1;
+        gap: 0;
+        border-top: 0;
+        border-left: 1px solid var(--line);
+        padding: 0 0 0 26px;
+        max-height: 190px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+    }
+    .ov-today .panel-label { margin-bottom: 8px; }
+    .ov-today-list {
+        display: grid;
+        grid-auto-flow: column;
+        grid-template-rows: repeat(var(--rows, 4), auto);
+        grid-auto-columns: minmax(0, 1fr);
+        gap: 7px 28px;
+        align-content: start;
+    }
+    .ov-today .wk-event, .ov-today .wk-dinner, .ov-today .wk-rem { font-size: 17px; }
+    .ov-today .wk-rem { flex-wrap: nowrap; }
+    .ov-today .wk-rem .wk-title { flex: 0 1 auto; }
+    .ov-today .wk-rem .wk-time { flex-basis: auto; margin-left: auto; }
+    .wx-week { gap: 8px; }
+    .wx-day { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 2px 8px; padding: 8px 4px; }
+    .wx-dname { flex: 1 1 100%; }
+    .wx-dicon { font-size: 30px; }
+    .wx-now { flex-direction: row; gap: 6px; }
+    .wx-temp { font-size: 30px; }
+    .wx-label { display: block; flex: 1 1 100%; }
+    .wx-drange { font-size: 14px; flex-direction: row; gap: 4px; }
+    .wx-rain { flex: 1 1 100%; }
+    .week-overview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .week-overview .wk-days { flex: 1; min-height: 0; }
+    .week-overview .wk-day { overflow-y: auto; overflow-x: hidden; min-height: 0; }
+}
+
+/* ---------------------------------------------------------- settings --- */
+
+.settings-grid { display: grid; gap: 14px; }
+.settings-grid .panel-card { margin-bottom: 0; }
+
+.member-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    padding: 10px 2px;
+    min-height: 52px;
+}
+.member-row:first-child { border-top: 0; }
+.member-row:active { transform: none; background: var(--panel-2); }
+.member-name { flex: 1; font-weight: 600; }
+
+.avatar {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 15px;
+}
+
+.swatches { border: 0; padding: 0; margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 10px; }
+.swatches legend { color: var(--muted); font-size: 13px; font-weight: 560; padding: 0 0 8px; }
+.swatch { margin: 0; cursor: pointer; }
+.swatch input { position: absolute; opacity: 0; pointer-events: none; }
+.swatch-dot { display: block; width: 34px; height: 34px; border-radius: 50%; }
+.swatch input:checked + .swatch-dot { box-shadow: 0 0 0 3px var(--panel), 0 0 0 5px var(--text); }
+.swatch input:focus-visible + .swatch-dot { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+#place-results { margin-top: 6px; }
+
+@media (min-width: 900px) {
+    .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; margin-bottom: 14px; }
+    .segmented:not(.compact) { max-width: 460px; }
+}
+
+/* ------------------------------------------------------- the week ahead -- */
+
+/* On a phone a day is a row: the date down the left, its things beside it. */
+.wk-days { display: flex; flex-direction: column; }
+.wk-day {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+}
+.wk-day:first-child { border-top: 0; padding-top: 2px; }
+.wk-head { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
+.wk-name { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.wk-num { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wk-day.is-today .wk-name,
+.wk-day.is-today .wk-num { color: var(--accent); }
+.wk-items { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+.wk-event, .wk-dinner, .wk-rem {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    font-size: 14.5px;
+    line-height: 1.3;
+    color: var(--text);
+    background: none;
+    border: 0;
+    border-radius: 7px;
+    padding: 3px 0;
+    min-height: 0;
+}
+.wk-rem:active { transform: none; opacity: 0.7; }
+.wk-event {
+    padding: 4px 8px;
+    border-left: 3px solid var(--ev);
+    border-radius: 4px 7px 7px 4px;
+    background: color-mix(in srgb, var(--ev) 13%, transparent);
+    font-weight: 600;
+}
+.wk-event.is-allday { background: color-mix(in srgb, var(--ev) 30%, transparent); }
+.wk-time { flex: 0 0 auto; font-size: 12.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wk-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-dinner { color: var(--slot-dinner); font-weight: 650; }
+.wk-dinner-icon { flex: 0 0 auto; font-size: 13px; }
+.wk-dinner.is-empty { color: var(--muted); font-weight: 500; font-size: 13.5px; }
+.wk-box {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--who);
+}
+.wk-rem.is-done .wk-box { background: var(--who); }
+.wk-rem.is-done .wk-title { text-decoration: line-through; color: var(--muted); }
+.wk-rem .wk-time { margin-left: auto; }
+.wk-rem.is-late .wk-title { color: var(--danger); }
+
+/* A landscape iPad has the width for the week as seven columns, the way a
+   paper calendar on the fridge lays it out. */
+@media (min-width: 900px) {
+    .wk-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+    .wk-day {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 9px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel-2);
+    }
+    .wk-day:first-child { padding-top: 10px; }
+    .wk-day.is-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+    .wk-head { flex-direction: row; align-items: baseline; gap: 6px; }
+    .wk-num { font-size: 20px; }
+    /* Names wrap in a column rather than being cut to "Piano le" -- between
+       words, and through one only when a single word is wider than the column. */
+    .wk-title { white-space: normal; overflow-wrap: break-word; }
+    .wk-event { flex-wrap: wrap; row-gap: 0; font-size: 13.5px; }
+    .wk-dinner, .wk-rem { font-size: 13.5px; align-items: flex-start; }
+    .wk-box { margin-top: 1px; }
+    /* A reminder's time goes under its name, which needs the width more. */
+    .wk-rem { flex-wrap: wrap; row-gap: 0; }
+    .wk-rem .wk-title { flex: 1 1 0; }
+    .wk-rem .wk-time { margin-left: 23px; flex-basis: 100%; }
+    .week-overview .wk-day { scrollbar-width: thin; }
+}
+
+/* -------------------------------------------------------------- events -- */
+
+.event-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    padding: 10px 2px 10px 12px;
+    min-height: 54px;
+    position: relative;
+}
+.event-row:first-child { border-top: 0; }
+.event-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 4px;
+    border-radius: 2px;
+    background: var(--ev);
+}
+.event-row:active { transform: none; background: var(--panel-2); }
+.event-when {
+    flex: 0 0 auto;
+    min-width: 76px;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+.event-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.event-title { font-weight: 650; font-size: 16px; }
+.event-sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.member-dots { display: inline-flex; gap: 3px; flex: 0 0 auto; }
+.member-dot { width: 9px; height: 9px; border-radius: 50%; }
+
+/* An event inside a calendar cell: a coloured edge for whose it is, then the
+   time and the name. All-day ones are a filled bar, the way a calendar app
+   draws them, so a trip across three days reads as one band. */
+.cal-events { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cal-event {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    font-size: 10px;
+    line-height: 1.3;
+    padding-left: 5px;
+    border-left: 3px solid var(--ev);
+    border-radius: 2px;
+}
+.cal-event.is-allday {
+    background: color-mix(in srgb, var(--ev) 22%, transparent);
+    padding: 1px 4px;
+}
+.cal-event-time { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.cal-event-title { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-more { font-size: 10px; color: var(--muted); padding-left: 5px; }
+
+@media (min-width: 900px) {
+    .cal-event { font-size: 11px; }
+    .cal-more { font-size: 11px; }
+}
+
+/* The week view has room to read: bigger, and names wrap rather than cut. */
+.cal-grid.is-week .cal-event { font-size: 13px; padding-top: 3px; padding-bottom: 3px; }
+/* A week column is a seventh of the screen: the time and the people share a
+   line and the name gets the whole width beneath them, instead of all three
+   squeezing into one row until "Family movie night" reads "F. m. n.". */
+.cal-grid.is-week .cal-event { flex-wrap: wrap; align-items: center; row-gap: 1px; }
+.cal-grid.is-week .cal-event-title { white-space: normal; flex: 1 1 100%; order: 3; overflow-wrap: anywhere; }
+.cal-grid.is-week .cal-event .member-dots { order: 2; }
+.cal-grid.is-week .cal-events { gap: 5px; width: 100%; }
+
+/* A phone's month cell is 48px wide, which is still room for the start of a
+   name, the way the iPhone's own calendar does it: a taller cell, the name in
+   small type on a band of its colour, cut off rather than dotted out because
+   at this size an ellipsis costs two of the five letters there are. Tapping
+   the date gives the whole thing. */
+@media (max-width: 430px) {
+    /* Tall enough for three names, and taller still where the phone has the
+       height, so six weeks fill the screen rather than leaving it half empty. */
+    .cal-grid:not(.is-week) .cal-day {
+        aspect-ratio: auto;
+        min-height: max(86px, calc((100dvh - 250px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) / 6));
+        padding: 4px 1px 3px;
+        gap: 2px;
+    }
+    .cal-grid:not(.is-week) .cal-num { padding-left: 2px; }
+    .cal-grid:not(.is-week) .cal-events { gap: 2px; }
+    .cal-grid:not(.is-week) .cal-event {
+        font-size: 9px;
+        line-height: 1.35;
+        padding: 0 1px 0 2px;
+        border-left-width: 2px;
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--ev) 18%, transparent);
+    }
+    .cal-grid:not(.is-week) .cal-event.is-allday {
+        background: color-mix(in srgb, var(--ev) 42%, transparent);
+        padding-left: 2px;
+        border-left-width: 0;
+    }
+    .cal-grid:not(.is-week) .cal-event-time { display: none; }
+    .cal-grid:not(.is-week) .cal-event-title { text-overflow: clip; font-weight: 650; letter-spacing: -0.02em; }
+    /* One or two on a day have the room to wrap onto a second line, which is
+       the difference between "Piano le" and "Piano lesson". It breaks between
+       words only: a word too wide for the cell is cut, not split in two. */
+    .cal-grid:not(.is-week) .cal-events.is-few .cal-event-title {
+        white-space: normal;
+        overflow-wrap: normal;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+    }
+    .cal-grid:not(.is-week) .cal-more { font-size: 9px; padding-left: 3px; line-height: 1.2; }
+    .cal-grid:not(.is-week) .cal-more-word { display: none; }
+    /* Dinners stay dots, under the events: the names are what is happening. */
+    .cal-grid:not(.is-week) .cal-meals { margin-top: auto; padding-left: 2px; }
+}
+
+.sheet-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 14px 0 4px;
+}
+.add-row { width: 100%; margin-top: 6px; text-align: left; color: var(--accent); }
+
+/* Who: a chip per person in the event sheet, filled in their colour when
+   chosen. */
+.who { border: 0; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.who legend { color: var(--muted); font-size: 13px; font-weight: 560; padding: 0 0 7px; }
+.who-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+    padding: 5px 12px 5px 5px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+}
+.who-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.who-chip:has(input:checked) {
+    border-color: var(--who);
+    background: color-mix(in srgb, var(--who) 22%, transparent);
+}
+.who-chip:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.avatar.small { width: 24px; height: 24px; font-size: 12px; }
+
+/* --------------------------------------------------------------- chores -- */
+
+.tasks-actions { margin-bottom: 14px; }
+
+/* A column per person on a landscape iPad, side by side the way a chart on
+   the fridge is; one under another on a phone. */
+.chore-board { display: grid; gap: 14px; align-items: start; }
+.chore-board .panel-card { margin-bottom: 0; }
+/* One row of people, never a ragged second row under the tallest column: a
+   household of up to five fits across a landscape iPad, and a bigger one
+   scrolls sideways rather than wrapping. */
+@media (min-width: 700px) {
+    .chore-board {
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(150px, 1fr);
+        gap: 12px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+    }
+    /* Five across leaves a column about 170px wide: the card's own padding
+       and the pencil give back what they can, so a name like "Call the
+       plumber" wraps between words rather than through them. */
+    .chore-col { padding: 14px 12px; }
+    .chore-col .chore-tick { gap: 9px; }
+    .chore-col .chore-box { width: 26px; height: 26px; }
+    .chore-col .chore-title { font-size: 15px; }
+    .chore-col .chore-edit { width: 30px; }
+    .chore-col .chore-name { font-size: 17px; }
+}
+
+.chore-col { border-top: 4px solid var(--who); }
+.chore-head { display: flex; align-items: center; gap: 10px; }
+.chore-name { flex: 1; min-width: 0; font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chore-count { font-size: 14px; font-weight: 650; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chore-bar {
+    height: 6px;
+    margin: 12px 0 6px;
+    border-radius: 3px;
+    background: var(--panel-2);
+    overflow: hidden;
+}
+.chore-bar > span { display: block; height: 100%; background: var(--who); border-radius: 3px; transition: width 0.25s ease; }
+.chore-cheer { margin: 10px 0 0; font-weight: 650; text-align: center; }
+
+.avatar.anyone { background: var(--panel-2); color: var(--muted); }
+
+.chore { display: flex; align-items: center; border-top: 1px solid var(--line); }
+.chore-list .chore:first-child,
+#today-chores .chore:first-child { border-top: 0; }
+.chore-tick {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: 10px 2px;
+    min-height: 56px;
+    color: var(--text);
+}
+.chore-tick:active { transform: none; background: var(--panel-2); }
+.chore-box {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2.5px solid var(--who);
+    display: grid;
+    place-items: center;
+    transition: background 0.15s ease;
+}
+.chore.is-done .chore-box { background: var(--who); }
+.chore.is-done .chore-box::after {
+    content: '';
+    width: 7px;
+    height: 13px;
+    margin-top: -3px;
+    border: solid var(--panel);
+    border-width: 0 3px 3px 0;
+    transform: rotate(45deg);
+}
+.chore-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.chore-title { font-weight: 620; font-size: 16px; overflow-wrap: break-word; hyphens: auto; }
+.chore.is-done .chore-title { text-decoration: line-through; color: var(--muted); }
+.chore-when { font-size: 12.5px; color: var(--muted); }
+.chore.is-late .chore-when { color: var(--danger); font-weight: 600; }
+.chore-edit {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: 17px;
+}
+.panel-count { font-weight: 600; letter-spacing: 0; text-transform: none; margin-left: 4px; }
+
+/* The days of the week in the chore sheet: seven toggles in a row. */
+.weekdays { border: 0; padding: 0; margin: 0 0 12px; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.weekdays legend { color: var(--muted); font-size: 13px; font-weight: 560; padding: 0 0 7px; }
+.day-chip { margin: 0; cursor: pointer; }
+.day-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.day-chip span {
+    display: grid;
+    place-items: center;
+    min-height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+.day-chip input:checked + span { background: var(--btn-top); border-color: var(--btn-bottom); color: var(--on-primary); }
+.day-chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ------------------------------------------------------------ on iPhone -- */
+
+.feed-steps { margin: 0 0 12px; padding-left: 20px; line-height: 1.6; }
+.feed-link input { flex: 1; min-width: 0; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.feed-local { color: var(--text); background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+
+/* The Repeats buttons in the reminder sheet. */
+.repeat-pick { border: 0; padding: 0; margin: 0 0 12px; }
+.repeat-pick legend { color: var(--muted); font-size: 13px; font-weight: 560; padding: 0 0 7px; }
+.repeat-pick .segmented { margin: 0; }
+/* Five choices on a phone's width: tighter, and each kept to one line. */
+.repeat-pick .segmented button { padding: 8px 2px; font-size: 13px; white-space: nowrap; }
+
+/* A choice, not a tab: the picked one is filled in the theme's button colour
+   with a tick, because a slightly lighter panel is invisible on some themes. */
+.repeat-pick .segmented button.is-active,
+.segmented.compact button.is-active {
+    background: var(--btn-top);
+    color: var(--on-primary);
+    box-shadow: 0 2px 8px var(--glow);
+}
+.repeat-pick .segmented button.is-active::before { content: '✓ '; }

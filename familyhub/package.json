@@ -1,0 +1,14 @@
+{
+  "name": "quickstart-home-mealplan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Family meal planner for a personal home server: a meal library, a week of breakfast, lunch and dinner, and the shopping list that falls out of it.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
