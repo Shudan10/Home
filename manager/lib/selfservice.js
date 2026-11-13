@@ -348,6 +348,35 @@ for item in $staged; do
 done
 for item in $staged; do rm -rf "$D/$item.old"; done
 
+# The ports override was written by the panel being replaced, so it can still
+# name an app the new code no longer has -- and compose rejects the whole
+# project over one service with "neither an image nor a build context", which
+# stopped the update at the build with the old panel left running. Removing
+# AdGuard did exactly that. Entries for services the new docker-compose.yml
+# does not define are dropped here; the new panel rewrites the file anyway
+# when it starts. Only this generated file is touched, never a hand-written
+# override, and the file is left alone if the service list cannot be read.
+P="$D/conf/apps-ports.yml"
+if [ -f "$P" ]; then
+  known=$(docker compose -f "$D/docker-compose.yml" --project-directory "$D" --profile '*' config --services 2>/dev/null | tr '\\n' ' ')
+  if [ -n "$known" ] && awk -v known="$known" -v gone="$P.gone" '
+      BEGIN { n = split(known, k, " "); for (i = 1; i <= n; i++) ok[k[i]] = 1; keep = 1 }
+      /^[^ ]/ { keep = 1 }
+      /^  [A-Za-z0-9_.-]+:[ ]*$/ {
+        name = $1; sub(/:$/, "", name); keep = (name in ok)
+        if (!keep) print name > gone
+      }
+      keep { print }
+    ' "$P" > "$P.next"; then
+    if [ -s "$P.gone" ]; then
+      step "Dropping settings for apps that are gone: $(tr '\\n' ' ' < "$P.gone")"
+      chown "$owner" "$P.next" 2>/dev/null
+      mv "$P.next" "$P" || fail "Could not rewrite conf/apps-ports.yml. The old panel is still running."
+    fi
+  fi
+  rm -f "$P.next" "$P.gone"
+fi
+
 step "Rebuilding the panel image"
 ${compose} build manager || fail "The panel image did not build. The old panel is still running."
 
