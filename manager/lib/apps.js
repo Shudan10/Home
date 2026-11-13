@@ -74,6 +74,20 @@ export const APPS = {
         },
     },
 
+    adguard: {
+        label: 'AdGuard Home',
+        // Pulled, not built. Kept off the internet on purpose: it is the
+        // house's DNS and the page that controls it, so it has no tunnel name.
+        profile: 'adguard',
+        services: ['adguard'],
+        container: 'quickstart-home-adguard',
+        publish: null,
+        ports: {
+            web: { port: 80, label: 'AdGuard web', hostPort: 8053 },
+            dns: { port: 53, label: 'DNS', hostPort: 53, protocol: 'udp' },
+        },
+    },
+
     minecraft: {
         label: 'Minecraft',
         // Pulled, not built: itzg/minecraft-server is the image nearly every
@@ -146,6 +160,17 @@ export const DEFAULT_APPS_CONFIG = {
         enabled: false,
         publish: { web: true },
         hostPort: 8083,
+    },
+    adguard: {
+        enabled: false,
+        // Its own page, on this network. The panel's Home network tab does
+        // the everyday things; this is for the rest of AdGuard's settings.
+        publish: { web: true },
+        hostPort: 8053,
+        // This machine's address on the home network, which DNS is published
+        // on. Found when it is installed or started, not typed: it is what the
+        // router hands out to every device as "the DNS server".
+        dnsAddress: '',
     },
     minecraft: {
         enabled: false,
@@ -520,8 +545,37 @@ export function validateAppsConfig(input, { lockedAdminUser = null } = {}) {
     }
 
     validateMinecraft(input.minecraft ?? {}, cfg, errors);
+    validateAdguard(input.adguard ?? {}, cfg, errors);
 
     return { cfg, errors };
+}
+
+const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+function validateAdguard(a, cfg, errors) {
+    const out = cfg.adguard;
+    out.enabled = Boolean(a.enabled);
+    out.publish = { web: a.publish?.web !== false };
+    // Not something the page sends: carried over from what was found last.
+    out.dnsAddress = IPV4_RE.test(String(a.dnsAddress ?? '')) ? a.dnsAddress : '';
+
+    const port = Number(a.hostPort ?? DEFAULT_APPS_CONFIG.adguard.hostPort);
+    const taken = reservedHostPorts().get(port);
+    const clash = [
+        ['Nextcloud', cfg.nextcloud.publish.web && cfg.nextcloud.hostPort],
+        ['Jellyfin', cfg.jellyfin.publish.web && cfg.jellyfin.hostPort],
+        ['Family Hub', cfg.mealplan.publish.web && cfg.mealplan.hostPort],
+        ['Minecraft', cfg.minecraft.javaPort],
+    ].find(([, p]) => p && Number(p) === port)?.[0];
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+        errors.push("AdGuard Home's page port must be between 1024 and 65535.");
+    } else if (clash && out.publish.web) {
+        errors.push(`Port ${port} is where ${clash} is published, so AdGuard Home's page cannot take it too.`);
+    } else if (taken && out.publish.web) {
+        errors.push(`Port ${port} is already used by ${taken}. Pick another one, for example ${port + 1}.`);
+    } else {
+        out.hostPort = port;
+    }
 }
 
 /*
@@ -644,6 +698,9 @@ export async function hasRenderDevice(docker) {
  * switch that flips on and straight back off explains nothing.
  */
 export function appBlockers(name, cfg = loadAppsConfig()) {
+    if (name === 'adguard' && cfg.adguard?.enabled && !IPV4_RE.test(cfg.adguard?.dnsAddress ?? '')) {
+        return ['The panel could not find this machine\'s address on the home network, which AdGuard Home answers on. Is it connected?'];
+    }
     if (name === 'minecraft' && !cfg.minecraft?.eula) {
         return ["Minecraft only starts once you have accepted Mojang's EULA. Tick the box under Minecraft → Settings."];
     }
@@ -669,6 +726,9 @@ export function ensureSecrets() {
         // Signs Meal Plan's session cookies. Separate from the panel's on
         // purpose; see the comment on its SESSION_SECRET in docker-compose.yml.
         MEALPLAN_SESSION_SECRET: () => randomSecret(32),
+        // What the panel signs in to AdGuard Home with. Also shown on its
+        // Settings tab, for opening AdGuard's own page.
+        ADGUARD_PANEL_PASSWORD: () => randomSecret(18),
     };
     for (const [key, make] of Object.entries(need)) {
         if (!env[key]) updates[key] = make();
@@ -754,7 +814,7 @@ export function renderAppsPortsOverride(cfg) {
         '# mounted, and whether a GPU is passed through.',
     ];
     const blocks = [];
-    const published = { nextcloud: [], jellyfin: [], mealplan: [], minecraft: [] };
+    const published = { nextcloud: [], jellyfin: [], mealplan: [], minecraft: [], adguard: [] };
 
     if (composeDefines('nextcloud')) {
         blocks.push('  nextcloud:');
@@ -828,6 +888,25 @@ export function renderAppsPortsOverride(cfg) {
         } else {
             blocks.push('      []');
         }
+    }
+
+    if (composeDefines('adguard')) {
+        // DNS on the home-network address only. 0.0.0.0:53 is the system's
+        // own resolver's, and binding it fails; without an address there is
+        // no DNS to publish, which appBlockers says out loud.
+        blocks.push('  adguard:');
+        blocks.push('    ports:');
+        const ip = IPV4_RE.test(cfg.adguard.dnsAddress ?? '') ? cfg.adguard.dnsAddress : null;
+        if (ip) {
+            blocks.push(`      - "${ip}:53:53/udp"`);
+            blocks.push(`      - "${ip}:53:53/tcp"`);
+            published.adguard.push(53);
+        }
+        if (cfg.adguard.publish.web) {
+            blocks.push(`      - "0.0.0.0:${cfg.adguard.hostPort}:80/tcp"`);
+            published.adguard.push(cfg.adguard.hostPort);
+        }
+        if (!published.adguard.length) blocks.push('      []');
     }
 
     if (composeDefines('minecraft')) {
@@ -1031,6 +1110,7 @@ async function upstreamImage(name, docker) {
         // the pin exists to refuse.
         return `jellyfin/jellyfin:${readEnvFile().JELLYFIN_VERSION || 'latest'}`;
     }
+    if (name === 'adguard') return `adguard/adguardhome:${readEnvFile().ADGUARD_VERSION || 'latest'}`;
     if (name === 'minecraft') {
         // Same rule as Jellyfin's: the tag an Update would fetch.
         return `itzg/minecraft-server:${readEnvFile().MINECRAFT_IMAGE_VERSION || 'latest'}`;
@@ -1074,6 +1154,7 @@ function imageVersions(name, env, labels) {
     if (name === 'nextcloud') return [['PHP', env.PHP_VERSION], ['Nextcloud', env.NEXTCLOUD_VERSION]];
     if (name === 'jellyfin') return [['Jellyfin', labels['org.opencontainers.image.version']]];
     if (name === 'mealplan') return [['Node', env.NODE_VERSION]];
+    if (name === 'adguard') return [['AdGuard Home', labels['org.opencontainers.image.version']]];
     // The image's own version, not Minecraft's: the game is downloaded by the
     // container when it starts, so no image says which one it will be.
     if (name === 'minecraft') return [['Java', env.JAVA_VERSION]];

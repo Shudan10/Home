@@ -415,6 +415,7 @@ const CONTAINERS = [
     'quickstart-home-jellyfin',
     'quickstart-home-mealplan',
     'quickstart-home-minecraft',
+    'quickstart-home-adguard',
     // From before the tunnel; gone on most installs, harmless when it is.
     'quickstart-home-proxy',
     // The panel's other helpers. They remove themselves when they finish, so
@@ -445,6 +446,7 @@ const VOLUMES = [
     'quickstart-home-jellyfin-cache',
     'quickstart-home-mealplan-data',
     'quickstart-home-minecraft-data',
+    'quickstart-home-adguard-data',
     'quickstart-home-mullvad-tailscale',
     'quickstart-home-kachat-data',
     'quickstart-home-kachat-db-data',
@@ -500,6 +502,7 @@ function baseImages() {
         `nextcloud:${envTag(env, 'NEXTCLOUD_TAG', 'stable')}`,
         `jellyfin/jellyfin:${envTag(env, 'JELLYFIN_VERSION', 'latest')}`,
         `itzg/minecraft-server:${envTag(env, 'MINECRAFT_IMAGE_VERSION', 'latest')}`,
+        `adguard/adguardhome:${envTag(env, 'ADGUARD_VERSION', 'latest')}`,
         // From older versions, so an upgraded install is cleaned up too: the
         // nginx proxy and its certbot from before the tunnel, and the unpinned
         // image this teardown used to run in.

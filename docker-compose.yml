@@ -270,6 +270,38 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ---- AdGuard Home ---------------------------------------------------------
+  # The house's DNS: every device that asks it for an address can be told no,
+  # for an ad, a tracker, an app switched off for that device, or everything
+  # at bedtime. Pulled, not built. Its DNS port is published on this machine's
+  # address on the home network only -- never 0.0.0.0, where 53 is already
+  # taken by the system's own resolver -- and the panel writes that, along with
+  # its web page's port, into the override file.
+  #
+  # One volume, with its settings file kept in its work folder rather than a
+  # second volume of its own, so it is one thing to back up and one thing to
+  # remove. (It will not create a folder it is pointed at, so the settings file
+  # sits at the top of the volume rather than in a conf/ inside it.)
+  adguard:
+    image: adguard/adguardhome:${ADGUARD_VERSION:-latest}
+    container_name: quickstart-home-adguard
+    hostname: adguard
+    profiles: ["adguard"]
+    restart: unless-stopped
+    command:
+      - --no-check-update
+      - -c
+      - /opt/adguardhome/work/AdGuardHome.yaml
+      - -w
+      - /opt/adguardhome/work
+    volumes:
+      - adguard-data:/opt/adguardhome/work
+    networks:
+      - home
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ---- Minecraft ------------------------------------------------------------
   #
   # One world that Java Edition and Bedrock Edition (phones, tablets, Windows,
@@ -455,6 +487,9 @@ volumes:
   # The world, the server's settings, and its allow, operator and ban lists.
   minecraft-data:
     name: quickstart-home-minecraft-data
+  # AdGuard Home: its settings, devices, lists and the last week of lookups.
+  adguard-data:
+    name: quickstart-home-adguard-data
   # The exit node's sign-in to your tailnet, so a restart or a new location
   # does not mean signing in again.
   mullvad-tailscale:

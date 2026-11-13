@@ -312,6 +312,9 @@ function selectTab(name) {
         loadMinecraftPlayers();
         if (activeSubtab('minecraft') === 'minecraft-worlds') loadMinecraftWorlds();
     }
+    // Later rather than now: this can run while the page is still loading,
+    // before the Home network code further down has been read.
+    if (name === 'adguard') setTimeout(loadAdguard, 0);
     // On the drawer layout, picking a destination should get out of the way.
     if (MOBILE()) closeDrawer();
 }
@@ -1024,6 +1027,7 @@ const SERVICE_NAMES = {
     jellyfin: 'Jellyfin',
     mealplan: 'Family Hub',
     minecraft: 'Minecraft',
+    adguard: 'AdGuard Home',
 };
 
 for (const input of document.querySelectorAll('[data-service]')) {
@@ -1381,15 +1385,16 @@ const formFields = (name) =>
         jellyfin: ['jellyfin-pub-web', 'jellyfin-port', 'jellyfin-hwaccel'],
         mealplan: ['mealplan-pub-web', 'mealplan-port'],
         minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
+        adguard: ['adguard-pub-web', 'adguard-port'],
         backup: [
             'backup-destination', 'snap-enabled', 'snap-keep',
-            ...['nextcloud', 'nextcloud-files', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'panel'].map((k) => `snap-svc-${k}`),
+            ...['nextcloud', 'nextcloud-files', 'kachat', 'jellyfin', 'mealplan', 'minecraft', 'adguard', 'panel'].map((k) => `snap-svc-${k}`),
         ],
     })[name] ?? [];
 
 // Spelled out rather than built from APP_KEYS, which is declared further down
 // and would not exist yet when this line runs.
-const FORM_NAMES = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft', 'backup'];
+const FORM_NAMES = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft', 'adguard', 'backup'];
 
 function setFormDirty(name, dirty) {
     if (dirty) dirtyForms.add(name);
@@ -1468,6 +1473,13 @@ async function loadApps() {
     if (!isDirty('minecraft')) fillMinecraftSettings(c.minecraft ?? {});
     renderAppState('minecraft', r.apps.minecraft);
 
+    // --- AdGuard Home ---
+    if (!isDirty('adguard')) {
+        $('adguard-pub-web').checked = c.adguard?.publish?.web !== false;
+        $('adguard-port').value = c.adguard?.hostPort ?? 8053;
+    }
+    renderAppState('adguard', r.apps.adguard);
+
     // Everything above was drawn from the addresses known right now.
     appLinkInputs = appLinkSignature();
 
@@ -1478,7 +1490,7 @@ async function loadApps() {
 }
 
 /** Every app with a tab of its own. The loops below are driven by this. */
-const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft'];
+const APP_KEYS = ['nextcloud', 'jellyfin', 'mealplan', 'minecraft', 'adguard'];
 
 /**
  * The ways in to an app: the one on this network, and the one from outside.
@@ -1717,6 +1729,7 @@ const APP_LINK_COPY = {
     nextcloud: 'Not installed yet. Installing builds it and leaves it switched off.',
     jellyfin: 'Not installed yet. Installing downloads the image and leaves it switched off.',
     mealplan: 'Not installed yet. Installing builds it and leaves it switched off.',
+    adguard: 'Not installed yet. Installing downloads it and leaves it switched off.',
 };
 
 function renderAppLink(name, state) {
@@ -1860,6 +1873,13 @@ function renderAppState(name, state) {
         build.textContent = state.build?.builtAt
             ? `Built ${new Date(state.build.builtAt).toLocaleString()}.`
             : 'Not built yet.';
+    }
+
+    if (name === 'adguard') {
+        renderAppLink(name, state);
+        $('adguard-build').textContent = state.build?.builtAt
+            ? `Image downloaded ${new Date(state.build.builtAt).toLocaleString()}.`
+            : 'Not installed yet.';
     }
 
     if (name === 'minecraft') {
@@ -2012,6 +2032,13 @@ $('jellyfin-media-list').addEventListener('click', (event) => {
 
 function collectAppConfig(name) {
     if (name === 'minecraft') return collectMinecraftSettings();
+    if (name === 'adguard') {
+        return {
+            enabled: Boolean(appsState?.config?.adguard?.enabled),
+            publish: { web: $('adguard-pub-web').checked },
+            hostPort: Number($('adguard-port').value),
+        };
+    }
     if (name === 'mealplan') {
         return {
             enabled: Boolean(appsState?.config?.mealplan?.enabled),
@@ -3032,6 +3059,7 @@ const UNINSTALL_COPY = {
     jellyfin: 'its library, artwork and watch history. Your media folders are mounted read-only and are left alone',
     mealplan: 'the family, its calendar and chores, the meal library and every week that has been planned',
     minecraft: 'the world and everything built in it, and the allow list, operators and bans',
+    adguard: 'the devices you have named and their rules, your lists and settings, and the record of lookups. Point your router back at automatic DNS first, or the house loses the internet',
     kachat: 'every photo, video and voice message sent from it, and the contacts backups in it. Every link sent from it stops working',
 };
 const uninstallCopy = (key) => UNINSTALL_COPY[key] ?? 'its data';
@@ -5643,7 +5671,7 @@ if ('serviceWorker' in navigator) {
  * until a check found one, never queued twice, the queue peek, the banner),
  * and the list cannot drift from the tabs.
  */
-const UPDATE_LABELS = { nextcloud: 'Nextcloud', jellyfin: 'Jellyfin', mealplan: 'Family Hub', minecraft: 'Minecraft' };
+const UPDATE_LABELS = { nextcloud: 'Nextcloud', jellyfin: 'Jellyfin', mealplan: 'Family Hub', minecraft: 'Minecraft', adguard: 'AdGuard Home' };
 let appsCheckedAt = 0;
 
 const isInstalled = (name) => serviceState[name]?.installed !== false;
@@ -6193,6 +6221,8 @@ const RESTORE_WARNINGS = {
         'Family Hub stops for a moment. The family, every event, chore, week, recipe and list, and its settings go back to how they were then. ' +
         'That includes the calendar link phones subscribe to: if you made a new link since this copy, the old one works again and the new one stops.',
     minecraft: 'The Minecraft server stops, and everyone playing is disconnected. The worlds go back to how they were then.',
+    adguard:
+        'AdGuard Home restarts, and lookups pause for a few seconds. Named devices, their rules and bedtimes, your lists and settings go back to how they were then.',
     panel:
         'The panel restarts. Every setting and password it keeps goes back to how it was then, including the password you sign in to this panel with. ' +
         'Apps keep running; a changed setting takes effect the next time that app is updated or restarted.',
@@ -6280,4 +6310,730 @@ $('restore-list').addEventListener('click', async (event) => {
         loadBackup().catch(() => {});
         loadRestore().catch(() => {});
     }
+});
+
+// ------------------------------------------------------------ home network ---
+/*
+ * AdGuard Home, run from here. Everything is read from AdGuard through the
+ * panel (/api/adguard/*), each sub-tab when it is opened, so what is shown is
+ * what AdGuard is doing now rather than a copy that could have drifted.
+ */
+
+const ag = {
+    house: null,
+    services: null,
+    devices: null,
+    tz: null,
+    oldest: null,
+    houseApps: [],
+};
+
+const agRunning = () => Boolean(appsState?.apps?.adguard?.container?.running);
+const agVisible = () => !document.hidden && $('tab-adguard').classList.contains('active');
+
+const AG_GROUPS = {
+    social_network: 'Social',
+    streaming: 'Video and music',
+    gaming: 'Games',
+    messenger: 'Messaging',
+    ai: 'AI chat',
+    shopping: 'Shopping',
+    dating: 'Dating',
+    gambling: 'Gambling',
+    privacy: 'Privacy and VPNs',
+    software: 'Software and stores',
+    hosting: 'Hosting',
+    cdn: 'Content networks',
+};
+
+/** Said in each sub-tab's own place when there is nothing to ask. */
+function agNotRunning() {
+    const word = appsState?.config?.adguard?.enabled
+        ? 'AdGuard Home is not running. Its switch in the sidebar starts it.'
+        : 'AdGuard Home is not installed yet. Its switch in the sidebar installs it.';
+    for (const id of ['ag-devices', 'ag-lists']) $(id).innerHTML = `<p class="empty">${escapeHtml(word)}</p>`;
+    $('ag-activity').innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(word)}</td></tr>`;
+    $('ag-protect').disabled = true;
+    for (const b of document.querySelectorAll('[data-ag-pause]')) b.disabled = true;
+    $('ag-protect-text').textContent = word;
+    $('ag-setup-state').className = 'verdict';
+    $('ag-setup-state').textContent = word;
+}
+
+function loadAdguard() {
+    if (!agRunning()) return agNotRunning();
+    const sub = activeSubtab('adguard');
+    if (sub === 'adguard-overview') loadAgOverview();
+    if (sub === 'adguard-devices') loadAgDevices();
+    if (sub === 'adguard-blocking') loadAgHouse();
+    if (sub === 'adguard-activity') loadAgActivity();
+    if (sub === 'adguard-settings') {
+        loadAgHouse();
+        loadAgAccount();
+    }
+}
+
+for (const button of document.querySelectorAll('#tab-adguard .subtab-btn')) {
+    button.addEventListener('click', () => setTimeout(loadAdguard, 0));
+}
+
+// The day's numbers move by themselves, so the overview keeps up while open.
+setInterval(() => {
+    if (agVisible() && agRunning() && activeSubtab('adguard') === 'adguard-overview') loadAgOverview();
+}, 30_000);
+
+// --- overview ---
+
+function renderAgProtection(p) {
+    const box = $('ag-protect');
+    box.disabled = false;
+    box.checked = p.enabled;
+    for (const b of document.querySelectorAll('[data-ag-pause]')) b.disabled = !p.enabled;
+    const text = $('ag-protect-text');
+    if (p.enabled) {
+        text.textContent = 'On. Ads, trackers and anything you have switched off are blocked on every device that uses it.';
+    } else if (p.until) {
+        const at = new Date(p.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        text.textContent = `Paused until ${at}. Nothing is blocked until then, except devices cut off or in bedtime.`;
+    } else {
+        text.textContent = 'Off. Nothing is blocked, except devices cut off or in bedtime.';
+    }
+}
+
+async function loadAgOverview() {
+    let o;
+    try {
+        o = await api('/api/adguard/overview');
+    } catch (e) {
+        $('ag-protect-text').textContent = e.message;
+        return;
+    }
+    renderAgProtection(o.protection);
+    $('ag-stat-queries').textContent = fmtNum(o.queries);
+    $('ag-stat-blocked').textContent = fmtNum(o.blocked);
+    $('ag-stat-blocked-pct').textContent = o.queries ? `blocked (${Math.round((o.blocked / o.queries) * 100)}%)` : 'blocked';
+    $('ag-stat-ms').textContent = `${o.avgMs} ms`;
+    $('ag-stat-devices').textContent = fmtNum(o.houseDevices);
+
+    const max = Math.max(1, ...o.hourly.queries);
+    $('ag-spark').innerHTML = o.hourly.queries
+        .map((q, i) => {
+            const b = o.hourly.blocked[i] ?? 0;
+            return `<div class="h" style="height:${(q / max) * 100}%" title="${fmtNum(q)} lookups, ${fmtNum(b)} blocked"><i style="height:${q ? (b / q) * 100 : 0}%"></i></div>`;
+        })
+        .join('');
+
+    const list = (items, label) =>
+        items.length
+            ? items.map((x) => `<li><span>${escapeHtml(label(x))}</span><span>${fmtNum(x.count)}</span></li>`).join('')
+            : '<li class="empty">Nothing yet.</li>';
+    $('ag-top-blocked').innerHTML = list(o.topBlocked, (x) => x.domain);
+    $('ag-top-devices').innerHTML = list(o.topDevices, (x) => (x.name ? `${x.name} (${x.ip})` : x.ip));
+
+    renderAgSetup(o.houseDevices);
+}
+
+function renderAgSetup(using) {
+    const ip = appsState?.config?.adguard?.dnsAddress || null;
+    for (const code of document.querySelectorAll('.ag-dns-ip')) code.textContent = ip || 'this machine\'s address';
+    const state = $('ag-setup-state');
+    if (!ip) {
+        state.className = 'verdict bad';
+        state.textContent = 'The panel has not found this machine\'s address on the home network yet.';
+    } else if (using >= 2) {
+        state.className = 'verdict ok';
+        state.textContent = `${using} devices are using it, at ${ip}.`;
+    } else {
+        state.className = 'verdict';
+        state.textContent = `Ready at ${ip}, but no devices are using it yet. The steps below send them to it.`;
+    }
+}
+
+$('ag-protect').addEventListener('change', async () => {
+    const box = $('ag-protect');
+    box.disabled = true;
+    try {
+        renderAgProtection(await api('/api/adguard/protection', { method: 'POST', body: { enabled: box.checked } }));
+        toast(box.checked ? 'Blocking is on for the whole house.' : 'Blocking is off for the whole house.');
+    } catch (e) {
+        box.checked = !box.checked;
+        toast(e.message, 'bad');
+    } finally {
+        box.disabled = false;
+    }
+});
+
+for (const button of document.querySelectorAll('[data-ag-pause]')) {
+    button.addEventListener('click', async () => {
+        const minutes = Number(button.dataset.agPause);
+        try {
+            renderAgProtection(await api('/api/adguard/protection', { method: 'POST', body: { enabled: false, minutes } }));
+            toast(`Blocking paused for ${minutes >= 60 ? `${minutes / 60} hour${minutes === 60 ? '' : 's'}` : `${minutes} minutes`}.`);
+        } catch (e) {
+            toast(e.message, 'bad');
+        }
+    });
+}
+
+// --- the app picker ---
+
+async function agServices() {
+    ag.services ??= await api('/api/adguard/services');
+    return ag.services;
+}
+
+const agIcon = (svc) =>
+    svc?.icon ? `<img class="ag-ico" src="data:image/svg+xml;base64,${escapeHtml(svc.icon)}" alt="">` : '';
+
+async function agChips(target, ids) {
+    const { services } = await agServices();
+    const byId = new Map(services.map((s) => [s.id, s]));
+    target.innerHTML = ids.length
+        ? ids
+              .map((id) => byId.get(id) ?? { id, name: id })
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((s) => `<span class="ag-chip">${agIcon(s)}${escapeHtml(s.name)}</span>`)
+              .join('')
+        : '<span class="empty">None.</span>';
+}
+
+let agPickerResolve = null;
+
+/** Opens the picker on `selected` (ids) and resolves with the new choice, or null if closed. */
+async function agPick(selected) {
+    const { services, groups } = await agServices();
+    const chosen = new Set(selected);
+    const order = [...Object.keys(AG_GROUPS), ...groups.filter((g) => !(g in AG_GROUPS))];
+    $('ag-picker-list').innerHTML = order
+        .map((g) => {
+            const inGroup = services.filter((s) => s.group === g).sort((a, b) => a.name.localeCompare(b.name));
+            if (!inGroup.length) return '';
+            return `<section class="ag-picker-group" data-group="${escapeHtml(g)}"><h4>${escapeHtml(AG_GROUPS[g] ?? g)}</h4><div>${inGroup
+                .map(
+                    (s) =>
+                        `<label class="ag-app" data-name="${escapeHtml(s.name.toLowerCase())}"><input type="checkbox" value="${escapeHtml(s.id)}"${chosen.has(s.id) ? ' checked' : ''}>${agIcon(s)}<span>${escapeHtml(s.name)}</span></label>`,
+                )
+                .join('')}</div></section>`;
+        })
+        .join('');
+    $('ag-picker-search').value = '';
+    $('ag-picker').hidden = false;
+    $('ag-picker-search').focus();
+    return new Promise((resolve) => {
+        agPickerResolve = resolve;
+    });
+}
+
+function agPickerClose(result) {
+    $('ag-picker').hidden = true;
+    agPickerResolve?.(result);
+    agPickerResolve = null;
+}
+
+$('ag-picker-search').addEventListener('input', () => {
+    const q = $('ag-picker-search').value.trim().toLowerCase();
+    for (const group of $('ag-picker-list').querySelectorAll('.ag-picker-group')) {
+        let any = false;
+        for (const item of group.querySelectorAll('.ag-app')) {
+            const show = !q || item.dataset.name.includes(q);
+            item.hidden = !show;
+            any ||= show;
+        }
+        group.hidden = !any;
+    }
+});
+$('ag-picker-done').addEventListener('click', () =>
+    agPickerClose([...$('ag-picker-list').querySelectorAll('input:checked')].map((i) => i.value)),
+);
+$('ag-picker-clear').addEventListener('click', () => {
+    for (const i of $('ag-picker-list').querySelectorAll('input:checked')) i.checked = false;
+});
+$('ag-picker-close').addEventListener('click', () => agPickerClose(null));
+$('ag-picker').addEventListener('click', (event) => {
+    if (event.target === $('ag-picker')) agPickerClose(null);
+});
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('ag-picker').hidden) agPickerClose(null);
+});
+
+// --- devices ---
+
+const AG_DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function agSeen(iso) {
+    if (!iso) return null;
+    const t = new Date(iso);
+    const mins = Math.round((Date.now() - t) / 60_000);
+    if (mins < 2) return 'just now';
+    if (mins < 60) return `${mins} min ago`;
+    if (mins < 24 * 60) return `${Math.round(mins / 60)} h ago`;
+    return t.toLocaleDateString();
+}
+
+function agDevicePills(d) {
+    const pills = [];
+    if (d.cutOff) pills.push(`<span class="pill off">${d.bedtimeNow && !d.internetOff ? 'Bedtime' : 'No internet'}</span>`);
+    if (d.filtering === 'strict') pills.push('<span class="pill">Stricter</span>');
+    if (d.filtering === 'off') pills.push('<span class="pill warn">No blocking</span>');
+    if (d.services) pills.push(`<span class="pill">${d.services.length} app${d.services.length === 1 ? '' : 's'} blocked${d.appHours ? `, open ${d.appHours.from}–${d.appHours.to}` : ''}</span>`);
+    if (d.bedtime?.on) pills.push(`<span class="pill">Bedtime ${escapeHtml(d.bedtime.from)}–${escapeHtml(d.bedtime.to)}</span>`);
+    return pills.join('');
+}
+
+async function loadAgDevices() {
+    const box = $('ag-devices');
+    // Not while somebody is halfway through changing one.
+    if (box.querySelector('.ag-editor')) return;
+    let r;
+    try {
+        r = await api('/api/adguard/devices');
+    } catch (e) {
+        box.innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+        return;
+    }
+    ag.devices = r.devices;
+    $('ag-tz').textContent = r.timezone;
+    if (!r.devices.length) {
+        box.innerHTML =
+            '<p class="empty">No devices yet. They appear here once the router sends them to AdGuard; see Overview.</p>';
+        return;
+    }
+    box.innerHTML = r.devices
+        .map((d, i) => {
+            const title = d.name || d.hostname || d.ids[0];
+            const bits = [d.ids.join(', ')];
+            if (d.name && d.hostname) bits.push(d.hostname);
+            bits.push(`${fmtNum(d.queries)} lookups today`);
+            const seen = agSeen(d.lastSeen);
+            if (seen) bits.push(`seen ${seen}`);
+            const net = d.saved
+                ? `<span class="ag-net">Internet <label class="switch mini" title="Internet for this device"><input type="checkbox" data-ag-net="${i}"${d.internetOff ? '' : ' checked'} aria-label="Internet for ${escapeHtml(title)}"><span class="track"></span></label></span>`
+                : '';
+            return `<div class="ag-device${d.saved ? '' : ' unnamed'}" data-ag-device="${i}">
+                <div class="ag-device-head">
+                    <div class="ag-device-main">
+                        <div class="ag-device-title">${escapeHtml(title)} ${agDevicePills(d)}</div>
+                        <span class="muted">${escapeHtml(bits.join(' · '))}</span>
+                    </div>
+                    <div class="ag-device-actions">${net}<button type="button" class="ghost mini" data-ag-edit="${i}">${d.saved ? 'Edit' : 'Name it'}</button></div>
+                </div>
+            </div>`;
+        })
+        .join('');
+}
+
+$('ag-devices-refresh').addEventListener('click', () => {
+    for (const f of $('ag-devices').querySelectorAll('.ag-editor')) f.remove();
+    loadAgDevices();
+});
+
+$('ag-devices').addEventListener('change', async (event) => {
+    const box = event.target.closest('[data-ag-net]');
+    if (!box) return;
+    const d = ag.devices[Number(box.dataset.agNet)];
+    box.disabled = true;
+    try {
+        await api('/api/adguard/devices/internet', { method: 'POST', body: { name: d.name, off: !box.checked } });
+        toast(
+            box.checked
+                ? d.bedtimeNow
+                    ? `${d.name} is allowed back on, but it is bedtime until ${d.bedtime.to}.`
+                    : `${d.name} has its internet back.`
+                : `${d.name} is cut off. It can still reach this network, not the internet.`,
+        );
+    } catch (e) {
+        box.checked = !box.checked;
+        toast(e.message, 'bad');
+    }
+    box.disabled = false;
+    loadAgDevices();
+});
+
+$('ag-devices').addEventListener('click', (event) => {
+    const edit = event.target.closest('[data-ag-edit]');
+    if (!edit) return;
+    const row = edit.closest('.ag-device');
+    if (row.querySelector('.ag-editor')) return;
+    for (const f of $('ag-devices').querySelectorAll('.ag-editor')) f.remove();
+    openAgEditor(row, ag.devices[Number(edit.dataset.agEdit)]);
+});
+
+function openAgEditor(row, d) {
+    const form = $('ag-device-editor').content.firstElementChild.cloneNode(true);
+    const f = form.elements;
+    f.name.value = d.name || d.hostname || '';
+    f.ids.value = d.ids.join(', ');
+    if (d.filtering === 'custom') form.querySelector('[data-custom]').hidden = false;
+    f.filtering.value = d.filtering;
+    let apps = d.services ? [...d.services] : [];
+    f.appsMode.value = d.services ? 'own' : 'house';
+    const own = form.querySelector('.ag-own-apps');
+    const showOwn = () => {
+        own.hidden = f.appsMode.value !== 'own';
+    };
+    showOwn();
+    for (const r of form.querySelectorAll('[name="appsMode"]')) r.addEventListener('change', showOwn);
+    const chosen = form.querySelector('[data-chosen]');
+    agChips(chosen, apps);
+    form.querySelector('[data-pick]').addEventListener('click', async () => {
+        const picked = await agPick(apps);
+        if (picked) {
+            apps = picked;
+            agChips(chosen, apps);
+        }
+    });
+    f.hoursOn.checked = Boolean(d.appHours);
+    if (d.appHours) {
+        f.hoursFrom.value = d.appHours.from;
+        f.hoursTo.value = d.appHours.to === '24:00' ? '23:59' : d.appHours.to;
+    }
+    const bed = d.bedtime ?? { on: false, from: '21:00', to: '07:00', days: [0, 1, 2, 3, 4] };
+    f.bedOn.checked = Boolean(bed.on);
+    f.bedFrom.value = bed.from;
+    f.bedTo.value = bed.to;
+    for (const box of form.querySelectorAll('[data-days] input')) box.checked = bed.days.includes(Number(box.value));
+
+    const forget = form.querySelector('[data-forget]');
+    forget.hidden = !d.saved;
+    forget.addEventListener('click', async () => {
+        const ok = await askConfirm({
+            title: `Forget ${d.name}?`,
+            body: 'Its name, rules and bedtime are removed, and it goes back to following the house. Its internet comes back if it was cut off.',
+            confirmLabel: 'Forget',
+            danger: true,
+        });
+        if (!ok) return;
+        try {
+            await api('/api/adguard/devices/forget', { method: 'POST', body: { name: d.name } });
+            toast(`${d.name} forgotten.`);
+            form.remove();
+            loadAgDevices();
+        } catch (e) {
+            toast(e.message, 'bad');
+        }
+    });
+    form.querySelector('[data-cancel]').addEventListener('click', () => form.remove());
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const err = form.querySelector('[data-error]');
+        err.hidden = true;
+        const body = {
+            key: d.key,
+            name: f.name.value.trim(),
+            ids: f.ids.value.split(/[\s,]+/).filter(Boolean),
+            filtering: f.filtering.value || 'house',
+            services: f.appsMode.value === 'own' ? apps : null,
+            appHours: f.appsMode.value === 'own' && f.hoursOn.checked ? { from: f.hoursFrom.value, to: f.hoursTo.value } : null,
+            bedtime: {
+                on: f.bedOn.checked,
+                from: f.bedFrom.value,
+                to: f.bedTo.value,
+                days: [...form.querySelectorAll('[data-days] input:checked')].map((b) => Number(b.value)),
+            },
+        };
+        const save = form.querySelector('button[type="submit"]');
+        save.disabled = true;
+        try {
+            await api('/api/adguard/devices', { method: 'POST', body });
+            toast(`${body.name} saved.`);
+            form.remove();
+            loadAgDevices();
+        } catch (e) {
+            err.textContent = e.message;
+            err.hidden = false;
+        } finally {
+            save.disabled = false;
+        }
+    });
+    row.append(form);
+    f.name.focus();
+}
+
+// --- blocking ---
+
+async function loadAgHouse() {
+    let h;
+    try {
+        h = await api('/api/adguard/house');
+    } catch (e) {
+        $('ag-lists').innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+        return;
+    }
+    ag.house = h;
+    $('ag-house-safesearch').checked = h.safeSearch;
+    $('ag-house-adult').checked = h.adult;
+    $('ag-house-malware').checked = h.malware;
+    ag.houseApps = [...h.services];
+    agChips($('ag-house-apps'), ag.houseApps);
+    $('ag-house-hours-on').checked = Boolean(h.servicesHours);
+    if (h.servicesHours) {
+        $('ag-house-hours-from').value = h.servicesHours.from;
+        $('ag-house-hours-to').value = h.servicesHours.to === '24:00' ? '23:59' : h.servicesHours.to;
+    }
+
+    $('ag-lists').innerHTML = h.lists
+        .map((l, i) => {
+            const meta = l.enabled
+                ? `${fmtNum(l.rules)} sites${l.updated ? `, updated ${new Date(l.updated).toLocaleString()}` : ''}`
+                : l.detail || l.url;
+            const remove = l.catalog ? '' : `<button type="button" class="ghost mini danger" data-ag-list-remove="${i}">Remove</button>`;
+            return `<div class="ag-list">
+                <div class="ag-list-main"><strong>${escapeHtml(l.name)}</strong><span class="muted">${escapeHtml(l.enabled && l.detail ? `${l.detail} ${meta}.` : meta)}</span></div>
+                ${remove}
+                <label class="switch" title="Use this list"><input type="checkbox" data-ag-list="${i}"${l.enabled ? ' checked' : ''} aria-label="Use ${escapeHtml(l.name)}"><span class="track"></span></label>
+            </div>`;
+        })
+        .join('');
+
+    const chips = (list, kind) =>
+        list.length
+            ? list
+                  .map((d) => `<span class="ag-chip">${escapeHtml(d)}<button type="button" data-ag-unlist="${escapeHtml(d)}" aria-label="Take ${escapeHtml(d)} off the ${kind} list">✕</button></span>`)
+                  .join('')
+            : '<span class="empty">None.</span>';
+    $('ag-allow').innerHTML = chips(h.allow, 'allow');
+    $('ag-block').innerHTML = chips(h.block, 'block');
+    $('ag-other-rules').hidden = !h.otherRules;
+    $('ag-other-rules').textContent = `${h.otherRules} more rule${h.otherRules === 1 ? '' : 's'} set in AdGuard's own page ${h.otherRules === 1 ? 'is' : 'are'} kept as ${h.otherRules === 1 ? 'it is' : 'they are'}.`;
+
+    $('ag-upstreams').innerHTML = h.upstreams
+        .map(
+            (u) =>
+                `<label class="check"><input type="radio" name="ag-upstream" value="${escapeHtml(u.key)}"${h.upstream === u.key ? ' checked' : ''}><span>${escapeHtml(u.label)}<small>${escapeHtml(u.detail)}</small></span></label>`,
+        )
+        .join('') + (h.upstream === 'custom' ? '<p class="hint">Set to something else in AdGuard\'s own page. Picking one here replaces it.</p>' : '');
+}
+
+async function agSetHouse(body, done) {
+    try {
+        await api('/api/adguard/house', { method: 'PUT', body });
+        toast(done);
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    loadAgHouse();
+}
+
+$('ag-house-safesearch').addEventListener('change', (e) =>
+    agSetHouse({ safeSearch: e.target.checked }, e.target.checked ? 'Safe search is on for the house.' : 'Safe search is off.'),
+);
+$('ag-house-adult').addEventListener('change', (e) =>
+    agSetHouse({ adult: e.target.checked }, e.target.checked ? 'Adult sites are blocked for the house.' : 'Adult sites are no longer blocked.'),
+);
+$('ag-house-malware').addEventListener('change', (e) =>
+    agSetHouse({ malware: e.target.checked }, e.target.checked ? 'Malware checking is on.' : 'Malware checking is off.'),
+);
+$('ag-house-apps-edit').addEventListener('click', async () => {
+    const picked = await agPick(ag.houseApps);
+    if (!picked) return;
+    ag.houseApps = picked;
+    agChips($('ag-house-apps'), ag.houseApps);
+});
+$('ag-house-apps-save').addEventListener('click', () =>
+    agSetHouse(
+        {
+            services: ag.houseApps,
+            servicesHours: $('ag-house-hours-on').checked
+                ? { from: $('ag-house-hours-from').value, to: $('ag-house-hours-to').value }
+                : null,
+        },
+        ag.houseApps.length ? 'Blocked apps saved for the house.' : 'No apps are blocked for the house.',
+    ),
+);
+
+$('ag-lists').addEventListener('change', async (event) => {
+    const box = event.target.closest('[data-ag-list]');
+    if (!box) return;
+    const list = ag.house.lists[Number(box.dataset.agList)];
+    box.disabled = true;
+    if (box.checked && !list.rules) toast(`Downloading ${list.name}…`);
+    try {
+        await api('/api/adguard/lists', { method: 'PUT', body: { url: list.url, enabled: box.checked } });
+        toast(box.checked ? `${list.name} is on.` : `${list.name} is off.`);
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    loadAgHouse();
+});
+$('ag-lists').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-ag-list-remove]');
+    if (!button) return;
+    const list = ag.house.lists[Number(button.dataset.agListRemove)];
+    if (!(await askConfirm({ title: `Remove ${list.name}?`, body: 'It can be added again by its address.', confirmLabel: 'Remove', danger: true }))) return;
+    try {
+        await api('/api/adguard/lists/remove', { method: 'POST', body: { url: list.url } });
+        toast(`${list.name} removed.`);
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    loadAgHouse();
+});
+$('ag-lists-refresh').addEventListener('click', async () => {
+    const button = $('ag-lists-refresh');
+    button.disabled = true;
+    try {
+        const r = await api('/api/adguard/lists/refresh', { method: 'POST' });
+        toast(r?.updated ? `${r.updated} list${r.updated === 1 ? '' : 's'} updated.` : 'Every list is already up to date.');
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    button.disabled = false;
+    loadAgHouse();
+});
+$('ag-list-add').addEventListener('click', async () => {
+    try {
+        toast('Downloading the list…');
+        await api('/api/adguard/lists', { method: 'POST', body: { name: $('ag-list-name').value, url: $('ag-list-url').value } });
+        $('ag-list-name').value = '';
+        $('ag-list-url').value = '';
+        toast('List added.');
+    } catch (e) {
+        toast(e.message, 'bad');
+    }
+    loadAgHouse();
+});
+
+async function agListDomain(domain, list, { quiet = false } = {}) {
+    try {
+        const r = await api('/api/adguard/domains', { method: 'POST', body: { domain, list } });
+        if (!quiet) {
+            toast(list === 'allow' ? `${r.domain} is always allowed.` : list === 'block' ? `${r.domain} is always blocked.` : `${r.domain} is off the list.`);
+        }
+        return true;
+    } catch (e) {
+        toast(e.message, 'bad');
+        return false;
+    }
+}
+
+for (const kind of ['allow', 'block']) {
+    const add = async () => {
+        const input = $(`ag-${kind}-input`);
+        if (!input.value.trim()) return;
+        if (await agListDomain(input.value, kind)) input.value = '';
+        loadAgHouse();
+    };
+    $(`ag-${kind}-add`).addEventListener('click', add);
+    $(`ag-${kind}-input`).addEventListener('keydown', (e) => e.key === 'Enter' && add());
+}
+for (const id of ['ag-allow', 'ag-block']) {
+    $(id).addEventListener('click', async (event) => {
+        const button = event.target.closest('[data-ag-unlist]');
+        if (!button) return;
+        await agListDomain(button.dataset.agUnlist, null);
+        loadAgHouse();
+    });
+}
+
+async function agCheck() {
+    const out = $('ag-check-result');
+    const domain = $('ag-check-input').value.trim();
+    if (!domain) return;
+    try {
+        const r = await api(`/api/adguard/check?domain=${encodeURIComponent(domain)}`);
+        out.className = r.blocked ? 'verdict bad' : 'verdict ok';
+        out.textContent = `${r.domain}: ${r.blocked ? 'blocked' : 'not blocked'}. ${r.why}${r.rule ? ` (${r.rule})` : ''}.`;
+    } catch (e) {
+        out.className = 'verdict bad';
+        out.textContent = e.message;
+    }
+    out.hidden = false;
+}
+$('ag-check-btn').addEventListener('click', agCheck);
+$('ag-check-input').addEventListener('keydown', (e) => e.key === 'Enter' && agCheck());
+
+// --- activity ---
+
+function agWhen(iso) {
+    const t = new Date(iso);
+    const today = new Date().toDateString() === t.toDateString();
+    const time = t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    return today ? time : `${t.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+async function loadAgActivity({ more = false } = {}) {
+    const body = $('ag-activity');
+    const q = new URLSearchParams({ limit: '100' });
+    const search = $('ag-activity-search').value.trim();
+    if (search) q.set('search', search);
+    if ($('ag-activity-blocked').checked) q.set('blocked', '1');
+    if (more && ag.oldest) q.set('older', ag.oldest);
+    let r;
+    try {
+        r = await api(`/api/adguard/activity?${q}`);
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="5" class="error">${escapeHtml(e.message)}</td></tr>`;
+        return;
+    }
+    ag.oldest = r.oldest;
+    const rows = r.rows
+        .map(
+            (x) => `<tr class="${x.blocked ? 'blocked' : ''}">
+                <td class="when">${escapeHtml(agWhen(x.time))}</td>
+                <td>${escapeHtml(x.device || x.ip)}</td>
+                <td class="site">${escapeHtml(x.domain)}</td>
+                <td class="result">${escapeHtml(x.why)}</td>
+                <td><button type="button" class="ghost mini" data-ag-act="${x.blocked ? 'allow' : 'block'}" data-domain="${escapeHtml(x.domain)}">${x.blocked ? 'Allow' : 'Block'}</button></td>
+            </tr>`,
+        )
+        .join('');
+    if (more) body.insertAdjacentHTML('beforeend', rows);
+    else body.innerHTML = rows || '<tr><td colspan="5" class="empty">Nothing yet.</td></tr>';
+    $('ag-activity-more').hidden = r.rows.length < 100 || !r.oldest;
+}
+
+let agSearchTimer;
+$('ag-activity-search').addEventListener('input', () => {
+    clearTimeout(agSearchTimer);
+    agSearchTimer = setTimeout(() => loadAgActivity(), 400);
+});
+$('ag-activity-blocked').addEventListener('change', () => loadAgActivity());
+$('ag-activity-refresh').addEventListener('click', () => loadAgActivity());
+$('ag-activity-more').addEventListener('click', () => loadAgActivity({ more: true }));
+$('ag-activity').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-ag-act]');
+    if (!button) return;
+    const { agAct: list, domain } = button.dataset;
+    const ok = await askConfirm({
+        title: list === 'allow' ? `Always allow ${domain}?` : `Always block ${domain}?`,
+        body:
+            list === 'allow'
+                ? 'It is let through for every device, whatever a list says. It can be taken off under Blocking.'
+                : 'It is blocked for every device, along with everything under it. It can be taken off under Blocking.',
+        confirmLabel: list === 'allow' ? 'Allow' : 'Block',
+    });
+    if (ok && (await agListDomain(domain, list))) loadAgActivity();
+});
+
+// --- settings ---
+
+$('ag-upstreams').addEventListener('change', (event) => {
+    const radio = event.target.closest('[name="ag-upstream"]');
+    if (!radio) return;
+    const label = ag.house?.upstreams.find((u) => u.key === radio.value)?.label ?? radio.value;
+    agSetHouse({ upstream: radio.value }, `Lookups now go to ${label}.`);
+});
+
+let agAccount = null;
+async function loadAgAccount() {
+    try {
+        agAccount = await api('/api/adguard/account');
+    } catch {
+        return;
+    }
+    $('ag-account-user').textContent = agAccount.username;
+    $('ag-account-dns').textContent = agAccount.dnsAddress || 'not found yet';
+    $('ag-account-pass').textContent = '••••••••';
+    $('ag-account-show').textContent = 'Show';
+}
+$('ag-account-show').addEventListener('click', () => {
+    if (!agAccount) return;
+    const hidden = $('ag-account-show').textContent === 'Show';
+    $('ag-account-pass').textContent = hidden ? agAccount.password : '••••••••';
+    $('ag-account-show').textContent = hidden ? 'Hide' : 'Show';
+});
+$('ag-account-copy').addEventListener('click', async () => {
+    if (!agAccount) return;
+    toast((await copyText(agAccount.password)) ? 'Password copied.' : 'Could not reach the clipboard.', '');
 });

@@ -57,6 +57,7 @@ export const STACK_CONTAINERS = [
     { key: 'jellyfin', label: 'jellyfin', name: JELLYFIN_CONTAINER },
     { key: 'mealplan', label: 'family hub', name: MEALPLAN_CONTAINER },
     { key: 'minecraft', label: 'minecraft', name: MINECRAFT_CONTAINER },
+    { key: 'adguard', label: 'adguard home', name: 'quickstart-home-adguard' },
     { key: 'kachat', label: 'kachat nextcloud', name: 'quickstart-home-kachat-nextcloud' },
     { key: 'kachat-db', label: 'kachat mariadb', name: 'quickstart-home-kachat-db' },
     { key: 'kachat-redis', label: 'kachat redis', name: 'quickstart-home-kachat-redis' },

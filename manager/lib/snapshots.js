@@ -108,6 +108,15 @@ export const SERVICES = [
         pauseSaving: true,
     },
     {
+        key: 'adguard',
+        label: 'AdGuard Home',
+        what: 'Its settings, the devices you have named and what each may do, and your allow and block lists. Not the blocklists themselves, which it downloads again, nor the record of lookups.',
+        volume: 'quickstart-home-adguard-data',
+        items: ['.'],
+        exclude: ['./data/filters', './data/querylog.json*', './data/stats.db'],
+        app: 'quickstart-home-adguard',
+    },
+    {
         key: 'panel',
         label: 'Panel settings',
         what: 'The panel\'s passwords and every app\'s settings, the Cloudflare and Mullvad connections (.env and conf). Anyone holding the drive can read these.',
