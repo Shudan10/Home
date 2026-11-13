@@ -248,6 +248,10 @@ app's: Check all apps, an Update button per app, and Update all, which lines
 them up in the Update Queue one after another (and says first if one of them
 is a new major version, which cannot be rolled back).
 
+Family Hub is part of this repository (`familyhub/`), so a new version of it
+comes with the panel's update, which rebuilds it when it is installed. Its own
+Update button only rebuilds it on a newer Node image underneath.
+
 ## Where things live
 
 Everything is in one directory (`~/.quickstart-home` by default):
@@ -256,6 +260,7 @@ Everything is in one directory (`~/.quickstart-home` by default):
 docker-compose.yml     the stack
 manager/               the control panel (Node, no dependencies)
 nextcloud/             the Nextcloud image build
+familyhub/             Family Hub, built here into its image
 conf/                  generated state: settings, port and mount overrides,
                        build records
 .env                   generated secrets, app passwords and tokens, and the

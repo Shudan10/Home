@@ -27,13 +27,7 @@ export const APPS = {
     nextcloud: {
         label: 'Nextcloud',
         // Built from the local nextcloud/Dockerfile on top of the official
-        // `nextcloud:stable` image, so there is no git ref behind it and
-        // "commits behind" is not a question that has an answer here. An app
-        // whose compose build context is `<repo>.git#<ref>` sets `repo` and
-        // flips this on, and then the branch pickers and upstream checks in
-        // this file apply to it.
-        tracksRepo: false,
-        repo: null,
+        // `nextcloud:stable` image.
         profile: 'nextcloud',
         services: ['nextcloud-db', 'nextcloud-redis', 'nextcloud-imaginary', 'nextcloud'],
         container: 'quickstart-home-nextcloud',
@@ -50,9 +44,7 @@ export const APPS = {
     jellyfin: {
         label: 'Jellyfin',
         // Pulled, not built: upstream publishes an official image and nobody
-        // builds a media server from source, so there is no ref behind this.
-        tracksRepo: false,
-        repo: null,
+        // builds a media server from source.
         profile: 'jellyfin',
         services: ['jellyfin'],
         container: 'quickstart-home-jellyfin',
@@ -67,10 +59,9 @@ export const APPS = {
 
     mealplan: {
         label: 'Family Hub',
-        // Built from its own repository, so the branch pickers and upstream
-        // checks in this file apply to it -- the only app here that they do.
-        tracksRepo: true,
-        repo: 'Shudan10/MealPlan',
+        // Built here from familyhub/, which comes with the panel: its code is
+        // updated by the panel's own Update. What its Update button checks is
+        // the Node image underneath, the way Nextcloud's checks its base.
         profile: 'mealplan',
         services: ['mealplan'],
         container: 'quickstart-home-mealplan',
@@ -88,8 +79,6 @@ export const APPS = {
         // Pulled, not built: itzg/minecraft-server is the image nearly every
         // self-hosted server runs, and it fetches the server itself (Paper) and
         // the Bedrock bridge (Geyser and Floodgate) when it starts.
-        tracksRepo: false,
-        repo: null,
         profile: 'minecraft',
         services: ['minecraft'],
         container: 'quickstart-home-minecraft',
@@ -155,7 +144,6 @@ export const DEFAULT_APPS_CONFIG = {
     },
     mealplan: {
         enabled: false,
-        ref: 'main',
         publish: { web: true },
         hostPort: 8083,
     },
@@ -508,12 +496,6 @@ export function validateAppsConfig(input, { lockedAdminUser = null } = {}) {
     cfg.mealplan.enabled = Boolean(mp.enabled);
     cfg.mealplan.publish = { web: mp.publish?.web !== false };
 
-    // The ref is interpolated into a compose build context, so it has to stay
-    // inside what a git ref can contain.
-    const mpref = String(mp.ref ?? 'main').trim();
-    if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(mpref)) errors.push('That is not a valid branch or tag name.');
-    else cfg.mealplan.ref = mpref;
-
     const mport = Number(mp.hostPort ?? DEFAULT_APPS_CONFIG.mealplan.hostPort);
     const mtaken = reservedHostPorts().get(mport);
     // Checked against both of the other apps rather than just the previous one:
@@ -839,11 +821,6 @@ export function renderAppsPortsOverride(cfg) {
 
     if (composeDefines('mealplan')) {
         blocks.push('  mealplan:');
-        // The branch is part of the build context, so changing it here is what
-        // makes "track this branch" mean anything -- without it the panel would
-        // record a ref and keep rebuilding the same commit.
-        blocks.push('    build:');
-        blocks.push(`      context: https://github.com/${APPS.mealplan.repo}.git#${cfg.mealplan.ref}`);
         blocks.push('    ports:');
         if (cfg.mealplan.publish.web) {
             blocks.push(`      - "0.0.0.0:${cfg.mealplan.hostPort}:8080/tcp"`);
@@ -879,87 +856,7 @@ export function renderAppsPortsOverride(cfg) {
     return published;
 }
 
-// --------------------------------------------------------------- upstream --
-
-const ghHeaders = {
-    Accept: 'application/vnd.github+json',
-    'User-Agent': 'quickstart-home-manager',
-    'X-GitHub-Api-Version': '2022-11-28',
-};
-
-/**
- * The branches and tags a repository actually has, so the branch to track can
- * be picked from a list rather than typed from memory.
- *
- * GitHub allows sixty unauthenticated calls an hour per address, and this costs
- * two of them, so the answer is held for a while. Refreshing is an explicit
- * action in the panel rather than something that happens on every page load.
- */
-const refsCache = new Map();
-const REFS_CACHE_MS = 10 * 60_000;
-
-async function ghList(url, take) {
-    const res = await fetch(url, { headers: ghHeaders, signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) {
-        const hint = res.status === 403 ? ' (GitHub rate limit, try again shortly)' : '';
-        throw new Error(`GitHub returned ${res.status}${hint}`);
-    }
-    return (await res.json()).map(take);
-}
-
-export async function listRefs(name, { force = false } = {}) {
-    const app = APPS[name];
-    if (!app) throw new Error(`Unknown app "${name}".`);
-    if (!app.tracksRepo) throw new Error(`${app.label} is not built from a git repository.`);
-
-    const hit = refsCache.get(name);
-    if (!force && hit && Date.now() - hit.at < REFS_CACHE_MS) return hit.value;
-
-    const base = `https://api.github.com/repos/${app.repo}`;
-    // Tags are a nice-to-have; a repository with none is normal, and a failure
-    // to list them should not cost the branches too.
-    const [branches, tags] = await Promise.all([
-        ghList(`${base}/branches?per_page=100`, (b) => b.name),
-        ghList(`${base}/tags?per_page=100`, (t) => t.name).catch(() => []),
-    ]);
-
-    const value = { repo: app.repo, branches, tags };
-    refsCache.set(name, { at: Date.now(), value });
-    return value;
-}
-
-/**
- * How far the tracked branch has moved since the running image was built. These
- * projects publish no releases, so the honest unit is "commits behind", not a
- * version number.
- */
-export async function checkUpstream(name, cfg) {
-    const app = APPS[name];
-    if (!app) throw new Error(`Unknown app "${name}".`);
-    if (!app.tracksRepo) throw new Error(`${app.label} is not built from a git repository.`);
-    const ref = cfg[name].ref;
-
-    const res = await fetch(`https://api.github.com/repos/${app.repo}/commits/${encodeURIComponent(ref)}`, {
-        headers: ghHeaders,
-        signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) {
-        const hint = res.status === 403 ? ' (GitHub API rate limit - try again shortly)' : '';
-        throw new Error(`GitHub returned ${res.status} for ${app.repo}@${ref}${hint}`);
-    }
-    const commit = await res.json();
-
-    return {
-        repo: app.repo,
-        ref,
-        latestSha: commit.sha,
-        shortSha: String(commit.sha).slice(0, 7),
-        message: (commit.commit?.message || '').split('\n')[0].slice(0, 200),
-        author: commit.commit?.author?.name || null,
-        date: commit.commit?.author?.date || null,
-        url: commit.html_url,
-    };
-}
+// ----------------------------------------------------------- build record --
 
 /** The commit an image was actually built from, if the build recorded one. */
 export function buildRecordFile(name) {
@@ -1105,6 +1002,15 @@ export async function syncTrustedDomains(docker, cfg, onLine = () => {}) {
 
 /** The Docker Hub tag an app is made from. */
 async function upstreamImage(name, docker) {
+    if (name === 'mealplan') {
+        // Family Hub's FROM names an exact Node and Alpine, so this only finds
+        // that tag rebuilt upstream -- security fixes underneath. Moving to a
+        // newer Node is a change to its Dockerfile, which comes with the panel.
+        const file = path.join(path.dirname(COMPOSE_FILE), 'familyhub', 'Dockerfile');
+        const from = resolveFrom(fs.readFileSync(file, 'utf8'), readEnvFile());
+        if (from) return from;
+        throw new Error('Could not read the image Family Hub is built on from its Dockerfile.');
+    }
     if (name === 'nextcloud') {
         // Read from the Dockerfile rather than written down here a second time,
         // so the check follows the FROM if it is ever changed.
@@ -1167,6 +1073,7 @@ export function resolveFrom(dockerfile, env = {}) {
 function imageVersions(name, env, labels) {
     if (name === 'nextcloud') return [['PHP', env.PHP_VERSION], ['Nextcloud', env.NEXTCLOUD_VERSION]];
     if (name === 'jellyfin') return [['Jellyfin', labels['org.opencontainers.image.version']]];
+    if (name === 'mealplan') return [['Node', env.NODE_VERSION]];
     // The image's own version, not Minecraft's: the game is downloaded by the
     // container when it starts, so no image says which one it will be.
     if (name === 'minecraft') return [['Java', env.JAVA_VERSION]];

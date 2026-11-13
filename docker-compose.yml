@@ -239,15 +239,15 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
-  # ---- Meal Plan ------------------------------------------------------------
-  # Built from its own repository rather than pulled: it is part of this project
-  # but lives separately, so the panel tracks a branch of it the same way it
-  # tracks its own. The override file rewrites this context when the ref is
-  # changed; the value here is the default a bare `docker compose` would use.
+  # ---- Family Hub -----------------------------------------------------------
+  # Built from familyhub/ in this repository, like Nextcloud from nextcloud/, so
+  # it arrives with the panel: the panel's own Update replaces these files and
+  # rebuilds it. The service, container and volume keep the name Meal Plan had,
+  # so an install that already has its data goes on finding it.
   mealplan:
     image: quickstart-home/mealplan:1
     build:
-      context: https://github.com/Shudan10/MealPlan.git#${MEALPLAN_REF:-main}
+      context: ./familyhub
     container_name: quickstart-home-mealplan
     hostname: mealplan
     profiles: ["mealplan"]

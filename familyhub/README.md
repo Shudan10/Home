@@ -87,8 +87,10 @@ installs keep their data; only the name on screen changed.
 
 ## Running it
 
-Normally this is installed and managed by the Quick Start Home panel, which
-builds the image, sets the password and publishes it. To run it directly:
+It lives in the `familyhub/` folder of Quick Start Home, and is normally
+installed and managed by its panel, which builds the image, sets the password
+and publishes it; the panel's own Update brings new versions. To run it
+directly, from this folder:
 
 ```bash
 docker build -t mealplan .

@@ -367,7 +367,7 @@ dc() {
 # Exactly the set the panel's own Update replaces (CODE_ITEMS in
 # manager/lib/selfservice.js) and dev.sh copies. Keep the three in step: an item
 # one of them forgets is an item that silently stops being updated.
-CODE_ITEMS="docker-compose.yml manager nextcloud uninstall.sh dev.sh README.md"
+CODE_ITEMS="docker-compose.yml manager nextcloud familyhub uninstall.sh dev.sh README.md"
 
 # Hands back anything under the stack directory that the person running this
 # does not own.

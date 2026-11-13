@@ -85,24 +85,11 @@ function noteApp(name, r) {
  * here, so the banner and the Updates tab cannot disagree.
  */
 export async function checkApp(name) {
-    let result;
-    // Nextcloud and Jellyfin come from a Docker Hub tag, not a repository: for
-    // them "up to date" means built on what that tag points at now.
-    if (!apps.APPS[name].tracksRepo) {
-        result = { kind: 'image', ...(await apps.checkBaseImage(name, docker)) };
-    } else {
-        const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());
-        const built = apps.readBuildRecord(name);
-        result = {
-            ...upstream,
-            builtSha: built.sha,
-            builtAt: built.builtAt,
-            // No published releases upstream, so "up to date" means the running
-            // image was built from the commit the branch currently points at.
-            updateAvailable: Boolean(built.sha) && built.sha !== upstream.latestSha,
-            neverBuilt: !built.sha,
-        };
-    }
+    // Every app is made from a Docker Hub image: pulled as it is, or the base
+    // of the one built here. "Up to date" means built on what that tag points
+    // at now. Family Hub's own code comes with the panel, so it is the panel's
+    // update that brings a new version of that.
+    const result = { kind: 'image', ...(await apps.checkBaseImage(name, docker)) };
     noteApp(name, result);
     return result;
 }

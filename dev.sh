@@ -69,7 +69,7 @@ dc() {
 # that `sync` leaves the install exactly as a re-install or an Update would.
 # dev.sh was missing here, which left the install directory's copy of this
 # script as whatever the last real install put there.
-STACK_ITEMS="docker-compose.yml manager nextcloud uninstall.sh dev.sh README.md"
+STACK_ITEMS="docker-compose.yml manager nextcloud familyhub uninstall.sh dev.sh README.md"
 
 # Hands back anything in the install directory this user does not own --
 # root's, usually, from an in-panel Update before it learned to chown what it

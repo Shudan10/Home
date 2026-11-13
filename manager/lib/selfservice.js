@@ -160,7 +160,7 @@ const REF_RE = /^(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/;
 // state, so it is not listed: wiping it would cost real work to get back. An
 // old proxy/ directory from before the tunnel is left where it is, for the
 // same reason -- it may hold certificates somebody wants to keep.
-const CODE_ITEMS = ['docker-compose.yml', 'manager', 'nextcloud', 'uninstall.sh', 'dev.sh', 'README.md'];
+const CODE_ITEMS = ['docker-compose.yml', 'manager', 'nextcloud', 'familyhub', 'uninstall.sh', 'dev.sh', 'README.md'];
 
 const ghHeaders = {
     Accept: 'application/vnd.github+json',
@@ -350,6 +350,31 @@ for item in $staged; do rm -rf "$D/$item.old"; done
 
 step "Rebuilding the panel image"
 ${compose} build manager || fail "The panel image did not build. The old panel is still running."
+
+# Family Hub's code comes in familyhub/, so it is rebuilt here too -- but only
+# where it is installed, and never at the cost of the panel's own update: a
+# build that fails leaves Family Hub running the version it had.
+#
+# Built from the base compose file alone. The override in use was written by
+# the panel being replaced, and one from before Family Hub moved here still
+# points its build at the old repository. The new panel writes a fresh one when
+# it starts; ports and the rest come from it when the container is recreated,
+# which is why that step uses the full set and --no-build.
+if docker inspect quickstart-home-mealplan >/dev/null 2>&1; then
+  step "Rebuilding Family Hub"
+  if docker compose -f "$D/docker-compose.yml" --project-directory "$D" --profile mealplan build mealplan; then
+    if [ "$(docker inspect -f '{{.State.Running}}' quickstart-home-mealplan 2>/dev/null)" = true ]; then
+      ${compose} --profile mealplan up -d --no-deps --no-build mealplan \\
+        || echo "  Family Hub built, but did not restart on it. Restarting it from its page picks up the new version."
+    else
+      # Stopped stays stopped; recreated so it runs the new build when started.
+      ${compose} --profile mealplan create --no-build mealplan \\
+        || echo "  Family Hub built, but its stopped container was not replaced. Its Update button does that."
+    fi
+  else
+    echo "  Family Hub did not build, so it keeps running the version it had. Its Update button tries again."
+  fi
+fi
 
 step "Restarting the panel"
 echo "result=ok" >> "$S"

@@ -676,26 +676,22 @@
       <div id="sub-mealplan-updates" class="subtab">
         <div class="grid">
           <article class="card span2">
-            <h3>Source</h3>
+            <h3>Updates</h3>
             <p class="muted">
-              Family Hub is built from its own repository,
-              <code>Shudan10/MealPlan</code>. Pick the branch or tag to build
-              from; <code>main</code> is the one to stay on unless you are
-              testing something.
+              Family Hub's code comes with the control panel, so a new version of
+              it arrives when you click <b>Update the panel</b>. Updating here
+              rebuilds it on the newest version of the Node image underneath it,
+              which is where security fixes for the system it runs on come from.
             </p>
-            <label class="inline">Branch or tag
-              <input id="mealplan-ref" list="mealplan-refs" autocomplete="off" placeholder="main">
-            </label>
-            <datalist id="mealplan-refs"></datalist>
             <div id="mealplan-build" class="verdict"></div>
             <div class="row">
               <button type="button" id="mealplan-check" class="ghost">Check for update</button>
               <button type="button" id="mealplan-update" class="primary" disabled>Update Family Hub</button>
             </div>
-            <p class="status-line" id="mealplan-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against GitHub every hour. Check for update asks right now.</span></span></p>
+            <p class="status-line" id="mealplan-check-status"><span class="status-dot"></span><span class="status-body"><span class="status-head">Checked against Docker Hub every hour. Check for update asks right now.</span></span></p>
             <p class="hint">
-              Your meals and planned weeks live in a Docker volume, so a rebuild
-              never touches them.
+              The family, its calendar, reminders and meals live in a Docker
+              volume, so a rebuild never touches them.
             </p>
           </article>
         </div>
@@ -1916,10 +1912,11 @@
           <article class="card span2">
             <h3>Update the control panel</h3>
             <p class="muted">
-              This updates the panel itself, not the apps it runs. It downloads the
-              latest files, rebuilds the panel image and restarts it. Your
-              settings, your Cloudflare connection and app data are untouched, and everything
-              else keeps running throughout.
+              This updates the panel itself and Family Hub, whose code comes with
+              it. It downloads the latest files, rebuilds the panel image and
+              restarts it, and rebuilds Family Hub if it is installed. Your
+              settings, your Cloudflare connection and app data are untouched,
+              and the other apps keep running throughout.
             </p>
             <dl class="kv">
               <div><dt>Installed</dt><dd id="global-panel-version">–</dd></div>

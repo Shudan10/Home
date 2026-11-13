@@ -1358,9 +1358,6 @@ async function refreshStatus() {
 
 let appsState = null;
 
-/* Loaded once per page load rather than on every poll: see loadApps. */
-let mealPlanRefsLoaded = false;
-
 /*
  * Settings somebody has changed and not yet applied.
  *
@@ -1382,7 +1379,7 @@ const formFields = (name) =>
     ({
         nextcloud: ['nextcloud-pub-web', 'nextcloud-port', 'nextcloud-user', 'nextcloud-domains'],
         jellyfin: ['jellyfin-pub-web', 'jellyfin-port', 'jellyfin-hwaccel'],
-        mealplan: ['mealplan-pub-web', 'mealplan-port', 'mealplan-ref'],
+        mealplan: ['mealplan-pub-web', 'mealplan-port'],
         minecraft: [...Object.values(MC_CHECKS), ...Object.values(MC_FIELDS)],
         backup: [
             'backup-destination', 'snap-enabled', 'snap-keep',
@@ -1463,19 +1460,9 @@ async function loadApps() {
     if (!isDirty('mealplan')) {
         $('mealplan-pub-web').checked = c.mealplan?.publish?.web !== false;
         $('mealplan-port').value = c.mealplan?.hostPort ?? 8083;
-        // Only set when the field is not being typed in, so a reload landing
-        // mid-edit does not overwrite what somebody is halfway through.
-        if (document.activeElement !== $('mealplan-ref')) $('mealplan-ref').value = c.mealplan?.ref ?? 'main';
     }
     renderAppState('mealplan', r.apps.mealplan);
     loadMealPlanPassword();
-    // Once per page load. loadApps runs on a timer, and the refs call reaches
-    // GitHub -- cached server side, but there is no reason to ask repeatedly
-    // for a list of branches that changes about never.
-    if (!mealPlanRefsLoaded) {
-        mealPlanRefsLoaded = true;
-        loadMealPlanRefs();
-    }
 
     // --- Minecraft ---
     if (!isDirty('minecraft')) fillMinecraftSettings(c.minecraft ?? {});
@@ -1871,9 +1858,7 @@ function renderAppState(name, state) {
 
         const build = $('mealplan-build');
         build.textContent = state.build?.builtAt
-            ? `Built ${new Date(state.build.builtAt).toLocaleString()}${
-                  state.build.ref ? ` from ${state.build.ref}` : ''
-              }.`
+            ? `Built ${new Date(state.build.builtAt).toLocaleString()}.`
             : 'Not built yet.';
     }
 
@@ -2030,7 +2015,6 @@ function collectAppConfig(name) {
     if (name === 'mealplan') {
         return {
             enabled: Boolean(appsState?.config?.mealplan?.enabled),
-            ref: $('mealplan-ref')?.value.trim() || appsState?.config?.mealplan?.ref || 'main',
             publish: { web: $('mealplan-pub-web').checked },
             hostPort: Number($('mealplan-port').value),
         };
@@ -2178,7 +2162,7 @@ for (const name of APP_KEYS) {
         }
         if (result?.ok) {
             setAppStatus(name, 'current',
-                name === 'mealplan' ? 'Built from the newest commit' : 'Updated to the newest image',
+                'Updated to the newest image',
                 'Check again whenever you want to know if it has moved on.');
             loadUpdateBanner();
         }
@@ -2242,10 +2226,9 @@ $('mealplan-password-save').addEventListener('click', async () => {
 function setAppStatus(name, state, head, detail) {
     setUpdateStatus(state, head, detail, `${name}-check-status`);
 }
-const setMealPlanStatus = (state, head, detail) => setAppStatus('mealplan', state, head, detail);
 
 /*
- * Both of these leave the button off while its own rebuild is queued or
+ * This leaves the button off while its own rebuild is queued or
  * running (isHeld): a Check pressed meanwhile still says what it found, and
  * lighting the button under a rebuild already in hand is how the same rebuild
  * got queued twice.
@@ -2281,25 +2264,6 @@ function renderImageCheck(name, r) {
     update.disabled = isHeld(update.id);
 }
 
-function renderRepoCheck(name, r) {
-    const label = appsState?.apps?.[name]?.label ?? name;
-    const update = $(`${name}-update`);
-    const when = r.date ? new Date(r.date).toLocaleString() : 'unknown date';
-    if (r.neverBuilt) {
-        // Nothing recorded to compare against, which is every install that has
-        // not built it yet. "Up to date" here would be a guess.
-        setAppStatus(name, null, `${r.ref} is at ${r.shortSha} (${when}).`,
-            `This install has not built ${label} yet, so there is nothing to compare it against.`);
-        update.disabled = isHeld(update.id);
-    } else if (r.updateAvailable) {
-        setAppStatus(name, 'update', 'Update available', `${r.shortSha}\n${r.message}`);
-        update.disabled = isHeld(update.id);
-    } else {
-        setAppStatus(name, 'current', 'Up to date', `${r.ref} · ${r.shortSha} · ${when}`);
-        update.disabled = true;
-    }
-}
-
 for (const name of APP_KEYS) {
     $(`${name}-check`)?.addEventListener('click', async () => {
         const button = $(`${name}-check`);
@@ -2307,8 +2271,7 @@ for (const name of APP_KEYS) {
         setAppStatus(name, 'checking', 'Checking…');
         try {
             const r = await api(`/api/apps/${name}/check`);
-            if (r.kind === 'image') renderImageCheck(name, r);
-            else renderRepoCheck(name, r);
+            renderImageCheck(name, r);
         } catch (e) {
             setAppStatus(name, 'error', 'Could not check', e.message);
         } finally {
@@ -2316,33 +2279,6 @@ for (const name of APP_KEYS) {
             loadUpdateBanner();
         }
     });
-}
-
-// A different branch is a different question, so the last answer no longer
-// applies and the button goes back to needing a check -- unless the branch is
-// being moved to, which is itself a reason to rebuild.
-$('mealplan-ref').addEventListener('input', () => {
-    const changed = $('mealplan-ref').value.trim() !== (appsState?.config?.mealplan?.ref ?? 'main');
-    // Never switched on under a rebuild that is already queued or running.
-    $('mealplan-update').disabled = isHeld('mealplan-update') || !changed;
-    setMealPlanStatus(null, changed
-        ? 'Branch changed. Updating will build from it.'
-        : 'Checked against GitHub every hour. Check for update asks right now.');
-});
-
-/* The branches and tags the repository actually has, offered as a datalist
-   rather than a select: the field still accepts a commit-ish the list does not
-   know about, which is what makes testing a fork possible. */
-async function loadMealPlanRefs() {
-    try {
-        const { branches = [], tags = [] } = await api('/api/apps/mealplan/refs');
-        $('mealplan-refs').innerHTML = [...branches, ...tags]
-            .map((r) => `<option value="${escapeHtml(r)}"></option>`)
-            .join('');
-    } catch {
-        /* GitHub being unreachable or rate limited is not worth a message: the
-           field works perfectly well without suggestions. */
-    }
 }
 
 // Restart, and whatever else gets one of these later. The same container

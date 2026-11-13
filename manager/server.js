@@ -165,26 +165,11 @@ const isLoopbackBind = () => ['127.0.0.1', '::1', 'localhost'].includes(managerB
 const BUILDABLE_SERVICES = new Set(['nextcloud', 'mealplan']);
 
 /**
- * Notes when an app's image was built, and from what.
- *
- * For an app built from a git ref that is the commit, so "commits behind" can
- * be answered later. For one built from a published base image there is no
- * commit to record and pretending otherwise puts a meaningless sha on screen,
- * so only the date is kept.
+ * Notes when an app's image was built. Every app is built on, or pulled as, a
+ * published image, so there is no commit to record: only the date is kept.
  */
-async function recordBuild(name, settings, onLine = () => {}) {
-    const app = apps.APPS[name];
-    if (!app.tracksRepo) {
-        apps.writeBuildRecord(name, { sha: null, ref: null, builtAt: new Date().toISOString() });
-        return;
-    }
-    try {
-        const upstream = await apps.checkUpstream(name, apps.loadAppsConfig());
-        apps.writeBuildRecord(name, { sha: upstream.latestSha, ref: settings.ref, builtAt: new Date().toISOString() });
-        onLine(`Built from ${upstream.shortSha}.`);
-    } catch (err) {
-        onLine(`Could not record the upstream commit: ${err.message}`);
-    }
+async function recordBuild(name) {
+    apps.writeBuildRecord(name, { sha: null, ref: null, builtAt: new Date().toISOString() });
 }
 
 /**
@@ -411,7 +396,7 @@ async function applyAppConfig(name, onLine = () => {}) {
     onLine('Starting containers...');
     await dockerctl.compose(['up', '-d', ...app.services], { onLine, profile: app.profile, timeoutMs: 20 * 60_000 });
 
-    await recordBuild(name, settings, onLine);
+    await recordBuild(name);
 
     // Nextcloud reads its trusted domains only while installing, so a change
     // made later has to be applied to the running instance or it silently does
@@ -1096,8 +1081,6 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
         ]);
         state[name] = {
             label: app.label,
-            repo: app.repo,
-            tracksRepo: Boolean(app.tracksRepo),
             container,
             published,
             build: apps.readBuildRecord(name),
@@ -1208,14 +1191,6 @@ route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)$/, async (re
         }
     }, { key: `apply:${name}`, app: name });
     sendJson(res, 202, { ok: true, jobId: job.id, config: cfg });
-});
-
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan)\/refs$/, async (req, res, match, url) => {
-    try {
-        sendJson(res, 200, await apps.listRefs(match[1], { force: url.searchParams.get('force') === '1' }));
-    } catch (err) {
-        fail(res, 502, err.message);
-    }
 });
 
 route('GET', /^\/api\/apps\/nextcloud\/admin$/, async (req, res) => {
@@ -1366,7 +1341,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, 
             });
             onLine(`${app.label} is stopped, so it stays stopped. It runs the new image when you start it.`);
         }
-        await recordBuild(name, cfg[name], onLine);
+        await recordBuild(name);
         await updates.rescan(name);
     }, { app: name });
     sendJson(res, 202, { ok: true, jobId: job.id });
@@ -1658,7 +1633,7 @@ route('POST', /^\/api\/services\/([a-z-]+)\/install$/, async (req, res, match) =
         // record. Without this the Updates tab says "not built yet" about an
         // app that was just built.
         if (apps.APPS[key]) {
-            await recordBuild(key, appsCfg[key], onLine);
+            await recordBuild(key);
             await updates.rescan(key);
         }
     }, { app: key });
