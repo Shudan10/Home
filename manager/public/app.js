@@ -5351,7 +5351,7 @@ $('global-check-btn').addEventListener('click', async () => {
             // The headline is the same three words every time, so it is
             // recognisable at a glance; the sha and subject go underneath.
             setUpdateStatus('update', 'Update available',
-                `${r.latest.shortSha}${ahead}\n${r.latest.message}`);
+                r.unfinished || `${r.latest.shortSha}${ahead}\n${r.latest.message}`);
         } else {
             // No recorded sha, which is every install that has not used this
             // button yet. Saying "up to date" here would be a guess.

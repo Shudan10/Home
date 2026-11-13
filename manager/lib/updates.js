@@ -1,4 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { docker } from './dockerctl.js';
+import { STACK_LOCAL } from './paths.js';
 import * as apps from './apps.js';
 import * as lifecycle from './lifecycle.js';
 import * as selfservice from './selfservice.js';
@@ -27,13 +30,24 @@ function panelSource() {
     return { repo: last?.repo || selfservice.STACK_REPO, ref: last?.ref || 'main' };
 }
 
+/**
+ * Whether Family Hub's files are missing from the stack directory.
+ *
+ * It moved into this repository, and the update that brought that news was run
+ * by the panel before it, whose list of folders to copy had no familyhub/ in
+ * it. One more update, run by this panel, brings it -- so until then the panel
+ * is not up to date, whatever the commit says.
+ */
+const familyHubMissing = () => !fs.existsSync(path.join(STACK_LOCAL, 'familyhub'));
+const FAMILY_HUB_NOTE = 'Family Hub moved into the control panel. Update the panel once more to bring its files in and rebuild it.';
+
 function notePanel(r) {
     const last = selfservice.lastUpdate();
     if (r.upToDate === true) return found.delete('panel');
 
     const behind = r.compare?.behind ? ` · ${r.compare.behind} commit${r.compare.behind === 1 ? '' : 's'} behind` : '';
     let head = 'Control panel update available';
-    let detail = `${r.latest.shortSha}${behind}\n${r.latest.message}`;
+    let detail = r.unfinished || `${r.latest.shortSha}${behind}\n${r.latest.message}`;
     if (last && !last.ok) {
         head = 'The last control panel update failed';
         detail = last.error || 'No reason was recorded.';
@@ -101,11 +115,13 @@ export async function checkPanel({ repo, ref }) {
     // Only meaningful once something has recorded which commit is installed. A
     // failed update records the commit it was trying for, which is not installed.
     const known = installed?.ok && installed.repo === repo ? installed.sha : null;
+    const unfinished = familyHubMissing() ? FAMILY_HUB_NOTE : null;
     const result = {
         latest,
         installedSha: known || null,
-        upToDate: known ? known === latest.sha : null,
+        upToDate: unfinished ? false : known ? known === latest.sha : null,
         compare: known ? await selfservice.compareToInstalled({ repo, base: known, head: latest.sha }) : null,
+        unfinished,
     };
     const source = panelSource();
     if (source.repo === repo && source.ref === ref) notePanel(result);
