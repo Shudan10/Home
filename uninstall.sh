@@ -145,7 +145,6 @@ confirm "Proceed?" || { echo "Nothing was removed."; exit 0; }
 # before any of it is removed.
 JELLYFIN_TAG="$(tag_from_env JELLYFIN_VERSION latest)"
 MINECRAFT_TAG="$(tag_from_env MINECRAFT_IMAGE_VERSION latest)"
-ADGUARD_TAG="$(tag_from_env ADGUARD_VERSION latest)"
 TUNNEL_TAG="$(tag_from_env TUNNEL_VERSION 2026.10.7)"
 NEXTCLOUD_TAG="$(tag_from_env NEXTCLOUD_TAG stable)"
 GUI_PORT_IN_USE="$(env_get GUI_PORT 8420)"
@@ -225,7 +224,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         # compose and their containers and volumes are left behind as orphans.
         # Jellyfin and Meal Plan were missing here, so an uninstall left both
         # running, with their data. Minecraft is in the list for the same reason.
-        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile adguard --profile tunnel --profile mullvad --profile kachat down --remove-orphans --rmi local)
+        down=(--profile nextcloud --profile jellyfin --profile mealplan --profile minecraft --profile tunnel --profile mullvad --profile kachat down --remove-orphans --rmi local)
         [ "$KEEP_DATA" = "1" ] || down+=(--volumes)
         d compose "${compose_files[@]}" --project-directory "$STACK_DIR" "${down[@]}" 2>/dev/null \
             || warn "compose down reported an error; removing objects individually."
@@ -246,7 +245,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
                quickstart-home-kachat-nextcloud quickstart-home-kachat-db quickstart-home-kachat-redis \
                quickstart-home-nextcloud quickstart-home-nextcloud-db \
                quickstart-home-nextcloud-redis quickstart-home-nextcloud-imaginary \
-               quickstart-home-jellyfin quickstart-home-mealplan quickstart-home-minecraft quickstart-home-adguard \
+               quickstart-home-jellyfin quickstart-home-mealplan quickstart-home-minecraft \
                quickstart-home-proxy \
                quickstart-home-panel-update quickstart-home-panel-restart quickstart-home-teardown; do
         d container inspect "$name" >/dev/null 2>&1 || continue
@@ -274,7 +273,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         for image in "cloudflare/cloudflared:$TUNNEL_TAG" tailscale/tailscale:v1.104 \
                      node:22-alpine alpine:3.21 docker:29.9.3-cli \
                      mariadb:10.11 redis:7-alpine nextcloud/aio-imaginary:latest "nextcloud:$NEXTCLOUD_TAG" \
-                     "jellyfin/jellyfin:$JELLYFIN_TAG" "itzg/minecraft-server:$MINECRAFT_TAG" "adguard/adguardhome:$ADGUARD_TAG" \
+                     "jellyfin/jellyfin:$JELLYFIN_TAG" "itzg/minecraft-server:$MINECRAFT_TAG" \
                      nginx:1.27-alpine certbot/certbot:latest docker:cli; do
             d image inspect "$image" >/dev/null 2>&1 || continue
             if d rmi "$image" >/dev/null 2>&1; then
@@ -293,7 +292,7 @@ if command -v docker >/dev/null 2>&1 && d info >/dev/null 2>&1; then
         # Keep in step with VOLUMES in manager/lib/selfservice.js.
         volumes=" quickstart-home-nextcloud-db-data quickstart-home-nextcloud-data \
 quickstart-home-jellyfin-config quickstart-home-jellyfin-cache quickstart-home-mealplan-data \
-quickstart-home-minecraft-data quickstart-home-adguard-data quickstart-home-mullvad-tailscale \
+quickstart-home-minecraft-data quickstart-home-mullvad-tailscale \
 quickstart-home-kachat-data quickstart-home-kachat-db-data "
         while read -r v; do
             [ -n "$v" ] || continue

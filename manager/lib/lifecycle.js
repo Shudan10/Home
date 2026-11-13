@@ -73,20 +73,6 @@ export const UNITS = {
         buildable: ['mealplan'],
         data: 'the family, the calendar, the chores, the meal library and every week that has been planned',
     },
-    adguard: {
-        label: 'AdGuard Home',
-        profile: 'adguard',
-        services: ['adguard'],
-        containers: ['quickstart-home-adguard'],
-        primary: 'quickstart-home-adguard',
-        volumes: ['quickstart-home-adguard-data'],
-        // Pulled from Docker Hub, and the tag may be shared with anything else
-        // on the machine running it, so never removed.
-        images: [],
-        buildable: [],
-        pullable: ['adguard'],
-        data: 'its settings, the devices you have named, your lists and the last week of lookups',
-    },
     minecraft: {
         label: 'Minecraft',
         profile: 'minecraft',

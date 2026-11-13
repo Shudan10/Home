@@ -23,7 +23,6 @@ import * as mullvad from './lib/mullvad.js';
 import * as kachat from './lib/kachat.js';
 import * as lifecycle from './lib/lifecycle.js';
 import * as minecraft from './lib/minecraft.js';
-import * as adguard from './lib/adguard.js';
 import * as updates from './lib/updates.js';
 import { jobs, requestContext } from './lib/jobs.js';
 import {
@@ -174,22 +173,6 @@ async function recordBuild(name) {
 }
 
 /**
- * This machine's address on the home network, which AdGuard Home's DNS is
- * published on: every device is told to ask there. Saved with the app's
- * settings, so the override written at boot carries it too.
- */
-async function refreshAdguardAddress(onLine = () => {}) {
-    const ip = await host.lanAddress().catch(() => null);
-    const cfg = apps.loadAppsConfig();
-    if (!ip || cfg.adguard.dnsAddress === ip) return false;
-    cfg.adguard.dnsAddress = ip;
-    apps.saveAppsConfig(cfg);
-    apps.renderAppsPortsOverride(cfg);
-    onLine(`AdGuard Home will answer on ${ip}, this machine's address on the home network.`);
-    return true;
-}
-
-/**
  * Applies the Nextcloud settings that only exist inside its own config.php.
  *
  * Trusted domains and the preview providers are both written by the image
@@ -336,7 +319,6 @@ async function reconcileNextcloud(onLine = () => {}) {
  */
 async function applyAppConfig(name, onLine = () => {}) {
     const app = apps.APPS[name];
-    if (name === 'adguard') await refreshAdguardAddress(onLine);
     let cfg = apps.loadAppsConfig();
 
     // Which group owns each shared folder, so the container can be put in it.
@@ -421,7 +403,6 @@ async function applyAppConfig(name, onLine = () => {}) {
     // nothing. Failure here is worth reporting but not worth failing the job:
     // the container is up either way.
     if (name === 'nextcloud') await reconcileNextcloud(onLine);
-    if (name === 'adguard') await adguard.ensureSetUp(onLine);
 
     onLine(`${app.label} is up.`);
     return { enabled: true };
@@ -1031,7 +1012,6 @@ async function portsInUse() {
     for (const name of ['nextcloud', 'jellyfin', 'mealplan']) {
         if (cfg[name].publish?.web) add(cfg[name].hostPort, apps.APPS[name].label);
     }
-    if (cfg.adguard.publish?.web) add(cfg.adguard.hostPort, "AdGuard Home's page");
     add(cfg.minecraft.javaPort, 'Minecraft (Java Edition)');
     add(cfg.minecraft.bedrockPort, 'Minecraft (Bedrock Edition)');
 
@@ -1121,7 +1101,7 @@ route('GET', /^\/api\/apps$/, async (req, res) => {
     sendJson(res, 200, { config: cfg, apps: state });
 });
 
-route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)$/, async (req, res, match) => {
+route('PUT', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)$/, async (req, res, match) => {
     const name = match[1];
     const body = await readBody(req);
 
@@ -1271,7 +1251,7 @@ route('POST', /^\/api\/apps\/mealplan\/password$/, async (req, res) => {
     sendJson(res, 202, { ok: true, jobId: job.id, restarting: true });
 });
 
-route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)\/check$/, async (req, res, match) => {
+route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/check$/, async (req, res, match) => {
     try {
         sendJson(res, 200, await updates.checkApp(match[1]));
     } catch (err) {
@@ -1279,7 +1259,7 @@ route('GET', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)\/che
     }
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)\/update$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/update$/, async (req, res, match) => {
     const name = match[1];
     if (!apps.loadAppsConfig()[name].enabled) return fail(res, 409, `${apps.APPS[name].label} is switched off.`);
 
@@ -1367,7 +1347,7 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)\/up
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
 
-route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)\/(start|stop|restart)$/, async (req, res, match) => {
+route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft)\/(start|stop|restart)$/, async (req, res, match) => {
     const [, name, action] = match;
     const app = apps.APPS[name];
     if (action !== 'stop' && apps.appBlockers(name).length) {
@@ -1394,76 +1374,9 @@ route('POST', /^\/api\/apps\/(nextcloud|jellyfin|mealplan|minecraft|adguard)\/(s
         }
         await dockerctl.compose([...verb, ...app.services], { onLine, profile: app.profile, timeoutMs: 10 * 60_000 });
         if (name === 'nextcloud' && action !== 'stop') await reconcileNextcloud(onLine);
-        if (name === 'adguard' && action !== 'stop') await adguard.ensureSetUp(onLine);
     }, { key: `power:${name}:${action}`, app: name });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
-
-// ---------------------------------------------------------------- adguard --
-
-/*
- * The Home network page: AdGuard Home, controlled from here. Answered on the
- * spot rather than queued, like Minecraft's player lists -- each is one call to
- * AdGuard's own API, and "let the kids' tablet back on" should not wait behind
- * a rebuild. lib/adguard.js has the rest.
- */
-function adguardRoute(method, re, fn) {
-    route(method, re, async (req, res, match, url) => {
-        if (!apps.loadAppsConfig().adguard.enabled) return fail(res, 409, 'AdGuard Home is not installed.');
-        try {
-            const body = method === 'GET' ? {} : ((await readBody(req)) ?? {});
-            sendJson(res, 200, (await fn({ body, match, url })) ?? { ok: true });
-        } catch (err) {
-            const status = err instanceof adguard.AdGuardError ? err.status : 500;
-            fail(res, status, err.message, err.details ? { details: err.details } : {});
-        }
-    });
-}
-
-adguardRoute('GET', /^\/api\/adguard\/overview$/, () => adguard.overview());
-adguardRoute('POST', /^\/api\/adguard\/protection$/, ({ body }) =>
-    adguard.setProtection({ enabled: body.enabled === true, minutes: Number(body.minutes) || 0 }),
-);
-adguardRoute('GET', /^\/api\/adguard\/devices$/, () => adguard.devices());
-adguardRoute('GET', /^\/api\/adguard\/services$/, () => adguard.services());
-adguardRoute('POST', /^\/api\/adguard\/devices$/, ({ body }) => adguard.saveDevice(body));
-adguardRoute('POST', /^\/api\/adguard\/devices\/internet$/, async ({ body }) => {
-    await adguard.setInternet(String(body.name ?? ''), body.off === true);
-});
-adguardRoute('POST', /^\/api\/adguard\/devices\/forget$/, async ({ body }) => {
-    await adguard.forgetDevice(String(body.name ?? ''));
-});
-adguardRoute('GET', /^\/api\/adguard\/house$/, () => adguard.house());
-adguardRoute('PUT', /^\/api\/adguard\/house$/, ({ body }) => adguard.setHouse(body));
-adguardRoute('PUT', /^\/api\/adguard\/lists$/, async ({ body }) => {
-    await adguard.setList({ url: String(body.url ?? ''), enabled: body.enabled === true });
-});
-adguardRoute('POST', /^\/api\/adguard\/lists$/, async ({ body }) => {
-    await adguard.addList(body);
-});
-adguardRoute('POST', /^\/api\/adguard\/lists\/remove$/, async ({ body }) => {
-    await adguard.removeList(String(body.url ?? ''));
-});
-adguardRoute('POST', /^\/api\/adguard\/lists\/refresh$/, () => adguard.refreshLists());
-adguardRoute('POST', /^\/api\/adguard\/domains$/, ({ body }) =>
-    adguard.setDomain({ domain: body.domain, list: body.list ?? null }),
-);
-adguardRoute('GET', /^\/api\/adguard\/check$/, ({ url }) => adguard.checkDomain(url.searchParams.get('domain') ?? ''));
-adguardRoute('GET', /^\/api\/adguard\/activity$/, ({ url }) =>
-    adguard.activity({
-        search: url.searchParams.get('search') ?? '',
-        blocked: url.searchParams.get('blocked') === '1',
-        olderThan: url.searchParams.get('older') ?? '',
-        limit: Number(url.searchParams.get('limit')) || 100,
-    }),
-);
-// What the panel signs in to AdGuard's own page with, behind the panel's own
-// password like Nextcloud's admin one -- and what the router should hand out.
-adguardRoute('GET', /^\/api\/adguard\/account$/, async () => ({
-    username: adguard.USERNAME,
-    password: adguard.password(),
-    dnsAddress: apps.loadAppsConfig().adguard.dnsAddress || null,
-}));
 
 // ---------------------------------------------------------------- minecraft --
 
@@ -1701,7 +1614,6 @@ route('POST', /^\/api\/services\/([a-z-]+)\/install$/, async (req, res, match) =
             const want = tag ?? 'stable';
             if ((readEnvFile().NEXTCLOUD_TAG || 'stable') !== want) updateEnvFile({ NEXTCLOUD_TAG: want });
         }
-        if (key === 'adguard') await refreshAdguardAddress(onLine);
         // Whatever the service needs written before it starts. Enabling it in
         // the apps config keeps the rest of the panel agreeing with reality.
         const appsCfg = apps.loadAppsConfig();
@@ -1735,7 +1647,6 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
     const running = match[2] === 'start';
     const state = await lifecycle.status(match[1]);
     if (!state.installed) return fail(res, 409, `${unit.label} is not installed yet.`);
-    if (running && match[1] === 'adguard') await refreshAdguardAddress();
     // Said before anything is queued, so the switch springs back with the
     // reason rather than starting something that exits a second later.
     const blockers = running ? apps.appBlockers(match[1]) : [];
@@ -1758,7 +1669,6 @@ route('POST', /^\/api\/services\/([a-z-]+)\/(start|stop)$/, async (req, res, mat
         if (running && match[1] === 'nextcloud') await reconcileNextcloud(onLine);
         // The first start is also when it sets itself up and makes its account.
         if (running && match[1] === 'kachat') await kachat.afterStart(onLine);
-        if (running && match[1] === 'adguard') await adguard.ensureSetUp(onLine);
     }, { key: `power:${match[1]}:${running ? 'start' : 'stop'}`, app: match[1] });
     sendJson(res, 202, { ok: true, jobId: job.id });
 });
@@ -2599,9 +2509,6 @@ async function bootstrap() {
     mountwatch.watch(log, () => jobs.busy);
 
     updates.start(log);
-
-    // Bedtimes, and devices the router has moved to a new address.
-    adguard.startScheduler(log, () => apps.loadAppsConfig().adguard.enabled);
 }
 
 bootstrap()

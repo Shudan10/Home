@@ -10,8 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/Shudan10/Home/main/install.sh | bas
 It installs Docker if it is missing, sets up the control panel, prints a
 password, and stops. Nothing else is installed until you ask for it.
 
-Today it carries **Nextcloud**, **Jellyfin**, **Family Hub** (the family board that grew out of Meal Plan), **AdGuard Home**
-for the whole house's network, and a **Minecraft** server, and puts the web apps on your own domain through a **Cloudflare Tunnel**.
+Today it carries **Nextcloud**, **Jellyfin**, **Family Hub** (the family board that grew out of Meal Plan) and a **Minecraft**
+server, and puts the web apps on your own domain through a **Cloudflare Tunnel**.
 More apps will be added.
 
 ---
@@ -40,17 +40,6 @@ alter or delete your library. It checks each folder exists before saving —
 Docker's own response to a path that is not there is to create an empty one and
 mount that, which turns a typo into an empty library and a stray root-owned
 directory. If the machine has a GPU, one checkbox hands it over for transcoding.
-
-**Home network** — AdGuard Home, the house's DNS, run from its own page in
-the panel. It blocks ads and trackers on every device, including the TV, and
-lets you set rules per device: cut its internet with a switch, block apps on it
-(YouTube, TikTok, Roblox and over a hundred more) or allow them only between
-set hours, make it stricter with safe search and adult sites blocked, or give
-it a bedtime. Blocklists switch on and off by name, a site a list got wrong is
-let through from the Activity tab, and lookups go to the internet encrypted.
-Its DNS answers only on this machine's address on the home network, and your
-router has to hand that address out, which the page walks through. It is kept
-off the internet: there is no Tunnel name for it.
 
 **Minecraft** — one world that Java Edition and Bedrock Edition (phones,
 tablets, Windows, consoles) join together. It is a Paper server with Geyser and
